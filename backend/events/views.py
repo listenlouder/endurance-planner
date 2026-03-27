@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, redirect
 from django.http import HttpResponse
 
@@ -24,6 +25,7 @@ def event_create(request):
                 'form': form,
                 'success': True,
                 'event': event,
+                'base_url': request.build_absolute_uri('/'),
             })
     else:
         form = EventCreateForm()
@@ -44,7 +46,7 @@ def event_lookup_by_id(request):
 
     try:
         event = Event.objects.get(id=event_id)
-    except (Event.DoesNotExist, ValueError):
+    except (Event.DoesNotExist, ValueError, ValidationError):
         return HttpResponse(error_html)
 
     response = HttpResponse()

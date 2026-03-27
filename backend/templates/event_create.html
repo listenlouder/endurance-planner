@@ -42,22 +42,20 @@
           Admin page
           <span class="font-normal opacity-60 ml-1">(keep this link private)</span>
         </p>
-        {% with base=request.build_absolute_uri('/') %}
-        <a href="{{ base }}{{ event.id }}/admin/{{ event.admin_key }}/"
+        <a href="{{ base_url }}{{ event.id }}/admin/{{ event.admin_key }}/"
            class="text-sm break-all hover:underline"
            style="color: var(--color-accent1);"
            target="_blank">
-          {{ base }}{{ event.id }}/admin/{{ event.admin_key }}/
+          {{ base_url }}{{ event.id }}/admin/{{ event.admin_key }}/
         </a>
         <input
           type="text"
           readonly
-          value="{{ base }}{{ event.id }}/admin/{{ event.admin_key }}/"
+          value="{{ base_url }}{{ event.id }}/admin/{{ event.admin_key }}/"
           class="w-full px-3 py-2 rounded border text-xs font-mono cursor-text select-all focus:outline-none focus:ring-1"
           style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
           onclick="this.select()"
         />
-        {% endwith %}
         <!-- Admin key warning -->
         <div class="rounded-lg px-3 py-2 text-xs bg-yellow-400 bg-opacity-15 border border-yellow-400 text-yellow-500">
           ⚠️ Save your admin link — it contains your unique admin key and cannot be recovered if lost.
@@ -72,22 +70,20 @@
           Driver signup link
           <span class="font-normal opacity-60 ml-1">(share this with your drivers)</span>
         </p>
-        {% with base=request.build_absolute_uri('/') %}
-        <a href="{{ base }}{{ event.id }}/signup/"
+        <a href="{{ base_url }}{{ event.id }}/signup/"
            class="text-sm break-all hover:underline"
            style="color: var(--color-accent1);"
            target="_blank">
-          {{ base }}{{ event.id }}/signup/
+          {{ base_url }}{{ event.id }}/signup/
         </a>
         <input
           type="text"
           readonly
-          value="{{ base }}{{ event.id }}/signup/"
+          value="{{ base_url }}{{ event.id }}/signup/"
           class="w-full px-3 py-2 rounded border text-xs font-mono cursor-text select-all focus:outline-none focus:ring-1"
           style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
           onclick="this.select()"
         />
-        {% endwith %}
       </div>
 
       <hr style="border-color: var(--color-accent2); opacity: 0.3;" />
@@ -98,34 +94,30 @@
           View-only page
           <span class="font-normal opacity-60 ml-1">(safe to share publicly)</span>
         </p>
-        {% with base=request.build_absolute_uri('/') %}
-        <a href="{{ base }}{{ event.id }}/view/"
+        <a href="{{ base_url }}{{ event.id }}/view/"
            class="text-sm break-all hover:underline"
            style="color: var(--color-accent1);"
            target="_blank">
-          {{ base }}{{ event.id }}/view/
+          {{ base_url }}{{ event.id }}/view/
         </a>
         <input
           type="text"
           readonly
-          value="{{ base }}{{ event.id }}/view/"
+          value="{{ base_url }}{{ event.id }}/view/"
           class="w-full px-3 py-2 rounded border text-xs font-mono cursor-text select-all focus:outline-none focus:ring-1"
           style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
           onclick="this.select()"
         />
-        {% endwith %}
       </div>
 
     </div>
 
     <!-- View event button -->
-    {% with base=request.build_absolute_uri('/') %}
-    <a href="{{ base }}{{ event.id }}/view/"
+    <a href="{{ base_url }}{{ event.id }}/view/"
        class="block text-center py-2 px-6 rounded-lg font-semibold transition hover:opacity-80 active:scale-95"
        style="background-color: var(--color-accent1); color: #fff;">
       View Event
     </a>
-    {% endwith %}
 
   </div>
 
