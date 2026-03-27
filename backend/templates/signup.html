@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+
+{% block title %}Sign Up — {{ event.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto">
+
+  {% if success %}
+  <!-- ================================================================ -->
+  <!-- SUCCESS STATE                                                      -->
+  <!-- ================================================================ -->
+  <div class="flex flex-col gap-6 mt-4">
+
+    <div class="rounded-lg px-4 py-3 bg-green-500 bg-opacity-15 border border-green-500 text-green-500 font-semibold text-center">
+      You're signed up, {{ driver.name }}!
+    </div>
+
+    <p class="text-sm text-center opacity-60">
+      Your availability was saved in timezone: <strong>{{ driver.timezone }}</strong>
+    </p>
+
+    <div class="rounded-xl border p-6 flex flex-col gap-6"
+         style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
+
+      <!-- View event link -->
+      <div class="flex flex-col gap-2">
+        <p class="text-sm font-semibold" style="color: var(--color-text);">
+          View the event schedule
+        </p>
+        <a href="{{ base_url }}{{ event.id }}/view/"
+           class="text-sm break-all hover:underline"
+           style="color: var(--color-accent1);"
+           target="_blank">
+          {{ base_url }}{{ event.id }}/view/
+        </a>
+        <input type="text" readonly
+               value="{{ base_url }}{{ event.id }}/view/"
+               class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
+               style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+               onclick="this.select()" />
+      </div>
+
+      <hr style="border-color: var(--color-accent2); opacity: 0.3;" />
+
+      <!-- Edit availability link -->
+      <div class="flex flex-col gap-2">
+        <p class="text-sm font-semibold" style="color: var(--color-text);">
+          Update your availability
+        </p>
+        <a href="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
+           class="text-sm break-all hover:underline"
+           style="color: var(--color-accent1);"
+           target="_blank">
+          {{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/
+        </a>
+        <input type="text" readonly
+               value="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
+               class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
+               style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+               onclick="this.select()" />
+        <p class="text-xs opacity-60">
+          Keep this link private — anyone with it can edit your availability.
+        </p>
+      </div>
+
+    </div>
+  </div>
+
+  {% else %}
+  <!-- ================================================================ -->
+  <!-- FORM STATE                                                         -->
+  <!-- ================================================================ -->
+
+  <a href="{% url 'home' %}"
+     class="inline-flex items-center gap-1 text-sm mb-6 opacity-60 hover:opacity-100 transition"
+     style="color: var(--color-text);">← Back to Home</a>
+
+  <h1 class="text-3xl font-bold mb-1" style="color: var(--color-accent1);">
+    Sign Up
+  </h1>
+  <p class="text-base opacity-70 mb-6">{{ event.name }}</p>
+
+  <form method="post" x-data="signupFormData()">
+    {% csrf_token %}
+    <div class="flex flex-col gap-6">
+
+      <!-- ── Timezone detection ── -->
+      <div class="rounded-xl border p-4 flex flex-col gap-3"
+           style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
+
+        <p class="text-sm" style="color: var(--color-text);">
+          We detected your timezone as
+          <strong x-text="detected" class="font-semibold" style="color: var(--color-accent1);"></strong>.
+          Is this correct?
+        </p>
+
+        <div class="flex gap-2 flex-wrap">
+          <button type="button"
+                  @click="showManual = false; timezone = detected"
+                  class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
+                  :style="!showManual ? 'background-color: var(--color-accent1); color: #fff; border-color: var(--color-accent1);'
+                                      : 'border-color: var(--color-accent2); color: var(--color-text);'">
+            Yes, that's correct
+          </button>
+          <button type="button"
+                  @click="showManual = true"
+                  class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
+                  :style="showManual ? 'background-color: var(--color-accent1); color: #fff; border-color: var(--color-accent1);'
+                                     : 'border-color: var(--color-accent2); color: var(--color-text);'">
+            No, let me choose
+          </button>
+        </div>
+
+        <div x-show="showManual" x-cloak class="flex flex-col gap-1">
+          <label class="text-xs font-medium opacity-70">Select your timezone:</label>
+          <select x-model="timezone"
+                  class="w-full px-3 py-2 rounded border text-sm focus:outline-none focus:ring-2"
+                  style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);">
+            {% for tz in timezone_list %}
+              <option value="{{ tz }}">{{ tz }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% if errors.timezone %}
+          <p class="text-red-500 text-xs">{{ errors.timezone }}</p>
+        {% endif %}
+
+        <!-- Always-submitted hidden timezone field -->
+        <input type="hidden" name="timezone" :value="showManual ? timezone : detected">
+      </div>
+
+      <!-- ── Driver name ── -->
+      <div class="flex flex-col gap-1">
+        <label class="text-sm font-medium" style="color: var(--color-text);">
+          Your name
+        </label>
+        <input type="text"
+               name="driver_name"
+               value="{{ submitted_name|default:'' }}"
+               placeholder="e.g. Alex Smith"
+               autocomplete="name"
+               class="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
+               style="background-color: var(--color-base); color: var(--color-text); border-color: {% if errors.driver_name %}#ef4444{% else %}var(--color-accent2){% endif %};" />
+        {% if errors.driver_name %}
+          <p class="text-red-500 text-sm mt-1">{{ errors.driver_name }}</p>
+        {% endif %}
+      </div>
+
+      <!-- ── Availability grid ── -->
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <span class="text-sm font-medium" style="color: var(--color-text);">
+            Your availability
+          </span>
+          {% if slots %}
+          <div class="flex gap-2">
+            <button type="button"
+                    @click="selectAll()"
+                    class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
+                    style="border-color: var(--color-accent2); color: var(--color-text);">
+              Select All
+            </button>
+            <button type="button"
+                    @click="clearAll()"
+                    class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
+                    style="border-color: var(--color-accent2); color: var(--color-text);">
+              Clear All
+            </button>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if errors.slots %}
+          <p class="text-red-500 text-sm">{{ errors.slots }}</p>
+        {% endif %}
+
+        {% if not slots %}
+          <div class="rounded-lg px-4 py-3 bg-yellow-400 bg-opacity-15 border border-yellow-400 text-yellow-600 text-sm">
+            This event has no availability slots configured. Contact the event admin.
+          </div>
+        {% else %}
+          <div class="max-h-96 overflow-y-auto rounded-lg border"
+               style="border-color: var(--color-accent2);">
+            <template x-for="(slot, i) in slotTimestamps" :key="i">
+              <div>
+                <!-- Date divider when day changes -->
+                <div x-show="isNewDay(i)"
+                     x-text="formatDate(slotTimestamps[i])"
+                     class="px-3 py-1 text-xs font-semibold sticky top-0"
+                     style="background-color: var(--color-nav-bg); color: var(--color-accent1); border-bottom: 1px solid var(--color-accent2);">
+                </div>
+                <!-- Slot row -->
+                <label class="flex items-center gap-3 px-4 py-2 cursor-pointer transition-colors select-none"
+                       :class="checked[i] ? 'slot-selected' : ''">
+                  <input type="checkbox"
+                         name="slots"
+                         :value="slotTimestamps[i]"
+                         x-model="checked[i]"
+                         class="w-4 h-4 shrink-0"
+                         style="accent-color: var(--color-accent1);">
+                  <span x-text="formatTime(slotTimestamps[i])"
+                        class="text-sm" style="color: var(--color-text);"></span>
+                </label>
+              </div>
+            </template>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- ── Submit ── -->
+      <button type="submit"
+              {% if not slots %}disabled{% endif %}
+              class="w-full py-2 px-4 rounded-lg font-semibold transition hover:opacity-80 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              style="background-color: var(--color-accent1); color: #fff;">
+        Sign Up
+      </button>
+
+    </div>
+  </form>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const slotTimestamps = {{ slot_timestamps_json|safe }};
+  const submittedSlots = {{ submitted_slot_timestamps|default:'[]'|safe }};
+
+  function signupFormData() {
+    return {
+      detected: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      showManual: false,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      checked: slotTimestamps.map(s => submittedSlots.includes(s)),
+
+      formatTime(utcString) {
+        return new Date(utcString).toLocaleTimeString('en-US', {
+          timeZone: this.timezone,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        });
+      },
+
+      formatDate(utcString) {
+        return new Date(utcString).toLocaleDateString('en-US', {
+          timeZone: this.timezone,
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+        });
+      },
+
+      isNewDay(i) {
+        if (i === 0) return true;
+        const opts = { timeZone: this.timezone, year: 'numeric', month: 'numeric', day: 'numeric' };
+        const prev = new Date(slotTimestamps[i - 1]).toLocaleDateString('en-US', opts);
+        const curr = new Date(slotTimestamps[i]).toLocaleDateString('en-US', opts);
+        return prev !== curr;
+      },
+
+      selectAll() { this.checked = this.checked.map(() => true); },
+      clearAll()  { this.checked = this.checked.map(() => false); },
+    };
+  }
+</script>
+{% endblock %}

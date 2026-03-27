@@ -1,0 +1,7 @@
+/* Availability slot row highlight — adapts to dark/light mode via CSS vars */
+.slot-selected {
+    background-color: rgb(185 255 34 / 0.18); /* light: accent2 */
+}
+.dark .slot-selected {
+    background-color: rgb(70 206 207 / 0.18);  /* dark: accent2 */
+}
