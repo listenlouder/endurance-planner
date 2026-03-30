@@ -5,6 +5,31 @@ register = template.Library()
 
 
 @register.filter
+def get_item(dictionary, key):
+    """Dict lookup by variable key. Usage: {{ my_dict|get_item:key_var }}"""
+    return dictionary.get(key)
+
+
+@register.filter
+def format_hours(value):
+    """
+    Format a float hours value for display.
+    12.0 → '12h', 2.667 → '2h 40m'
+    """
+    if value == '' or value is None:
+        return '—'
+    try:
+        total_minutes = round(float(value) * 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        if minutes == 0:
+            return f"{hours}h"
+        return f"{hours}h {minutes}m"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+@register.filter
 def to_tz(dt, timezone_str):
     """
     Convert a UTC-aware datetime to the given IANA timezone string.

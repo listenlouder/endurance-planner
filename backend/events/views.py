@@ -1,14 +1,151 @@
+import hmac
 import json
 from datetime import datetime
 from zoneinfo import available_timezones
 
 from django.core.exceptions import ValidationError
+from django.db.models import Count
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render, redirect
 
 from .forms import EventCreateForm
 from .models import Availability, Driver, Event
 from .utils import get_availability_slots
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Admin constants and helpers
+# ---------------------------------------------------------------------------
+
+EDITABLE_FIELDS = {
+    'name':               {'type': 'text',     'label': 'Event Name',                 'required': True},
+    'date':               {'type': 'date',     'label': 'Date',                       'required': True},
+    'start_time_utc':     {'type': 'time',     'label': 'Start Time (UTC)',            'required': True},
+    'length_hours':       {'type': 'number',   'label': 'Race Length (hours)',         'required': True,  'min': 1,    'max': 168},
+    'car':                {'type': 'text',     'label': 'Car',                        'required': False},
+    'track':              {'type': 'text',     'label': 'Track',                      'required': False},
+    'setup':              {'type': 'textarea', 'label': 'Setup Notes',                'required': False},
+    'avg_lap_seconds':    {'type': 'number',   'label': 'Average Lap Time (s)',       'required': False, 'min': 1},
+    'in_lap_seconds':     {'type': 'number',   'label': 'In Lap Time (s)',            'required': False, 'min': 1},
+    'out_lap_seconds':    {'type': 'number',   'label': 'Out Lap Time (s)',           'required': False, 'min': 1},
+    'target_laps':        {'type': 'number',   'label': 'Target Laps per Stint',      'required': False, 'min': 1},
+    'fuel_capacity':      {'type': 'number',   'label': 'Fuel Capacity (L)',          'required': False, 'min': 0.1},
+    'fuel_per_lap':       {'type': 'number',   'label': 'Fuel Use per Lap (L)',       'required': False, 'min': 0.01},
+    'tire_change_fuel_min': {'type': 'number', 'label': 'Min Fuel for Tyre Change (L)', 'required': False, 'min': 0},
+}
+
+_REQUIRED_FOR_STINTS = [
+    'avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds',
+    'target_laps', 'fuel_capacity', 'fuel_per_lap',
+]
+
+
+def _check_admin_key(event, admin_key):
+    return hmac.compare_digest(str(admin_key), str(event.admin_key))
+
+
+def _get_field_display_value(event, field_name):
+    """Return the display value for a field (handles length_hours conversion)."""
+    if field_name == 'length_hours':
+        return event.length_seconds / 3600
+    value = getattr(event, field_name)
+    return '' if value is None else value
+
+
+def _build_availability_matrix(drivers, slots):
+    matrix = {}
+    all_covered = set()
+    for driver in drivers:
+        driver_slots = set(a.slot_utc for a in driver.availability.all())
+        matrix[driver.id] = driver_slots
+        all_covered |= driver_slots
+    uncovered = set(slots) - all_covered
+    return matrix, uncovered
+
+
+def _make_field_ctx(event, field_name):
+    """Build the partial context dict for a single field."""
+    config = EDITABLE_FIELDS[field_name]
+    return {
+        'event': event,
+        'field_name': field_name,
+        'field_label': config['label'],
+        'field_type': config['type'],
+        'field_min': str(config['min']) if 'min' in config else '',
+        'field_max': str(config['max']) if 'max' in config else '',
+        'current_value': _get_field_display_value(event, field_name),
+    }
+
+
+def _validate_and_save_field(event, field_name, value_str):
+    """Validate value_str for field_name, save to event. Returns error string or None."""
+    config = EDITABLE_FIELDS[field_name]
+    ftype = config['type']
+    required = config['required']
+    value = value_str.strip()
+
+    if ftype in ('text', 'textarea'):
+        if required and not value:
+            return f"{config['label']} is required."
+        setattr(event, field_name, value)
+        event.save(update_fields=[field_name])
+        return None
+
+    if ftype == 'date':
+        if not value:
+            return f"{config['label']} is required."
+        try:
+            from datetime import date
+            event.date = date.fromisoformat(value)
+        except ValueError:
+            return "Invalid date. Use YYYY-MM-DD format."
+        event.save(update_fields=['date'])
+        return None
+
+    if ftype == 'time':
+        if not value:
+            return f"{config['label']} is required."
+        try:
+            from datetime import time as time_type
+            event.start_time_utc = time_type.fromisoformat(value)
+        except ValueError:
+            return "Invalid time. Use HH:MM format."
+        event.save(update_fields=['start_time_utc'])
+        return None
+
+    if ftype == 'number':
+        if not value:
+            if required:
+                return f"{config['label']} is required."
+            # Optional number — clear it
+            setattr(event, field_name, None)
+            event.save(update_fields=[field_name])
+            return None
+
+        try:
+            num = float(value)
+        except ValueError:
+            return "Please enter a valid number."
+
+        min_val = config.get('min')
+        max_val = config.get('max')
+        if min_val is not None and num < min_val:
+            return f"Value must be at least {min_val}."
+        if max_val is not None and num > max_val:
+            return f"Value must be at most {max_val}."
+
+        if field_name == 'length_hours':
+            event.length_seconds = int(num * 3600)
+            event.save(update_fields=['length_seconds'])
+        elif field_name == 'target_laps':
+            event.target_laps = int(num)
+            event.save(update_fields=['target_laps'])
+        else:
+            setattr(event, field_name, num)
+            event.save(update_fields=[field_name])
+        return None
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +346,132 @@ def driver_delete(request, event_id, driver_id):
         response['HX-Redirect'] = '/'
         return response
     return HttpResponse(status=405)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Admin views
+# ---------------------------------------------------------------------------
+
+def set_timezone(request):
+    tz = request.GET.get('timezone', 'UTC')
+    current_tz = request.COOKIES.get('admin_timezone', 'UTC')
+    response = HttpResponse()
+    response.set_cookie('admin_timezone', tz, samesite='Lax')
+    if current_tz != tz:
+        response['HX-Refresh'] = 'true'
+    return response
+
+
+def admin_page(request, event_id, admin_key):
+    event = get_object_or_404(Event, id=event_id)
+
+    if not _check_admin_key(event, admin_key):
+        return render(request, 'admin_error.html', {'message': 'Invalid admin key supplied.'})
+
+    drivers = (
+        Driver.objects.filter(event=event)
+        .prefetch_related('availability')
+        .annotate(stint_count=Count('stint_assignments'))
+        .order_by('signed_up_at')
+    )
+    slots = get_availability_slots(event)
+    availability_matrix, uncovered_slots = _build_availability_matrix(drivers, slots)
+    admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
+
+    field_groups = [
+        {
+            'title': 'Basic Info',
+            'fields': [
+                (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
+                 str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
+                for name in ['name', 'date', 'start_time_utc', 'length_hours']
+            ],
+        },
+        {
+            'title': 'Race Details',
+            'fields': [
+                (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
+                 str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
+                for name in ['car', 'track', 'setup']
+            ],
+        },
+        {
+            'title': 'Timing & Fuel',
+            'fields': [
+                (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
+                 str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
+                for name in [
+                    'avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds',
+                    'target_laps', 'fuel_capacity', 'fuel_per_lap', 'tire_change_fuel_min',
+                ]
+            ],
+        },
+    ]
+
+    missing_required_fields = [
+        EDITABLE_FIELDS[f]['label']
+        for f in _REQUIRED_FOR_STINTS
+        if getattr(event, f) is None
+    ]
+
+    table_data = [
+        {
+            'slot_utc': slot,
+            'is_uncovered': slot in uncovered_slots,
+            'driver_availability': {
+                driver.id: slot in availability_matrix[driver.id]
+                for driver in drivers
+            },
+        }
+        for slot in slots
+    ]
+
+    return render(request, 'admin.html', {
+        'event': event,
+        'admin_key': admin_key,
+        'admin_tz': admin_tz,
+        'drivers': drivers,
+        'field_groups': field_groups,
+        'missing_required_fields': missing_required_fields,
+        'table_data': table_data,
+    })
+
+
+def admin_edit_field(request, event_id, admin_key):
+    event = get_object_or_404(Event, id=event_id)
+    if not _check_admin_key(event, admin_key):
+        return HttpResponse(status=403)
+
+    if request.method == 'GET':
+        field_name = request.GET.get('field', '')
+        if field_name not in EDITABLE_FIELDS:
+            return HttpResponse(status=400)
+        ctx = _make_field_ctx(event, field_name)
+        if request.GET.get('cancel'):
+            return render(request, 'partials/field_display.html', ctx)
+        return render(request, 'partials/field_edit_form.html', ctx)
+
+    if request.method == 'POST':
+        field_name = request.POST.get('field', '')
+        if field_name not in EDITABLE_FIELDS:
+            return HttpResponse(status=400)
+        value_str = request.POST.get('value', '')
+        error = _validate_and_save_field(event, field_name, value_str)
+        ctx = _make_field_ctx(event, field_name)
+        if error:
+            ctx['error'] = error
+            return render(request, 'partials/field_edit_form.html', ctx)
+        return render(request, 'partials/field_display.html', ctx)
+
+    return HttpResponse(status=405)
+
+
+def admin_remove_driver(request, event_id, admin_key, driver_id):
+    if request.method != 'DELETE':
+        return HttpResponse(status=405)
+    event = get_object_or_404(Event, id=event_id)
+    if not _check_admin_key(event, admin_key):
+        return HttpResponse(status=403)
+    driver = get_object_or_404(Driver, id=driver_id, event__id=event_id)
+    driver.delete()
+    return HttpResponse('')

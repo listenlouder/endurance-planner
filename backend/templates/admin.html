@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% load tz_filters %}
+
+{% block title %}Admin — {{ event.name }}{% endblock %}
+
+{% block content %}
+
+{# Mobile warning — full-width banner at very top #}
+<div class="block md:hidden -mx-6 -mt-8 mb-6 bg-yellow-400 text-yellow-900 text-center p-4 text-sm font-medium">
+  ⚠️ The admin page is designed for desktop use. Some features may not work correctly on mobile.
+</div>
+
+{# Hidden div: sets the admin_timezone cookie on page load #}
+<div hx-get="{% url 'set_timezone' %}"
+     hx-trigger="load"
+     hx-vals="js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
+     hx-swap="none">
+</div>
+
+{# Page header #}
+<div class="mb-6">
+  <h1 class="text-3xl font-bold" style="color: var(--color-accent1);">{{ event.name }}</h1>
+  <p class="text-sm opacity-60 mt-1">
+    Showing times in: <span class="font-medium">{{ admin_tz }}</span>
+    &mdash; times are stored in UTC
+  </p>
+</div>
+
+{# Navigation links #}
+<div class="flex gap-3 mb-8">
+  <a href="/{{ event.id }}/view/"
+     target="_blank"
+     class="px-4 py-2 rounded text-sm font-medium"
+     style="background-color: var(--color-accent2); color: #111;">
+    View Event (public) ↗
+  </a>
+  <a href="/{{ event.id }}/admin/{{ admin_key }}/create-stints/"
+     class="px-4 py-2 rounded text-sm font-medium border"
+     style="border-color: var(--color-accent2); color: var(--color-accent2);">
+    Create Stints →
+  </a>
+</div>
+
+{# ── Section 1: Event Details ──────────────────────────────────── #}
+<section class="mb-10">
+  <h2 class="text-lg font-semibold mb-4 pb-2 border-b" style="border-color: var(--color-accent1);">
+    Event Details
+  </h2>
+  <p class="text-xs opacity-50 mb-4">Click any field to edit it inline.</p>
+
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    {% for group in field_groups %}
+    <div class="rounded-lg border border-white border-opacity-10 p-4"
+         style="background-color: var(--color-nav-bg);">
+      <h3 class="text-sm font-semibold uppercase tracking-wider opacity-50 mb-3">{{ group.title }}</h3>
+      <div class="space-y-1">
+        {% for field_name, field_config, current_value, field_min, field_max in group.fields %}
+          {% include "partials/field_display.html" with field_name=field_name field_label=field_config.label field_type=field_config.type current_value=current_value field_min=field_min field_max=field_max %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{# ── Section 2: Stint calculation readiness ───────────────────── #}
+<section class="mb-10">
+  <h2 class="text-lg font-semibold mb-4 pb-2 border-b" style="border-color: var(--color-accent1);">
+    Stint Calculation
+  </h2>
+  {% if event.has_required_stint_fields %}
+    <div class="flex items-center gap-3 text-green-400 text-sm">
+      <span>✓ All required fields for stint calculation are set.</span>
+      <a href="/{{ event.id }}/admin/{{ admin_key }}/create-stints/"
+         class="underline" style="color: var(--color-accent2);">
+        Go to Create Stints →
+      </a>
+    </div>
+  {% else %}
+    <div class="text-yellow-400 text-sm">
+      <p class="mb-2">⚠ The following fields are required before stints can be calculated:</p>
+      <ul class="list-disc list-inside space-y-1 opacity-80">
+        {% for label in missing_required_fields %}
+          <li>{{ label }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+</section>
+
+{# ── Section 3: Driver list ────────────────────────────────────── #}
+<section class="mb-10">
+  <h2 class="text-lg font-semibold mb-4 pb-2 border-b" style="border-color: var(--color-accent1);">
+    Drivers
+    <span class="text-base font-normal opacity-50">({{ drivers|length }})</span>
+  </h2>
+
+  {% if drivers %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="text-left border-b border-white border-opacity-10">
+            <th class="py-2 pr-4 font-medium opacity-60">Name</th>
+            <th class="py-2 pr-4 font-medium opacity-60">Timezone</th>
+            <th class="py-2 pr-4 font-medium opacity-60">Signed Up</th>
+            <th class="py-2 pr-4 font-medium opacity-60">Stints</th>
+            <th class="py-2 font-medium opacity-60">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for driver in drivers %}
+            {% include "partials/driver_row.html" %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-sm opacity-50">No drivers have signed up yet.</p>
+  {% endif %}
+</section>
+
+{# ── Section 4: Availability table ────────────────────────────── #}
+<section class="mb-10">
+  <h2 class="text-lg font-semibold mb-4 pb-2 border-b" style="border-color: var(--color-accent1);">
+    Availability Overview
+  </h2>
+  {% include "partials/availability_table.html" %}
+</section>
+
+{% endblock %}

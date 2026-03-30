@@ -1,0 +1,17 @@
+{% load tz_filters %}
+<div id="field-{{ field_name }}-display"
+     hx-get="{% url 'admin_edit_field' event.id event.admin_key %}?field={{ field_name }}"
+     hx-trigger="click"
+     hx-target="#field-{{ field_name }}-display"
+     hx-swap="outerHTML"
+     class="cursor-pointer rounded p-2 group hover:bg-white hover:bg-opacity-5 transition-colors">
+  <span class="text-xs font-medium opacity-50">{{ field_label }}</span>
+  <div class="flex items-center justify-between mt-0.5">
+    <span class="{% if not current_value and current_value != 0 %}opacity-30 italic text-sm{% endif %}">
+      {% if field_name == 'length_hours' %}{{ current_value|format_hours }}{% else %}{{ current_value|default:"—" }}{% endif %}
+    </span>
+    <span class="text-xs opacity-0 group-hover:opacity-40 transition-opacity ml-2 shrink-0">
+      click to edit
+    </span>
+  </div>
+</div>

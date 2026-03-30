@@ -1,0 +1,47 @@
+<div id="field-{{ field_name }}-display">
+  <span class="text-xs font-medium opacity-50">{{ field_label }}</span>
+  <form hx-post="{% url 'admin_edit_field' event.id event.admin_key %}"
+        hx-target="#field-{{ field_name }}-display"
+        hx-swap="outerHTML"
+        class="mt-1">
+    {% csrf_token %}
+    <input type="hidden" name="field" value="{{ field_name }}">
+
+    {% if field_type == 'textarea' %}
+      <textarea name="value"
+                rows="3"
+                class="w-full rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
+                style="border: 1px solid var(--color-accent2);">{{ current_value }}</textarea>
+    {% else %}
+      <input type="{{ field_type }}"
+             name="value"
+             value="{{ current_value }}"
+             step="any"
+             {% if field_min %}min="{{ field_min }}"{% endif %}
+             {% if field_max %}max="{{ field_max }}"{% endif %}
+             autofocus
+             class="w-full rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
+             style="border: 1px solid var(--color-accent2);">
+    {% endif %}
+
+    {% if error %}
+      <p class="text-red-400 text-xs mt-1">{{ error }}</p>
+    {% endif %}
+
+    <div class="flex gap-2 mt-2">
+      <button type="submit"
+              class="px-3 py-1 text-xs rounded font-medium"
+              style="background-color: var(--color-accent2); color: #111;">
+        Save
+      </button>
+      <button type="button"
+              hx-get="{% url 'admin_edit_field' event.id event.admin_key %}?field={{ field_name }}&cancel=1"
+              hx-target="#field-{{ field_name }}-display"
+              hx-swap="outerHTML"
+              class="px-3 py-1 text-xs rounded"
+              style="border: 1px solid var(--color-accent2); color: var(--color-accent2);">
+        Cancel
+      </button>
+    </div>
+  </form>
+</div>
