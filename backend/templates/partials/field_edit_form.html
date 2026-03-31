@@ -1,6 +1,6 @@
 <div id="field-{{ field_name }}-display">
   <span class="text-xs font-medium opacity-50">{{ field_label }}</span>
-  <form hx-post="{% url 'admin_edit_field' event.id event.admin_key %}"
+  <form hx-post="{% url 'admin_edit_field' event.id %}"
         hx-target="#field-{{ field_name }}-display"
         hx-swap="outerHTML"
         class="mt-1">
@@ -35,7 +35,7 @@
         Save
       </button>
       <button type="button"
-              hx-get="{% url 'admin_edit_field' event.id event.admin_key %}?field={{ field_name }}&cancel=1"
+              hx-get="{% url 'admin_edit_field' event.id %}?field={{ field_name }}&cancel=1"
               hx-target="#field-{{ field_name }}-display"
               hx-swap="outerHTML"
               class="px-3 py-1 text-xs rounded"

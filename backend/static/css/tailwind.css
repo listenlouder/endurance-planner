@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Brand color palette ──────────────────────────────────────── */
+:root {
+  --color-base: #FFFFFF;
+  --color-accent1: #ff1493;
+  --color-accent2: #b9ff22;
+  --color-text: #111111;
+  --color-nav-bg: #f3f4f6;
+}
+
+.dark {
+  --color-base: #191919;
+  --color-accent1: #dd630b;
+  --color-accent2: #46cecf;
+  --color-text: #f0f0f0;
+  --color-nav-bg: #111111;
+}
+
+body {
+  background-color: var(--color-base);
+  color: var(--color-text);
+}
+
+/* ── Form inputs — explicit dark mode styling ─────────────────── */
+/* Browsers default inputs to system colors which can be          */
+/* white-on-white in dark mode. Inline style= overrides on        */
+/* individual inputs already handle this; these rules are a       */
+/* fallback for any inputs that lack inline styles.               */
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  background-color: var(--color-base);
+  color: var(--color-text);
+  border-color: #666;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  outline-color: var(--color-accent1);
+}
+
+/* ── Availability slot highlight ─────────────────────────────── */
+.slot-selected {
+  background-color: rgb(185 255 34 / 0.18);
+}
+
+.dark .slot-selected {
+  background-color: rgb(70 206 207 / 0.18);
+}

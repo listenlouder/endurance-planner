@@ -1,7 +1,10 @@
+import logging
+
 from django import template
 from zoneinfo import ZoneInfo
 
 register = template.Library()
+logger = logging.getLogger(__name__)
 
 
 @register.filter
@@ -34,12 +37,45 @@ def to_tz(dt, timezone_str):
     """
     Convert a UTC-aware datetime to the given IANA timezone string.
     Usage in templates: {{ some_datetime|to_tz:user_timezone }}
+
+    WARNING: Do not pipe the result into Django's |date filter. With USE_TZ=True
+    and TIME_ZONE='UTC', Django's date filter will re-convert the datetime back to
+    UTC before formatting. Use |datetime_in_tz instead.
     """
     try:
         tz = ZoneInfo(timezone_str)
         return dt.astimezone(tz)
     except Exception:
+        logger.warning("to_tz filter failed for timezone %r", timezone_str, exc_info=True)
         return dt
+
+
+@register.filter
+def datetime_in_tz(dt, timezone_str):
+    """
+    Convert a UTC-aware datetime to the given timezone and return a formatted string.
+    Bypasses Django's |date filter, which re-converts aware datetimes to TIME_ZONE='UTC'.
+    Output format: 'Mar 31 2025, 14:00'
+    Usage: {{ driver.signed_up_at|datetime_in_tz:admin_tz }}
+    """
+    try:
+        tz = ZoneInfo(timezone_str)
+        local = dt.astimezone(tz)
+        # Avoid %-d / %#d platform differences — use .day directly for no-padding
+        return f"{local.strftime('%b')} {local.day} {local.strftime('%Y, %H:%M')}"
+    except Exception:
+        logger.warning("datetime_in_tz failed for timezone %r", timezone_str, exc_info=True)
+        return str(dt)
+
+
+@register.filter
+def to_utc_z(dt):
+    """
+    Format a UTC datetime as an ISO string with Z suffix for JavaScript consumption.
+    Omits microseconds/milliseconds so strings match server-generated availability data.
+    Usage: {{ some_utc_datetime|to_utc_z }}
+    """
+    return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 @register.filter

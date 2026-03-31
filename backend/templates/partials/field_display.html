@@ -1,6 +1,6 @@
 {% load tz_filters %}
 <div id="field-{{ field_name }}-display"
-     hx-get="{% url 'admin_edit_field' event.id event.admin_key %}?field={{ field_name }}"
+     hx-get="{% url 'admin_edit_field' event.id %}?field={{ field_name }}"
      hx-trigger="click"
      hx-target="#field-{{ field_name }}-display"
      hx-swap="outerHTML"

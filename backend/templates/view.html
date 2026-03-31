@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% load tz_filters %}
+
+{% block title %}{{ event.name }}{% endblock %}
+
+{% block content %}
+
+{# ── Page header ─────────────────────────────────────────────── #}
+<div x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+
+  <div class="mb-6">
+    <h1 class="text-3xl font-bold" style="color: var(--color-accent1);">
+      {{ event.name }}
+    </h1>
+    <p class="text-xs mt-1 opacity-50">
+      Times shown in your local timezone:
+      <span x-text="tz" class="font-mono"></span>
+    </p>
+  </div>
+
+  {# ── Event info grid ────────────────────────────────────────── #}
+  <div class="rounded-lg border border-white border-opacity-10 p-5 mb-8"
+       style="background-color: var(--color-nav-bg);">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+
+      <div>
+        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Date</span>
+        <span class="font-medium">{{ event.date|date:"l, F j, Y" }}</span>
+      </div>
+
+      <div>
+        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Start Time</span>
+        <span class="font-medium"
+              x-text="formatTime('{{ event.start_datetime_utc|to_utc_z }}', tz)">
+        </span>
+      </div>
+
+      <div>
+        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Race Length</span>
+        <span class="font-medium">{{ length_hours_display }}</span>
+      </div>
+
+      {% if event.car %}
+      <div>
+        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Car</span>
+        <span class="font-medium">{{ event.car }}</span>
+      </div>
+      {% endif %}
+
+      {% if event.track %}
+      <div>
+        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Track</span>
+        <span class="font-medium">{{ event.track }}</span>
+      </div>
+      {% endif %}
+
+    </div>
+
+    {% if event.setup %}
+    <div class="mt-4 pt-4 border-t border-white border-opacity-10 text-sm">
+      <span class="opacity-50 block text-xs uppercase tracking-wider mb-1">Setup Notes</span>
+      <pre class="whitespace-pre-wrap font-sans opacity-80 leading-relaxed">{{ event.setup }}</pre>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Stint schedule ─────────────────────────────────────────── #}
+  {% if not stints_ready %}
+
+    <div class="rounded border border-yellow-500 bg-yellow-500 bg-opacity-10 p-4 text-yellow-400 text-sm">
+      ⚠ Stint schedule not yet available. The event admin has not configured all required timing fields yet.
+    </div>
+
+  {% elif not has_stints %}
+
+    <div class="rounded border border-white border-opacity-20 p-4 text-sm opacity-50">
+      Stint assignments have not been created yet. Check back later.
+    </div>
+
+  {% else %}
+
+    <script>
+      const stintRows = {{ stint_rows_json|safe }};
+    </script>
+
+    <div x-data="stintTable()" x-init="init()" class="mt-2">
+
+      <h2 class="text-xl font-bold mb-2" style="color: var(--color-accent1);">
+        Stint Schedule
+      </h2>
+      <p class="text-xs opacity-50 mb-4">
+        Times in: <span x-text="tz" class="font-mono"></span>
+      </p>
+
+      <div class="overflow-x-auto rounded border border-white border-opacity-10">
+        <table class="w-full text-sm border-collapse" style="min-width: 22rem;">
+          <thead>
+            <tr style="background-color: var(--color-nav-bg); border-bottom: 2px solid var(--color-accent1);">
+              <th class="sticky left-0 z-10 text-left px-3 py-2 font-medium opacity-60 w-16"
+                  style="background-color: var(--color-nav-bg);">
+                Stint
+              </th>
+              <th class="text-left px-3 py-2 font-medium opacity-60 whitespace-nowrap">
+                Start Time
+              </th>
+              <th class="text-left px-3 py-2 font-medium opacity-60">
+                Driver
+              </th>
+            </tr>
+          </thead>
+          <template x-for="(row, index) in stintRows" :key="row.stint_number">
+            <tbody>
+              <tr x-show="isNewDay(index)">
+                <td colspan="3"
+                    class="text-center text-xs font-semibold py-1 tracking-wider"
+                    style="background-color: var(--color-accent2); color: #111; opacity: 0.9;">
+                  <span x-text="formatDate(row.start_utc, tz)"></span>
+                </td>
+              </tr>
+              <tr :class="[
+                    !row.driver_name ? 'opacity-50' : '',
+                    index % 2 === 0 ? 'bg-black bg-opacity-5 dark:bg-white dark:bg-opacity-[0.05]' : ''
+                  ]"
+                  class="border-t border-white border-opacity-5">
+                <td class="sticky left-0 z-10 px-3 py-3 font-mono font-bold text-center"
+                    style="background-color: var(--color-base);">
+                  <span x-text="row.stint_number"></span>
+                </td>
+                <td class="px-3 py-3 font-mono whitespace-nowrap text-xs">
+                  <span x-text="formatTime(row.start_utc, tz)"></span>
+                </td>
+                <td class="px-3 py-3">
+                  <span x-text="row.driver_name || 'TBD'"
+                        :class="!row.driver_name ? 'italic opacity-50' : ''">
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </template>
+        </table>
+      </div>
+    </div>
+
+  {% endif %}
+
+</div>
+
+{# ── Footer ──────────────────────────────────────────────────── #}
+<div class="mt-12 pt-4 border-t border-white border-opacity-10 text-sm opacity-50">
+  <a href="{% url 'home' %}"
+     class="hover:opacity-100 transition"
+     style="color: var(--color-text);">
+    ← Back to Home
+  </a>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  function formatTime(utcString, tz) {
+    return new Date(utcString).toLocaleTimeString('en-US', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
+  function formatDate(utcString, tz) {
+    return new Date(utcString).toLocaleDateString('en-GB', {
+      timeZone: tz,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  function isSameDay(utcA, utcB, tz) {
+    return formatDate(utcA, tz) === formatDate(utcB, tz);
+  }
+
+  function stintTable() {
+    return {
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      stintRows: [],
+
+      init() {
+        this.stintRows = typeof stintRows !== 'undefined' ? stintRows : [];
+      },
+
+      isNewDay(index) {
+        if (index === 0) return false;
+        const prev = this.stintRows[index - 1];
+        const curr = this.stintRows[index];
+        return !isSameDay(prev.start_utc, curr.start_utc, this.tz);
+      },
+    };
+  }
+</script>
+{% endblock %}

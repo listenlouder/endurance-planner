@@ -10,6 +10,16 @@
   ⚠️ The admin page is designed for desktop use. Some features may not work correctly on mobile.
 </div>
 
+{# Django messages (e.g. redirected from create-stints with an error) #}
+{% if messages %}
+  {% for message in messages %}
+    <div class="px-4 py-2 rounded mb-4 text-white text-sm
+                {% if message.tags == 'error' %}bg-red-500{% else %}bg-green-500{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
 {# Hidden div: sets the admin_timezone cookie on page load #}
 <div hx-get="{% url 'set_timezone' %}"
      hx-trigger="load"
@@ -28,17 +38,25 @@
 
 {# Navigation links #}
 <div class="flex gap-3 mb-8">
-  <a href="/{{ event.id }}/view/"
+  <a href="{% url 'view_event' event.id %}"
      target="_blank"
      class="px-4 py-2 rounded text-sm font-medium"
      style="background-color: var(--color-accent2); color: #111;">
     View Event (public) ↗
   </a>
-  <a href="/{{ event.id }}/admin/{{ admin_key }}/create-stints/"
-     class="px-4 py-2 rounded text-sm font-medium border"
-     style="border-color: var(--color-accent2); color: var(--color-accent2);">
-    Create Stints →
-  </a>
+  {% if event.has_required_stint_fields %}
+    <a href="{% url 'create_stints' event.id %}"
+       class="px-4 py-2 rounded text-sm font-medium border"
+       style="border-color: var(--color-accent2); color: var(--color-accent2);">
+      Create Stints →
+    </a>
+  {% else %}
+    <span title="Fill in all required timing and fuel fields to enable stint planning"
+          class="px-4 py-2 rounded text-sm font-medium border cursor-not-allowed opacity-50"
+          style="border-color: var(--color-accent2); color: var(--color-accent2);">
+      Create Stints (fields required)
+    </span>
+  {% endif %}
 </div>
 
 {# ── Section 1: Event Details ──────────────────────────────────── #}
@@ -55,7 +73,7 @@
       <h3 class="text-sm font-semibold uppercase tracking-wider opacity-50 mb-3">{{ group.title }}</h3>
       <div class="space-y-1">
         {% for field_name, field_config, current_value, field_min, field_max in group.fields %}
-          {% include "partials/field_display.html" with field_name=field_name field_label=field_config.label field_type=field_config.type current_value=current_value field_min=field_min field_max=field_max %}
+          {% include "partials/field_display.html" with field_name=field_name field_label=field_config.label field_type=field_config.type current_value=current_value field_min=field_min field_max=field_max event=event only %}
         {% endfor %}
       </div>
     </div>
@@ -71,7 +89,7 @@
   {% if event.has_required_stint_fields %}
     <div class="flex items-center gap-3 text-green-400 text-sm">
       <span>✓ All required fields for stint calculation are set.</span>
-      <a href="/{{ event.id }}/admin/{{ admin_key }}/create-stints/"
+      <a href="{% url 'create_stints' event.id %}"
          class="underline" style="color: var(--color-accent2);">
         Go to Create Stints →
       </a>
@@ -109,7 +127,7 @@
         </thead>
         <tbody>
           {% for driver in drivers %}
-            {% include "partials/driver_row.html" %}
+            {% include "partials/driver_row.html" with driver=driver event=event admin_tz=admin_tz csrf_token=csrf_token only %}
           {% endfor %}
         </tbody>
       </table>

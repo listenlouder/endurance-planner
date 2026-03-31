@@ -10,43 +10,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Endurance Planner{% endblock %}</title>
 
-  <!-- Tailwind CSS Play CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-    }
-  </script>
+  {% load static %}
+  <!-- Compiled Tailwind CSS -->
+  <link rel="stylesheet" href="{% static 'css/output.css' %}">
 
-  <!-- Alpine.js (load before HTMX, defer) -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
 
   <!-- HTMX -->
   <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
 
-  {% load static %}
-  <link rel="stylesheet" href="{% static 'css/custom.css' %}" />
-
-  <style>
-    :root {
-      --color-base: #FFFFFF;
-      --color-accent1: #ff1493;
-      --color-accent2: #b9ff22;
-      --color-text: #111111;
-      --color-nav-bg: #f3f4f6;
-    }
-    .dark {
-      --color-base: #191919;
-      --color-accent1: #dd630b;
-      --color-accent2: #46cecf;
-      --color-text: #f0f0f0;
-      --color-nav-bg: #111111;
-    }
-    body {
-      background-color: var(--color-base);
-      color: var(--color-text);
-    }
-  </style>
 </head>
 <body class="min-h-screen transition-colors duration-200">
 

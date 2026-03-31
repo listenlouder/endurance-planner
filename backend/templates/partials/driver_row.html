@@ -3,16 +3,16 @@
     class="border-b border-white border-opacity-5 hover:bg-white hover:bg-opacity-5 transition-colors">
   <td class="py-2 pr-4 font-medium">{{ driver.name }}</td>
   <td class="py-2 pr-4 opacity-70">{{ driver.timezone }}</td>
-  <td class="py-2 pr-4 opacity-70">{{ driver.signed_up_at|to_tz:admin_tz|date:"M j Y, H:i" }}</td>
+  <td class="py-2 pr-4 opacity-70">{{ driver.signed_up_at|datetime_in_tz:admin_tz }}</td>
   <td class="py-2 pr-4 text-center">{{ driver.stint_count }}</td>
   <td class="py-2">
     <div class="flex items-center gap-3">
-      <a href="/{{ event.id }}/signup/{{ driver.id }}/edit/"
+      <a href="{% url 'signup_edit' event.id driver.id %}"
          class="text-xs underline"
          style="color: var(--color-accent2);">
         Edit Availability
       </a>
-      <button hx-delete="{% url 'admin_remove_driver' event.id event.admin_key driver.id %}"
+      <button hx-delete="{% url 'admin_remove_driver' event.id driver.id %}"
               hx-confirm="Remove {{ driver.name }} from this event? This will delete their availability and any assigned stints."
               hx-target="#driver-row-{{ driver.id }}"
               hx-swap="outerHTML"

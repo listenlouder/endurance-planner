@@ -5,7 +5,7 @@ from django.utils.crypto import get_random_string
 
 class Event(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_key = models.CharField(max_length=10, editable=False)
+    admin_key = models.CharField(max_length=20, editable=False)
     name = models.CharField(max_length=255)
     date = models.DateField()
     start_time_utc = models.TimeField()
@@ -24,7 +24,7 @@ class Event(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.admin_key:
-            self.admin_key = get_random_string(10)
+            self.admin_key = get_random_string(20)
         super().save(*args, **kwargs)
 
     def __str__(self):

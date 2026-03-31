@@ -22,7 +22,7 @@
             <td class="sticky left-0 z-10 px-3 py-1.5 font-mono whitespace-nowrap
                        {% if row.is_uncovered %}bg-red-500 bg-opacity-25 text-red-300{% endif %}"
                 style="background-color: {% if not row.is_uncovered %}var(--color-base){% endif %}">
-              {{ row.slot_utc|to_tz:admin_tz|date:"D n/j H:i" }}
+              {{ row.slot_local_str }}
             </td>
             {% for driver in drivers %}
               <td class="px-3 py-1.5

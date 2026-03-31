@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% load tz_filters %}
+
+{% block title %}Create Stints — {{ event.name }}{% endblock %}
+
+{% block content %}
+
+{# Mobile warning — full-width banner at very top #}
+<div class="block md:hidden -mx-6 -mt-8 mb-6 bg-yellow-400 text-yellow-900 text-center p-4 text-sm font-medium">
+  ⚠️ The stints page is designed for desktop use. Some features may not work correctly on mobile.
+</div>
+
+{# Django messages #}
+{% if messages %}
+  {% for message in messages %}
+    <div class="px-4 py-2 rounded mb-4 text-white text-sm
+                {% if message.tags == 'error' %}bg-red-500{% else %}bg-green-500{% endif %}">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
+
+{# Page header #}
+<div class="mb-6">
+  <a href="{% url 'admin_page' event.id event.admin_key %}"
+     class="inline-flex items-center gap-1 text-sm mb-4 opacity-60 hover:opacity-100 transition"
+     style="color: var(--color-text);">
+    ← Back to Admin
+  </a>
+  <h1 class="text-3xl font-bold" style="color: var(--color-accent1);">
+    Create Stints — {{ event.name }}
+  </h1>
+  <p class="text-sm opacity-60 mt-1">
+    Showing times in: <span class="font-medium">{{ admin_tz }}</span>
+    &mdash; times are stored in UTC
+  </p>
+  <div class="flex gap-6 text-sm opacity-70 mt-2 flex-wrap">
+    <span>Stint length: <strong>{{ stint_length_display }}</strong></span>
+    <span>Total stints: <strong>{{ total_stints_count }}</strong></span>
+    <span>Drivers: <strong>{{ drivers|length }}</strong></span>
+  </div>
+</div>
+
+{# Edge case: no stints calculated #}
+{% if not stint_windows %}
+  <div class="rounded-lg border border-red-500 bg-red-500 bg-opacity-10 p-4 text-red-400 mb-6 text-sm">
+    No stints could be calculated. Please check the timing fields on the
+    <a href="{% url 'admin_page' event.id event.admin_key %}" class="underline">admin page</a>.
+  </div>
+
+{# Edge case: no drivers signed up #}
+{% elif not drivers %}
+  <div class="rounded-lg border border-yellow-500 bg-yellow-500 bg-opacity-10 p-4 text-yellow-400 mb-6 text-sm">
+    ⚠ No drivers have signed up yet. Share the signup link to add drivers before creating stints.
+    <a href="{% url 'signup' event.id %}" class="underline ml-1">Signup page →</a>
+  </div>
+
+{% else %}
+
+<form method="post" id="stints-form">
+  {% csrf_token %}
+  {% for sw in stint_windows %}
+    <input type="hidden" name="stint_{{ sw.stint_number }}" value="">
+  {% endfor %}
+
+  <div x-data="stintPlanner('{{ admin_tz }}')" x-init="init()">
+
+    <button type="submit"
+            class="mb-4 px-5 py-2 rounded font-semibold text-sm transition hover:opacity-80 active:scale-95"
+            style="background-color: var(--color-accent1); color: #fff;">
+      Save Assignments
+    </button>
+
+    <div class="overflow-x-auto overflow-y-auto max-h-[70vh] rounded border border-white border-opacity-10">
+      <table class="border-collapse text-sm" style="min-width: max-content;">
+        <thead>
+          <tr style="background-color: var(--color-nav-bg);">
+            <th class="sticky top-0 left-0 z-20 px-3 py-2 text-left font-medium opacity-60 min-w-[5rem] border-b border-white border-opacity-10"
+                style="background-color: var(--color-nav-bg);">
+              Stint
+            </th>
+            <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium opacity-60 whitespace-nowrap min-w-[9rem] border-b border-white border-opacity-10"
+                style="background-color: var(--color-nav-bg);">
+              Start Time
+            </th>
+            {% for driver in drivers %}
+            <th class="sticky top-0 z-10 px-3 py-2 text-center font-medium min-w-[7rem] border-b border-white border-opacity-10"
+                style="background-color: var(--color-nav-bg);">
+              {{ driver.name }}
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for sw in stint_windows %}
+
+          {# Date separator row — shown when the stint crosses into a new calendar day #}
+          <template x-if="isNewDay({{ forloop.counter0 }})">
+            <tr>
+              <td colspan="{{ drivers|length|add:2 }}"
+                  class="text-center font-semibold py-1 text-xs tracking-wider"
+                  style="background-color: var(--color-accent2); color: #111; opacity: 0.9;">
+                <span x-text="formatStintDate('{{ sw.start_utc|to_utc_z }}')"></span>
+              </td>
+            </tr>
+          </template>
+
+          <tr class="border-t border-white border-opacity-5 hover:bg-white hover:bg-opacity-5 transition-colors">
+
+            <td :class="rowClass({{ sw.stint_number }})"
+                :style="assignments[{{ sw.stint_number }}] ? 'background-color: var(--color-base)' : ''"
+                class="sticky left-0 z-10 font-mono text-center font-bold px-2 py-1.5">
+              {{ sw.stint_number }}
+            </td>
+
+            <td class="px-3 py-1.5 whitespace-nowrap font-mono text-xs opacity-80">
+              {{ sw.start_local }}
+            </td>
+
+            {# One radio cell per driver #}
+            {% for driver in drivers %}
+            <td class="px-2 py-1.5 text-center transition-colors"
+                :class="cellClass({{ sw.stint_number }}, '{{ driver.id }}')"
+                :title="conflictTooltip({{ sw.stint_number }}, '{{ driver.id }}')">
+              <input type="radio"
+                     name="stint_{{ sw.stint_number }}"
+                     value="{{ driver.id }}"
+                     x-model="assignments[{{ sw.stint_number }}]"
+                     @change="assignDriver({{ sw.stint_number }}, '{{ driver.id }}')"
+                     class="cursor-pointer w-4 h-4"
+                     style="accent-color: var(--color-accent1);">
+            </td>
+            {% endfor %}
+
+          </tr>
+
+          {% endfor %}
+
+          {# Footer row: per-driver stint counts, reactive to radio selections #}
+          <tr class="border-t-2 border-white border-opacity-20 font-bold"
+              style="background-color: var(--color-nav-bg);">
+            <td class="sticky left-0 z-10 px-3 py-2 text-xs font-semibold opacity-60"
+                style="background-color: var(--color-nav-bg);">
+              Total
+            </td>
+            <td></td>
+            {% for driver in drivers %}
+            <td class="text-center px-2 py-2 font-mono"
+                x-text="driverStintCount('{{ driver.id }}')">
+            </td>
+            {% endfor %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    {# Color legend #}
+    <div class="flex gap-6 text-xs mt-4 flex-wrap opacity-70">
+      <span class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded inline-block bg-green-500 bg-opacity-40"></span>
+        Assigned
+      </span>
+      <span class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded inline-block bg-red-500 bg-opacity-40"></span>
+        Unassigned stint
+      </span>
+      <span class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded inline-block bg-yellow-400 bg-opacity-60"></span>
+        Availability conflict
+      </span>
+    </div>
+
+    {# Second save button below table #}
+    <div class="mt-6">
+      <button type="submit"
+              class="px-5 py-2 rounded font-semibold text-sm transition hover:opacity-80 active:scale-95"
+              style="background-color: var(--color-accent1); color: #fff;">
+        Save Assignments
+      </button>
+    </div>
+
+  </div>
+</form>
+
+{% endif %}
+
+{# ── Driver availability table (reused from admin page) ──────── #}
+<section class="mt-10 mb-6">
+  <h2 class="text-lg font-semibold mb-4 pb-2 border-b" style="border-color: var(--color-accent1);">
+    Driver Availability
+  </h2>
+  {% include 'partials/availability_table.html' with table_data=table_data drivers=drivers admin_tz=admin_tz only %}
+</section>
+
+{% endblock %}
+
+{% block extra_js %}
+{% if stint_windows and drivers %}
+<script>
+  const stintWindows    = {{ stint_windows_json|safe }};
+  const availabilityData = {{ availability_json|safe }};
+  const existingAssignments = {{ existing_assignments_json|safe }};
+  const driversData     = {{ drivers_json|safe }};
+
+  function stintPlanner(adminTz) {
+    return {
+      // { stint_number (int): driver_id (string) | null }
+      assignments: {},
+
+      init() {
+        stintWindows.forEach(sw => {
+          const n = sw.stint_number;
+          this.assignments[n] = existingAssignments[String(n)] || null;
+        });
+      },
+
+      assignDriver(stintNumber, driverId) {
+        this.assignments[stintNumber] = driverId || null;
+      },
+
+      hasConflict(stintNumber, driverId) {
+        // Returns true if ANY 30-min availability slot that falls inside
+        // [stint.start_utc, stint.end_utc) is missing from the driver's
+        // recorded availability.
+        //
+        // Availability slots are on a 30-min grid anchored at the EVENT
+        // start (= stintWindows[0].start_utc).  Iterating from sw.start_utc
+        // directly breaks when stint length is not a multiple of 30 min —
+        // the start time lands between grid points and no slots are found.
+        // Instead we find the first grid-aligned slot >= stint start and
+        // walk forward from there.
+        if (!driverId) return false;
+        const driverAvail = new Set(availabilityData[driverId] || []);
+        const sw = stintWindows.find(w => w.stint_number === stintNumber);
+        if (!sw) return false;
+
+        const slotMs = 30 * 60 * 1000;
+        const gridAnchorMs = new Date(stintWindows[0].start_utc).getTime();
+        const startMs = new Date(sw.start_utc).getTime();
+        const endMs   = new Date(sw.end_utc).getTime();
+
+        // First grid slot at or after stint start
+        const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
+        let currentMs = gridAnchorMs + offsetSlots * slotMs;
+
+        while (currentMs < endMs) {
+          // toISOString() emits ".000Z"; strip ms to match server format
+          const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+          if (!driverAvail.has(isoStr)) return true;
+          currentMs += slotMs;
+        }
+        return false;
+      },
+
+      rowClass(stintNumber) {
+        // Red stint-number cell when no driver is assigned
+        const assigned = this.assignments[stintNumber];
+        if (!assigned) return 'bg-red-500 bg-opacity-40';
+        return '';
+      },
+
+      cellClass(stintNumber, driverId) {
+        if (this.assignments[stintNumber] !== driverId) return '';
+        if (this.hasConflict(stintNumber, driverId)) {
+          return 'bg-yellow-400 bg-opacity-60';
+        }
+        return 'bg-green-500 bg-opacity-40';
+      },
+
+      conflictTooltip(stintNumber, driverId) {
+        if (this.assignments[stintNumber] === driverId &&
+            this.hasConflict(stintNumber, driverId)) {
+          return '⚠ Driver not available for this stint';
+        }
+        return '';
+      },
+
+      driverStintCount(driverId) {
+        return Object.values(this.assignments)
+          .filter(id => id === driverId).length;
+      },
+
+      formatStintTime(utcString) {
+        return new Date(utcString).toLocaleTimeString('en-GB', {
+          timeZone: adminTz,
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      },
+
+      formatStintDate(utcString) {
+        return new Date(utcString).toLocaleDateString('en-GB', {
+          timeZone: adminTz,
+          month: 'short',
+          day: 'numeric',
+        });
+      },
+
+      isNewDay(index) {
+        // Returns true when this stint's calendar day (in adminTz) differs from the previous
+        if (index === 0) return false;
+        const prev = stintWindows[index - 1];
+        const curr = stintWindows[index];
+        return this.formatStintDate(prev.start_utc) !==
+               this.formatStintDate(curr.start_utc);
+      },
+    };
+  }
+</script>
+{% endif %}
+{% endblock %}

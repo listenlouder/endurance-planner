@@ -5,71 +5,6 @@
 {% block content %}
 <div class="max-w-lg mx-auto">
 
-  {% if success %}
-  <!-- ================================================================ -->
-  <!-- SUCCESS STATE                                                      -->
-  <!-- ================================================================ -->
-  <div class="flex flex-col gap-6 mt-4">
-
-    <div class="rounded-lg px-4 py-3 bg-green-500 bg-opacity-15 border border-green-500 text-green-500 font-semibold text-center">
-      Your availability has been updated, {{ driver.name }}!
-    </div>
-
-    <p class="text-sm text-center opacity-60">
-      Saved in timezone: <strong>{{ driver.timezone }}</strong>
-    </p>
-
-    <div class="rounded-xl border p-6 flex flex-col gap-6"
-         style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
-
-      <!-- View event link -->
-      <div class="flex flex-col gap-2">
-        <p class="text-sm font-semibold" style="color: var(--color-text);">
-          View the event schedule
-        </p>
-        <a href="{{ base_url }}{{ event.id }}/view/"
-           class="text-sm break-all hover:underline"
-           style="color: var(--color-accent1);"
-           target="_blank">
-          {{ base_url }}{{ event.id }}/view/
-        </a>
-        <input type="text" readonly
-               value="{{ base_url }}{{ event.id }}/view/"
-               class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
-               style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
-               onclick="this.select()" />
-      </div>
-
-      <hr style="border-color: var(--color-accent2); opacity: 0.3;" />
-
-      <!-- Edit link again -->
-      <div class="flex flex-col gap-2">
-        <p class="text-sm font-semibold" style="color: var(--color-text);">
-          Update your availability again
-        </p>
-        <a href="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
-           class="text-sm break-all hover:underline"
-           style="color: var(--color-accent1);"
-           target="_blank">
-          {{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/
-        </a>
-        <input type="text" readonly
-               value="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
-               class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
-               style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
-               onclick="this.select()" />
-        <p class="text-xs opacity-60">
-          Keep this link private — anyone with it can edit your availability.
-        </p>
-      </div>
-
-    </div>
-  </div>
-
-  {% else %}
-  <!-- ================================================================ -->
-  <!-- FORM STATE                                                         -->
-  <!-- ================================================================ -->
 
   <a href="{% url 'home' %}"
      class="inline-flex items-center gap-1 text-sm mb-6 opacity-60 hover:opacity-100 transition"
@@ -188,13 +123,13 @@
                      class="px-3 py-1 text-xs font-semibold sticky top-0"
                      style="background-color: var(--color-nav-bg); color: var(--color-accent1); border-bottom: 1px solid var(--color-accent2);">
                 </div>
-                <label class="flex items-center gap-3 px-4 py-2 cursor-pointer transition-colors select-none"
+                <label class="flex items-center gap-3 px-4 py-3 min-h-[44px] cursor-pointer transition-colors select-none"
                        :class="checked[i] ? 'slot-selected' : ''">
                   <input type="checkbox"
                          name="slots"
                          :value="slotTimestamps[i]"
                          x-model="checked[i]"
-                         class="w-4 h-4 shrink-0"
+                         class="w-5 h-5 shrink-0"
                          style="accent-color: var(--color-accent1);">
                   <span x-text="formatTime(slotTimestamps[i])"
                         class="text-sm" style="color: var(--color-text);"></span>
@@ -236,7 +171,6 @@
     </button>
   </div>
 
-  {% endif %}
 </div>
 {% endblock %}
 

@@ -1,119 +1,157 @@
 # Endurance Planner
 
-A Django web application for sim racing teams to plan driver stints for endurance races.
+A web application for planning driver stints in endurance racing events.
+
+## Tech stack
+
+- **Backend:** Django 6.x
+- **Database:** MariaDB 11
+- **Frontend:** HTMX, Alpine.js, Tailwind CSS
+- **Deployment:** Docker + gunicorn
 
 ---
 
-## Prerequisites
+## Local development setup
 
-- Python 3.11+
-- MariaDB 10.6+ (or MySQL 8+)
+### Prerequisites
 
----
+- Python 3.12+
+- MariaDB running locally
+- `make` (for Tailwind CSS builds)
 
-## 1. Install MariaDB
+### First-time setup
 
-### macOS (Homebrew)
-
-```bash
-brew install mariadb
-brew services start mariadb
-```
-
-### Windows
-
-Download the official installer from https://mariadb.org/download/ and run it.
-During setup, set a root password and note it for the next step.
-
----
-
-## 2. Create the database and user
-
-Open a MariaDB shell (`mariadb -u root -p`) and run:
-
-```sql
-CREATE DATABASE endurance_planner CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'endurance_user'@'localhost' IDENTIFIED BY 'localdevpassword';
-GRANT ALL PRIVILEGES ON endurance_planner.* TO 'endurance_user'@'localhost';
-FLUSH PRIVILEGES;
-```
-
----
-
-## 3. Configure the environment
-
-Copy `.env.example` to `.env` and fill in the values:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-Generate a secret key:
-
-```bash
-python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-```
-
-Paste the output into `DJANGO_SECRET_KEY` in your `.env`.
-
----
-
-## 4. Set up the Python environment
+**1. Clone and create a virtual environment**
 
 ```bash
 python -m venv venv
+source venv/bin/activate   # macOS/Linux
+venv\Scripts\activate      # Windows
+```
 
-# macOS / Linux
-source venv/bin/activate
+**2. Install Python dependencies**
 
-# Windows
-venv\Scripts\activate
-
+```bash
 pip install -r backend/requirements.txt
 ```
 
----
+**3. Download the Tailwind CLI binary**
 
-## 5. Run migrations
-
+macOS (Apple Silicon):
 ```bash
-cd backend
-python manage.py migrate
+mkdir -p bin
+curl -sLo bin/tailwindcss-macos \
+  https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-macos-arm64
+chmod +x bin/tailwindcss-macos
 ```
 
----
-
-## 6. Start the development server
-
+Linux x64:
 ```bash
-python manage.py runserver
+mkdir -p bin
+curl -sLo bin/tailwindcss \
+  https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64
+chmod +x bin/tailwindcss
 ```
 
-Visit http://127.0.0.1:8000/
+**4. Build the CSS**
+
+```bash
+make css
+```
+
+**5. Set up the database**
+
+MariaDB must be running. Run the setup script:
+```bash
+mariadb -u root -p < docs/create_db.sql
+```
+
+Or run the SQL commands in `docs/create_db.sql` manually.
+
+**6. Configure environment**
+
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env — the defaults work for local development
+```
+
+**7. Run migrations**
+
+```bash
+cd backend && python manage.py migrate
+```
+
+**8. Start the dev server**
+
+```bash
+cd backend && python manage.py runserver
+```
+
+**9. Watch for CSS changes** (separate terminal)
+
+```bash
+make css-watch
+```
+
+This recompiles `output.css` whenever a template changes. You must run this
+(or `make css`) whenever adding new Tailwind classes — the Play CDN is no longer used.
+
+Before committing, run `make css` to generate a minified production build.
 
 ---
 
-## 7. PyCharm configuration
+### PyCharm configuration
 
-### Python interpreter
+- Open the `endurance-planner/` root directory as the project
+- **Settings → Project → Python Interpreter → Add → Existing:**
+  - macOS/Linux: `venv/bin/python`
+  - Windows: `venv\Scripts\python.exe`
+- **Run → Edit Configurations → + → Django Server:**
+  - Script path: `backend/manage.py`
+  - Working directory: `backend/`
 
-1. Open **Settings → Project → Python Interpreter**
-2. Click the gear icon → **Add Interpreter → Add Local Interpreter**
-3. Select **Existing** and browse to:
-   - macOS/Linux: `venv/bin/python`
-   - Windows: `venv\Scripts\python.exe`
+---
 
-### Django run configuration
+## Production deployment (Docker)
 
-1. Go to **Run → Edit Configurations**
-2. Click **+** → **Django Server**
-3. Set:
-   - **Name:** `runserver`
-   - **Script path:** `backend/manage.py`
-   - **Parameters:** `runserver`
-   - **Working directory:** `backend/`
-4. Under **Environment variables**, ensure your `.env` values are loaded
-   (python-dotenv handles this automatically via `settings.py`).
+**1. Copy and fill in the production environment file**
+
+```bash
+cp .env.production.example .env.production
+# Edit .env.production — never commit this file
+```
+
+**2. Download the Linux Tailwind binary** (if not already in `bin/`)
+
+```bash
+mkdir -p bin
+curl -sLo bin/tailwindcss \
+  https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64
+chmod +x bin/tailwindcss
+```
+
+**3. Build and start**
+
+```bash
+docker-compose --env-file .env.production up -d --build
+```
+
+The app will be available on port 8000. Put nginx or a reverse proxy in front for HTTPS.
+
+---
+
+## URL structure
+
+| URL | Description | Auth |
+|-----|-------------|------|
+| `/` | Home page | None |
+| `/create/` | Create new event | None |
+| `/<event_id>/view/` | View event and stint schedule | None |
+| `/<event_id>/signup/` | Driver signup | None |
+| `/<event_id>/signup/<driver_id>/edit/` | Edit availability | URL secret |
+| `/<event_id>/signup/<driver_id>/success/` | Post-signup confirmation | None |
+| `/<event_id>/admin/<admin_key>/` | Admin page entry (sets session) | Key + session |
+| `/<event_id>/admin/create-stints/` | Stint planning | Session |
 
 ---
 
@@ -121,17 +159,23 @@ Visit http://127.0.0.1:8000/
 
 ```
 endurance-planner/
-├── venv/                   # Python virtual environment (not committed)
 ├── backend/
-│   ├── config/             # Django project settings & URLs
-│   ├── events/             # Main app: models, views, utils, forms
+│   ├── config/             # Django project settings and URLs
+│   ├── events/             # Main app — models, views, utils, forms
 │   │   └── templatetags/   # Custom template filters (tz_filters)
-│   ├── templates/          # HTML templates
-│   │   └── partials/       # HTMX partial templates (added in later phases)
-│   ├── static/css/         # Custom CSS
-│   ├── .env                # Local environment variables (not committed)
-│   ├── .env.example        # Template for .env (committed)
-│   └── manage.py
-├── .gitignore
+│   ├── templates/          # All HTML templates
+│   │   └── partials/       # HTMX swap targets
+│   └── static/
+│       └── css/
+│           ├── tailwind.css    # Tailwind input (source)
+│           └── output.css      # Compiled CSS (git-ignored, generated by make css)
+├── bin/                    # Tailwind CLI binaries (git-ignored)
+├── docs/
+│   └── create_db.sql       # Database setup script
+├── Dockerfile
+├── docker-compose.yml
+├── Makefile
+├── tailwind.config.js
+├── .env.production.example
 └── README.md
 ```

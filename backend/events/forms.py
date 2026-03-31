@@ -1,5 +1,5 @@
 from django import forms
-from datetime import date
+from datetime import datetime, timezone as dt_timezone
 
 
 class EventCreateForm(forms.Form):
@@ -21,6 +21,6 @@ class EventCreateForm(forms.Form):
     def clean(self):
         cleaned_data = super().clean()
         event_date = cleaned_data.get('date')
-        if event_date and event_date < date.today():
+        if event_date and event_date < datetime.now(tz=dt_timezone.utc).date():
             self.add_error('date', 'Event date cannot be in the past.')
         return cleaned_data
