@@ -196,11 +196,12 @@
 
 {% block extra_js %}
 {% if stint_windows and drivers %}
+{{ drivers_json|json_script:"drivers-json-data" }}
 <script>
   const stintWindows    = {{ stint_windows_json|safe }};
   const availabilityData = {{ availability_json|safe }};
   const existingAssignments = {{ existing_assignments_json|safe }};
-  const driversData     = {{ drivers_json|safe }};
+  const driversData     = JSON.parse(document.getElementById('drivers-json-data').textContent);
 
   function stintPlanner(adminTz) {
     return {

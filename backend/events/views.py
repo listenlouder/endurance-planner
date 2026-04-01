@@ -1,10 +1,11 @@
 import hmac
 import json
-from datetime import datetime, timezone as dt_utc
+from datetime import date, datetime, time as time_type, timezone as dt_utc
 from zoneinfo import available_timezones, ZoneInfo
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, render, redirect
@@ -42,7 +43,7 @@ EDITABLE_FIELDS = {
     'avg_lap_seconds':    {'type': 'number',   'label': 'Average Lap Time (s)',       'required': False, 'min': 1},
     'in_lap_seconds':     {'type': 'number',   'label': 'In Lap Time (s)',            'required': False, 'min': 1},
     'out_lap_seconds':    {'type': 'number',   'label': 'Out Lap Time (s)',           'required': False, 'min': 1},
-    'target_laps':        {'type': 'number',   'label': 'Target Laps per Stint',      'required': False, 'min': 1},
+    'target_laps':        {'type': 'number',   'label': 'Target Laps per Stint',      'required': False, 'min': 1,    'max': 500},
     'fuel_capacity':      {'type': 'number',   'label': 'Fuel Capacity (L)',          'required': False, 'min': 0.1},
     'fuel_per_lap':       {'type': 'number',   'label': 'Fuel Use per Lap (L)',       'required': False, 'min': 0.01},
     'tire_change_fuel_min': {'type': 'number', 'label': 'Min Fuel for Tyre Change (L)', 'required': False, 'min': 0},
@@ -135,7 +136,6 @@ def _validate_and_save_field(event, field_name, value_str):
         if not value:
             return f"{config['label']} is required."
         try:
-            from datetime import date
             event.date = date.fromisoformat(value)
         except ValueError:
             return "Invalid date. Use YYYY-MM-DD format."
@@ -146,7 +146,6 @@ def _validate_and_save_field(event, field_name, value_str):
         if not value:
             return f"{config['label']} is required."
         try:
-            from datetime import time as time_type
             event.start_time_utc = time_type.fromisoformat(value)
         except ValueError:
             return "Invalid time. Use HH:MM format."
@@ -324,7 +323,7 @@ def view_event(request, event_id):
     ])
 
     lh = round(event.length_seconds / 3600, 1)
-    lh_display = f"{int(lh)} hours" if lh == int(lh) else f"{lh} hours"
+    lh_display = f"{int(lh)} hours" if event.length_seconds % 3600 == 0 else f"{lh} hours"
 
     return render(request, 'view.html', {
         'event': event,
@@ -393,12 +392,12 @@ def signup_edit(request, event_id, driver_id):
             errors['timezone'] = 'Invalid timezone selected. Please try again.'
 
         if not errors:
-            driver.name = cleaned['driver_name']
-            driver.timezone = cleaned['timezone']
-            driver.save()
-
-            driver.availability.all().delete()
-            _save_availability(driver, cleaned['slots_raw'], event)
+            with transaction.atomic():
+                driver.name = cleaned['driver_name']
+                driver.timezone = cleaned['timezone']
+                driver.save()
+                driver.availability.all().delete()
+                _save_availability(driver, cleaned['slots_raw'], event)
             return redirect('signup_success', event_id=event_id, driver_id=driver_id)
 
         # On error, restore submitted selections so user doesn't lose changes
@@ -434,7 +433,8 @@ def signup_success(request, event_id, driver_id):
 
 def driver_delete(request, event_id, driver_id):
     if request.method == 'DELETE':
-        driver = get_object_or_404(Driver, id=driver_id, event__id=event_id)
+        event = require_admin_session(request, event_id)
+        driver = get_object_or_404(Driver, id=driver_id, event=event)
         driver.delete()
         response = HttpResponse()
         response['HX-Redirect'] = '/'
@@ -447,7 +447,9 @@ def driver_delete(request, event_id, driver_id):
 # ---------------------------------------------------------------------------
 
 def set_timezone(request):
-    tz = request.GET.get('timezone', 'UTC')
+    if request.method != 'POST':
+        return HttpResponse(status=405)
+    tz = request.POST.get('timezone', 'UTC')
     if tz not in VALID_TIMEZONES:
         tz = 'UTC'
     current_tz = request.COOKIES.get('admin_timezone', 'UTC')
@@ -459,14 +461,8 @@ def set_timezone(request):
     return response
 
 
-def admin_page(request, event_id, admin_key):
-    event = get_object_or_404(Event, id=event_id)
-
-    if not _check_admin_key(event, admin_key):
-        return render(request, 'admin_error.html', {'error': 'Invalid admin key supplied.'})
-
-    request.session[f'admin_{event_id}'] = True
-
+def _build_admin_context(request, event):
+    """Build the context dict for the admin page. Caller must have already verified auth."""
     drivers = (
         Driver.objects.filter(event=event)
         .prefetch_related('availability')
@@ -533,14 +529,33 @@ def admin_page(request, event_id, admin_key):
         for slot in slots
     ]
 
-    return render(request, 'admin.html', {
+    return {
         'event': event,
         'admin_tz': admin_tz,
         'drivers': drivers,
         'field_groups': field_groups,
         'missing_required_fields': missing_required_fields,
         'table_data': table_data,
-    })
+    }
+
+
+def admin_page(request, event_id, admin_key):
+    event = get_object_or_404(Event, id=event_id)
+
+    if not _check_admin_key(event, admin_key):
+        return render(request, 'admin_error.html', {'error': 'Invalid admin key supplied.'})
+
+    # Rotate session ID on promotion to prevent session fixation
+    request.session.cycle_key()
+    request.session[f'admin_{event_id}'] = True
+
+    return render(request, 'admin.html', _build_admin_context(request, event))
+
+
+def admin_dashboard(request, event_id):
+    """Session-authenticated admin page — no key in the URL."""
+    event = require_admin_session(request, event_id)
+    return render(request, 'admin.html', _build_admin_context(request, event))
 
 
 def admin_edit_field(request, event_id):
@@ -590,7 +605,7 @@ def create_stints(request, event_id):
             request,
             "All required timing and fuel fields must be set before creating stints.",
         )
-        return redirect('admin_page', event_id=event_id, admin_key=event.admin_key)
+        return redirect('admin_dashboard', event_id=event_id)
 
     stint_windows = get_stint_windows(event)
 

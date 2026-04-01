@@ -13,9 +13,9 @@ urlpatterns = [
     # Phase 4: admin sub-routes must come BEFORE the <str:admin_key> entry point,
     # otherwise Django matches the literal segments (e.g. "edit-field") as the key.
     path('set-timezone/', views.set_timezone, name='set_timezone'),
-    path('<uuid:event_id>/admin/update-field/', views.admin_edit_field, name='admin_update_field'),
     path('<uuid:event_id>/admin/edit-field/', views.admin_edit_field, name='admin_edit_field'),
     path('<uuid:event_id>/admin/remove-driver/<uuid:driver_id>/', views.admin_remove_driver, name='admin_remove_driver'),
     path('<uuid:event_id>/admin/create-stints/', views.create_stints, name='create_stints'),
+    path('<uuid:event_id>/admin/', views.admin_dashboard, name='admin_dashboard'),
     path('<uuid:event_id>/admin/<str:admin_key>/', views.admin_page, name='admin_page'),
 ]

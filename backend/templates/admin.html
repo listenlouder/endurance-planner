@@ -21,8 +21,9 @@
 {% endif %}
 
 {# Hidden div: sets the admin_timezone cookie on page load #}
-<div hx-get="{% url 'set_timezone' %}"
+<div hx-post="{% url 'set_timezone' %}"
      hx-trigger="load"
+     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
      hx-vals="js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
      hx-swap="none">
 </div>
