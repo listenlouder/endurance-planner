@@ -91,5 +91,5 @@ SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SECURE = not DEBUG
-SESSION_COOKIE_AGE = 28800  # 8 hours — sufficient for a race day
-SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_AGE = 28800  # 8 hours — server-side session record expiry
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True  # no Max-Age on cookie; browser discards on close (overrides age from client side)

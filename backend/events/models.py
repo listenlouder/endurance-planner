@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone as dt_utc
 from django.db import models
 from django.utils.crypto import get_random_string
 
@@ -33,15 +34,10 @@ class Event(models.Model):
     @property
     def start_datetime_utc(self):
         """Returns a timezone-aware datetime combining date and start_time_utc."""
-        from datetime import datetime
-        import datetime as dt
-        return datetime.combine(self.date, self.start_time_utc).replace(
-            tzinfo=dt.timezone.utc
-        )
+        return datetime.combine(self.date, self.start_time_utc).replace(tzinfo=dt_utc.utc)
 
     @property
     def end_datetime_utc(self):
-        from datetime import timedelta
         return self.start_datetime_utc + timedelta(seconds=self.length_seconds)
 
     @property

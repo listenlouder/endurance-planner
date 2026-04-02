@@ -18,6 +18,8 @@ A web application for planning driver stints in endurance racing events.
 - Python 3.12+
 - MariaDB running locally
 - `make` (for Tailwind CSS builds)
+  - macOS/Linux: already available or `brew install make`
+  - Windows: install via `choco install make`, `scoop install make`, or use [Git Bash](https://git-scm.com/downloads) which includes Make
 
 ### First-time setup
 
@@ -53,6 +55,16 @@ curl -sLo bin/tailwindcss \
 chmod +x bin/tailwindcss
 ```
 
+Windows x64 (PowerShell):
+```powershell
+mkdir -Force bin
+Invoke-WebRequest `
+  -Uri https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-windows-x64.exe `
+  -OutFile bin\tailwindcss.exe
+```
+
+The Makefile detects Windows automatically and uses `bin\tailwindcss.exe`.
+
 **4. Build the CSS**
 
 ```bash
@@ -66,7 +78,12 @@ MariaDB must be running. Run the setup script:
 mariadb -u root -p < docs/create_db.sql
 ```
 
-Or run the SQL commands in `docs/create_db.sql` manually.
+Windows (PowerShell or cmd — the `<` redirect works in cmd; use Git Bash for the above):
+```powershell
+Get-Content docs\create_db.sql | mariadb -u root -p
+```
+
+Or run the SQL commands in `docs/create_db.sql` manually in any client.
 
 **6. Configure environment**
 

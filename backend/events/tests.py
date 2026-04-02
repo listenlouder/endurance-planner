@@ -18,12 +18,17 @@ Test groups:
     EventCreateFormTests      - forms.EventCreateForm validation
     ValidateSignupPostTests   - views._validate_signup_post()
     ValidateAndSaveFieldTests - views._validate_and_save_field()
+    AdminDashboardTests       - views.admin_dashboard() session-gated access
+    SetTimezoneTests          - views.set_timezone() POST-only timezone cookie
+    AdminPageSessionTests     - views.admin_page() key login and session handling
 """
 
 import datetime as dt
+import uuid
 from datetime import timezone
 
 from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
 
 from .forms import EventCreateForm
 from .models import Availability, Driver, Event
@@ -1195,3 +1200,164 @@ class ValidateAndSaveFieldTests(TestCase):
         self.assertIsNone(error)
         self._refresh()
         self.assertAlmostEqual(self.event.avg_lap_seconds, 100.0)
+
+
+# ---------------------------------------------------------------------------
+# Priority 4: Admin views — session, timezone cookie, key-based login
+# ---------------------------------------------------------------------------
+
+
+class AdminDashboardTests(TestCase):
+    """Tests for views.admin_dashboard() — session-gated access."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self, event_id):
+        """Helper: write the admin session flag for the given event_id."""
+        session = self.client.session
+        session[f'admin_{event_id}'] = True
+        session.save()
+
+    def test_without_session_returns_403(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_with_wrong_event_session_returns_403(self):
+        other_id = uuid.uuid4()
+        self._set_admin_session(other_id)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_with_valid_session_returns_200(self):
+        self._set_admin_session(self.event.id)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_with_valid_session_uses_admin_template(self):
+        self._set_admin_session(self.event.id)
+
+        response = self.client.get(self.url)
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin.html', template_names)
+
+    def test_nonexistent_event_with_session_returns_404(self):
+        nonexistent_id = uuid.uuid4()
+        self._set_admin_session(nonexistent_id)
+        url = reverse('admin_dashboard', kwargs={'event_id': nonexistent_id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+
+class SetTimezoneTests(TestCase):
+    """Tests for views.set_timezone() — POST-only timezone cookie endpoint."""
+
+    def setUp(self):
+        self.url = reverse('set_timezone')
+
+    def test_get_returns_405(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_get_returns_allow_post_header(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response['Allow'], 'POST')
+
+    def test_post_sets_cookie(self):
+        response = self.client.post(self.url, {'timezone': 'America/New_York'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('admin_timezone', response.cookies)
+        self.assertEqual(response.cookies['admin_timezone'].value, 'America/New_York')
+
+    def test_post_unknown_timezone_falls_back_to_utc(self):
+        response = self.client.post(self.url, {'timezone': 'Fake/Zone'})
+
+        self.assertEqual(response.cookies['admin_timezone'].value, 'UTC')
+
+    def test_post_changed_timezone_sets_hx_refresh(self):
+        # Seed a current cookie so the view sees a different incoming timezone
+        self.client.cookies['admin_timezone'] = 'UTC'
+
+        response = self.client.post(self.url, {'timezone': 'America/New_York'})
+
+        self.assertEqual(response['HX-Refresh'], 'true')
+
+    def test_post_same_timezone_no_hx_refresh(self):
+        self.client.cookies['admin_timezone'] = 'America/New_York'
+
+        response = self.client.post(self.url, {'timezone': 'America/New_York'})
+
+        self.assertNotIn('HX-Refresh', response)
+
+
+class AdminPageSessionTests(TestCase):
+    """Tests for views.admin_page() — key-based login and session promotion."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse(
+            'admin_page',
+            kwargs={'event_id': self.event.id, 'admin_key': self.event.admin_key},
+        )
+        self.wrong_key_url = reverse(
+            'admin_page',
+            kwargs={'event_id': self.event.id, 'admin_key': 'wrong-key-value'},
+        )
+
+    def test_wrong_key_does_not_grant_session(self):
+        self.client.get(self.wrong_key_url)
+
+        session_flag = self.client.session.get(f'admin_{self.event.id}')
+        self.assertFalse(bool(session_flag))
+
+    def test_valid_key_sets_session_flag(self):
+        self.client.get(self.url)
+
+        self.assertTrue(self.client.session.get(f'admin_{self.event.id}'))
+
+    def test_valid_key_cycles_session(self):
+        # Force the client to have an established session key before the request
+        session = self.client.session
+        session['warmup'] = True
+        session.save()
+        key_before = self.client.session.session_key
+
+        self.client.get(self.url)
+
+        key_after = self.client.session.session_key
+        self.assertNotEqual(key_before, key_after)
+
+    def test_valid_key_renders_admin_template(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin.html', template_names)
+
+    def test_invalid_key_renders_error_template(self):
+        response = self.client.get(self.wrong_key_url)
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin_error.html', template_names)
+
+    def test_after_valid_key_dashboard_accessible(self):
+        # Hitting admin_page with the correct key should set the session flag,
+        # allowing admin_dashboard to serve the page without the key in the URL.
+        self.client.get(self.url)
+
+        dashboard_url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        response = self.client.get(dashboard_url)
+
+        self.assertEqual(response.status_code, 200)

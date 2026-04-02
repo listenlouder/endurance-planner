@@ -9,6 +9,7 @@ from django.db import transaction
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, render, redirect
+from django.urls import reverse
 
 from .forms import EventCreateForm
 from .models import Availability, Driver, Event, StintAssignment
@@ -364,12 +365,12 @@ def signup(request, event_id):
             'event': event,
             'errors': errors,
             'submitted_name': cleaned['driver_name'],
-            'submitted_slot_timestamps': json.dumps(cleaned['slots_raw']),
+            'submitted_slot_timestamps': cleaned['slots_raw'],
         })
         return render(request, 'signup.html', ctx)
 
     ctx = get_signup_context(event)
-    ctx['event'] = event
+    ctx.update({'event': event, 'submitted_slot_timestamps': []})
     return render(request, 'signup.html', ctx)
 
 
@@ -379,11 +380,11 @@ def signup_edit(request, event_id, driver_id):
     driver = get_object_or_404(Driver.objects.prefetch_related('availability'), id=driver_id, event=event)
 
     def _existing_timestamps():
-        return json.dumps([
+        return [
             a.slot_utc.isoformat().replace('+00:00', 'Z')
             if a.slot_utc.tzinfo else a.slot_utc.isoformat() + 'Z'
             for a in driver.availability.all()
-        ])
+        ]
 
     if request.method == 'POST':
         cleaned, errors = _validate_signup_post(request.POST)
@@ -407,7 +408,7 @@ def signup_edit(request, event_id, driver_id):
             'driver': driver,
             'errors': errors,
             'submitted_name': cleaned['driver_name'],
-            'existing_slot_timestamps': json.dumps(cleaned['slots_raw']),
+            'existing_slot_timestamps': cleaned['slots_raw'],
         })
         return render(request, 'signup_edit.html', ctx)
 
@@ -437,9 +438,11 @@ def driver_delete(request, event_id, driver_id):
         driver = get_object_or_404(Driver, id=driver_id, event=event)
         driver.delete()
         response = HttpResponse()
-        response['HX-Redirect'] = '/'
+        response['HX-Redirect'] = reverse('admin_dashboard', kwargs={'event_id': event_id})
         return response
-    return HttpResponse(status=405)
+    response = HttpResponse(status=405)
+    response['Allow'] = 'DELETE'
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +451,9 @@ def driver_delete(request, event_id, driver_id):
 
 def set_timezone(request):
     if request.method != 'POST':
-        return HttpResponse(status=405)
+        response = HttpResponse(status=405)
+        response['Allow'] = 'POST'
+        return response
     tz = request.POST.get('timezone', 'UTC')
     if tz not in VALID_TIMEZONES:
         tz = 'UTC'

@@ -1,8 +1,9 @@
 .PHONY: css css-watch collectstatic
 
 # Detect OS for binary selection
-UNAME := $(shell uname)
-ifeq ($(UNAME), Darwin)
+ifeq ($(OS), Windows_NT)
+  TW = .\bin\tailwindcss.exe
+else ifeq ($(shell uname), Darwin)
   TW = ./bin/tailwindcss-macos
 else
   TW = ./bin/tailwindcss

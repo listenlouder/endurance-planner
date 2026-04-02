@@ -177,7 +177,8 @@
 {% block extra_js %}
 <script>
   const slotTimestamps = {{ slot_timestamps_json|safe }};
-  const existingSlots  = {{ existing_slot_timestamps|safe }};
+  {{ existing_slot_timestamps|json_script:"existing-slots-data" }}
+  const existingSlots = JSON.parse(document.getElementById('existing-slots-data').textContent);
 
   function signupEditData() {
     return {

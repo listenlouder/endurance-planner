@@ -160,7 +160,8 @@
 {% block extra_js %}
 <script>
   const slotTimestamps = {{ slot_timestamps_json|safe }};
-  const submittedSlots = {{ submitted_slot_timestamps|default:'[]'|safe }};
+  {{ submitted_slot_timestamps|json_script:"submitted-slots-data" }}
+  const submittedSlots = JSON.parse(document.getElementById('submitted-slots-data').textContent);
 
   function signupFormData() {
     return {

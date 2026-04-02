@@ -22,7 +22,7 @@
 
 {# Page header #}
 <div class="mb-6">
-  <a href="{% url 'admin_page' event.id event.admin_key %}"
+  <a href="{% url 'admin_dashboard' event.id %}"
      class="inline-flex items-center gap-1 text-sm mb-4 opacity-60 hover:opacity-100 transition"
      style="color: var(--color-text);">
     ← Back to Admin
@@ -45,7 +45,7 @@
 {% if not stint_windows %}
   <div class="rounded-lg border border-red-500 bg-red-500 bg-opacity-10 p-4 text-red-400 mb-6 text-sm">
     No stints could be calculated. Please check the timing fields on the
-    <a href="{% url 'admin_page' event.id event.admin_key %}" class="underline">admin page</a>.
+    <a href="{% url 'admin_dashboard' event.id %}" class="underline">admin page</a>.
   </div>
 
 {# Edge case: no drivers signed up #}
