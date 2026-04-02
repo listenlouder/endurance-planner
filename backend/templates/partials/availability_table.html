@@ -1,6 +1,6 @@
 {% load tz_filters %}
 {% if table_data %}
-  <div class="overflow-x-auto overflow-y-auto max-h-96 rounded border border-white border-opacity-10">
+  <div class="overflow-x-auto overflow-y-auto max-h-96 rounded border border-white/10">
     <table class="text-xs border-collapse min-w-full">
       <thead>
         <tr>
@@ -18,15 +18,15 @@
       </thead>
       <tbody>
         {% for row in table_data %}
-          <tr class="border-t border-white border-opacity-5">
+          <tr class="border-t border-white/5">
             <td class="sticky left-0 z-10 px-3 py-1.5 font-mono whitespace-nowrap
-                       {% if row.is_uncovered %}bg-red-500 bg-opacity-25 text-red-300{% endif %}"
+                       {% if row.is_uncovered %}bg-red-500/25 text-red-300{% endif %}"
                 style="background-color: {% if not row.is_uncovered %}var(--color-base){% endif %}">
               {{ row.slot_local_str }}
             </td>
             {% for driver in drivers %}
               <td class="px-3 py-1.5
-                         {% if row.driver_availability|get_item:driver.id %}bg-green-500 bg-opacity-30{% else %}bg-red-500 bg-opacity-20{% endif %}">
+                         {% if row.driver_availability|get_item:driver.id %}bg-green-500/30{% else %}bg-red-500/20{% endif %}">
               </td>
             {% endfor %}
           </tr>

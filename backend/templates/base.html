@@ -27,10 +27,11 @@
   <nav class="flex items-center justify-between px-6 py-3 shadow-sm"
        style="background-color: var(--color-nav-bg); border-bottom: 2px solid var(--color-accent1);">
 
-    <span class="text-xl font-bold tracking-tight"
-          style="color: var(--color-accent1);">
+    <a href="{% url 'home' %}"
+       class="text-xl font-bold tracking-tight hover:opacity-80 transition-opacity"
+       style="color: var(--color-accent1);">
       Endurance Planner
-    </span>
+    </a>
 
     <!-- Dark mode toggle -->
     <button @click="dark = !dark"

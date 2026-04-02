@@ -34,6 +34,21 @@ input, select, textarea {
   border-color: var(--color-border);
 }
 
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  border-width: 2px;
+  border-style: solid;
+  border-color: var(--color-border);
+}
+
 input:focus, select:focus, textarea:focus {
   outline-color: var(--color-accent1);
+}
+
+.row-stripe {
+  background-color: rgba(0, 0, 0, 0.06);
+}
+html.dark .row-stripe {
+  background-color: rgba(255, 255, 255, 0.06);
 }

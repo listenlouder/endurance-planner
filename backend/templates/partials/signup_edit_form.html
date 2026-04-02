@@ -1,0 +1,117 @@
+{{ existing_slot_timestamps|json_script:"existing-slots-data" }}
+<script>
+  if (document.getElementById('existing-slots-data')) {
+    window.existingSlots = JSON.parse(document.getElementById('existing-slots-data').textContent);
+  }
+</script>
+<div id="signup-edit-form-container">
+  <form method="post"
+        hx-post="{% url 'signup_edit' event.id driver.id %}{% if from_admin %}?from=admin{% endif %}"
+        hx-target="#signup-edit-form-container"
+        hx-swap="outerHTML"
+        x-data="signupEditData()">
+    {% csrf_token %}
+    <div class="flex flex-col gap-6">
+
+      <!-- ── Timezone ── -->
+      <div class="rounded-xl border p-4 flex flex-col gap-3"
+           style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
+
+        <div class="flex items-center gap-3 p-3 rounded-lg"
+             style="border: 1px solid var(--color-border);">
+          <span class="text-sm" style="color: var(--color-text);">Your timezone:</span>
+          <span class="font-mono text-sm font-semibold"
+                x-text="detected"
+                style="color: var(--color-accent1);"></span>
+          <button type="button"
+                  @click="showManual = !showManual"
+                  class="ml-auto text-xs underline opacity-60 hover:opacity-100"
+                  style="color: var(--color-text);">
+            Not correct?
+          </button>
+        </div>
+
+        <div x-show="showManual" x-transition class="mt-2">
+          <div class="flex flex-col gap-1">
+            <input type="text"
+                   x-model="tzSearch"
+                   placeholder="Search timezones..."
+                   class="w-full px-3 py-2 rounded border text-sm focus:outline-none"
+                   style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-border);">
+            <select x-model="timezone"
+                    size="6"
+                    class="w-full mt-1 rounded border text-sm focus:outline-none"
+                    style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-border);">
+              <template x-for="tz in filteredTimezones" :key="tz">
+                <option :value="tz" x-text="tz"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+
+        {% if errors.timezone %}
+          <p class="text-red-500 text-xs">{{ errors.timezone }}</p>
+        {% endif %}
+
+        <input type="hidden" name="timezone" :value="showManual ? timezone : detected">
+      </div>
+
+      <!-- ── Driver name ── -->
+      <div class="flex flex-col gap-1">
+        <label class="text-sm font-medium" style="color: var(--color-text);">
+          Your name
+        </label>
+        <input type="text"
+               name="driver_name"
+               value="{{ submitted_name|default:driver.name }}"
+               placeholder="e.g. Alex Smith"
+               autocomplete="name"
+               class="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
+               style="background-color: var(--color-base); color: var(--color-text); border-color: {% if errors.driver_name %}#ef4444{% else %}var(--color-accent2){% endif %};" />
+        {% if errors.driver_name %}
+          <p class="text-red-500 text-sm mt-1">{{ errors.driver_name }}</p>
+        {% endif %}
+      </div>
+
+      <!-- ── Availability grid ── -->
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <span class="text-sm font-medium" style="color: var(--color-text);">
+            Your availability
+          </span>
+          {% if slots %}
+          <div class="flex gap-2">
+            <button type="button"
+                    @click="selectAll()"
+                    class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
+                    style="border-color: var(--color-accent2); color: var(--color-text);">
+              Select All
+            </button>
+            <button type="button"
+                    @click="clearAll()"
+                    class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
+                    style="border-color: var(--color-accent2); color: var(--color-text);">
+              Clear All
+            </button>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if errors.slots %}
+          <p class="text-red-500 text-sm">{{ errors.slots }}</p>
+        {% endif %}
+
+        {% include 'partials/availability_grid.html' %}
+      </div>
+
+      <!-- ── Submit ── -->
+      <button type="submit"
+              {% if not slots %}disabled{% endif %}
+              class="w-full py-2 px-4 rounded-lg font-semibold transition hover:opacity-80 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              style="background-color: var(--color-accent1); color: #fff;">
+        Update Availability
+      </button>
+
+    </div>
+  </form>
+</div>

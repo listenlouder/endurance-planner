@@ -802,6 +802,7 @@ class EventCreateFormTests(SimpleTestCase):
             'date': self.FUTURE_DATE,
             'start_time_utc': '14:00',
             'length_hours': 24,
+            'length_minutes': 0,
         }
         data.update(overrides)
         return data
@@ -851,12 +852,13 @@ class EventCreateFormTests(SimpleTestCase):
         self.assertIn('length_hours', form.errors)
 
     def test_length_hours_below_minimum_rejected(self):
-        form = EventCreateForm(data=self._valid_data(length_hours=0))
+        # hours=0, minutes=0 should fail with a non-field ValidationError
+        form = EventCreateForm(data=self._valid_data(length_hours=0, length_minutes=0))
         self.assertFalse(form.is_valid())
-        self.assertIn('length_hours', form.errors)
+        self.assertTrue(form.non_field_errors())
 
     def test_length_hours_at_minimum_accepted(self):
-        form = EventCreateForm(data=self._valid_data(length_hours=1))
+        form = EventCreateForm(data=self._valid_data(length_hours=1, length_minutes=0))
         self.assertTrue(form.is_valid(), form.errors)
 
     def test_length_hours_above_maximum_rejected(self):
@@ -865,7 +867,7 @@ class EventCreateFormTests(SimpleTestCase):
         self.assertIn('length_hours', form.errors)
 
     def test_length_hours_at_maximum_accepted(self):
-        form = EventCreateForm(data=self._valid_data(length_hours=168))
+        form = EventCreateForm(data=self._valid_data(length_hours=168, length_minutes=0))
         self.assertTrue(form.is_valid(), form.errors)
 
     def test_invalid_date_format_rejected(self):
@@ -1103,10 +1105,11 @@ class ValidateAndSaveFieldTests(TestCase):
     # --- Number fields ---
 
     def test_number_valid_saves(self):
-        error = self._call('avg_lap_seconds', '95.5')
+        # avg_lap_seconds now uses mmss type; use fuel_capacity for plain number
+        error = self._call('fuel_capacity', '50.0')
         self.assertIsNone(error)
         self._refresh()
-        self.assertAlmostEqual(self.event.avg_lap_seconds, 95.5)
+        self.assertAlmostEqual(self.event.fuel_capacity, 50.0)
 
     def test_length_hours_converts_to_seconds(self):
         error = self._call('length_hours', '6')
@@ -1128,7 +1131,8 @@ class ValidateAndSaveFieldTests(TestCase):
         self.assertIsInstance(self.event.target_laps, int)
 
     def test_number_not_a_number_returns_error(self):
-        error = self._call('avg_lap_seconds', 'fast')
+        # Use a plain number field (fuel_capacity) not mmss
+        error = self._call('fuel_capacity', 'lots')
         self.assertIsNotNone(error)
         self.assertIn('valid number', error.lower())
 
@@ -1139,20 +1143,20 @@ class ValidateAndSaveFieldTests(TestCase):
         self.assertIn('required', error.lower())
 
     def test_optional_number_empty_sets_none(self):
-        # 'avg_lap_seconds' is optional
-        error = self._call('avg_lap_seconds', '')
+        # 'fuel_capacity' is optional and a plain number field
+        error = self._call('fuel_capacity', '')
         self.assertIsNone(error)
         self._refresh()
-        self.assertIsNone(self.event.avg_lap_seconds)
+        self.assertIsNone(self.event.fuel_capacity)
 
     def test_number_below_min_returns_error(self):
-        # 'avg_lap_seconds' min=1
-        error = self._call('avg_lap_seconds', '0.5')
+        # 'fuel_per_lap' min=0.01
+        error = self._call('fuel_per_lap', '0.005')
         self.assertIsNotNone(error)
         self.assertIn('at least', error.lower())
 
     def test_number_at_min_is_accepted(self):
-        error = self._call('avg_lap_seconds', '1')
+        error = self._call('fuel_per_lap', '0.01')
         self.assertIsNone(error)
 
     def test_number_above_max_returns_error(self):
@@ -1195,11 +1199,11 @@ class ValidateAndSaveFieldTests(TestCase):
         self.assertIsNotNone(error)
 
     def test_number_with_leading_trailing_spaces_accepted(self):
-        # value_str is stripped before parsing
-        error = self._call('avg_lap_seconds', '  100  ')
+        # value_str is stripped before parsing; use plain number field
+        error = self._call('fuel_capacity', '  100  ')
         self.assertIsNone(error)
         self._refresh()
-        self.assertAlmostEqual(self.event.avg_lap_seconds, 100.0)
+        self.assertAlmostEqual(self.event.fuel_capacity, 100.0)
 
 
 # ---------------------------------------------------------------------------

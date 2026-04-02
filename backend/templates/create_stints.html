@@ -43,14 +43,14 @@
 
 {# Edge case: no stints calculated #}
 {% if not stint_windows %}
-  <div class="rounded-lg border border-red-500 bg-red-500 bg-opacity-10 p-4 text-red-400 mb-6 text-sm">
+  <div class="rounded-lg border border-red-500 bg-red-500/10 p-4 text-red-400 mb-6 text-sm">
     No stints could be calculated. Please check the timing fields on the
     <a href="{% url 'admin_dashboard' event.id %}" class="underline">admin page</a>.
   </div>
 
 {# Edge case: no drivers signed up #}
 {% elif not drivers %}
-  <div class="rounded-lg border border-yellow-500 bg-yellow-500 bg-opacity-10 p-4 text-yellow-400 mb-6 text-sm">
+  <div class="rounded-lg border border-yellow-500 bg-yellow-500/10 p-4 text-yellow-400 mb-6 text-sm">
     ⚠ No drivers have signed up yet. Share the signup link to add drivers before creating stints.
     <a href="{% url 'signup' event.id %}" class="underline ml-1">Signup page →</a>
   </div>
@@ -65,26 +65,30 @@
 
   <div x-data="stintPlanner('{{ admin_tz }}')" x-init="init()">
 
-    <button type="submit"
-            class="mb-4 px-5 py-2 rounded font-semibold text-sm transition hover:opacity-80 active:scale-95"
-            style="background-color: var(--color-accent1); color: #fff;">
-      Save Assignments
-    </button>
+    {# Unassigned stints warning banner #}
+    <div x-show="hasUnassigned"
+         x-transition
+         class="mb-4 px-4 py-3 rounded-lg text-sm font-medium"
+         style="background-color: #f59e0b22; border: 1px solid #f59e0b; color: #f59e0b;">
+      ⚠ <span x-text="unassignedCount"></span>
+      stint<span x-show="unassignedCount > 1">s have</span><span x-show="unassignedCount === 1"> has</span>
+      no driver assigned.
+    </div>
 
-    <div class="overflow-x-auto overflow-y-auto max-h-[70vh] rounded border border-white border-opacity-10">
+    <div class="overflow-x-auto overflow-y-auto max-h-[70vh] rounded border border-white/10">
       <table class="border-collapse text-sm" style="min-width: max-content;">
         <thead>
           <tr style="background-color: var(--color-nav-bg);">
-            <th class="sticky top-0 left-0 z-20 px-3 py-2 text-left font-medium opacity-60 min-w-[5rem] border-b border-white border-opacity-10"
+            <th class="sticky top-0 left-0 z-20 px-3 py-2 text-left font-medium opacity-60 min-w-[5rem] border-b border-white/10"
                 style="background-color: var(--color-nav-bg);">
               Stint
             </th>
-            <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium opacity-60 whitespace-nowrap min-w-[9rem] border-b border-white border-opacity-10"
+            <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium opacity-60 whitespace-nowrap min-w-[9rem] border-b border-white/10"
                 style="background-color: var(--color-nav-bg);">
               Start Time
             </th>
             {% for driver in drivers %}
-            <th class="sticky top-0 z-10 px-3 py-2 text-center font-medium min-w-[7rem] border-b border-white border-opacity-10"
+            <th class="sticky top-0 z-10 px-3 py-2 text-center font-medium min-w-[7rem] border-b border-white/10"
                 style="background-color: var(--color-nav-bg);">
               {{ driver.name }}
             </th>
@@ -105,7 +109,7 @@
             </tr>
           </template>
 
-          <tr class="border-t border-white border-opacity-5 hover:bg-white hover:bg-opacity-5 transition-colors">
+          <tr class="border-t border-white/5 hover:bg-white/5 transition-colors">
 
             <td :class="rowClass({{ sw.stint_number }})"
                 :style="assignments[{{ sw.stint_number }}] ? 'background-color: var(--color-base)' : ''"
@@ -137,7 +141,7 @@
           {% endfor %}
 
           {# Footer row: per-driver stint counts, reactive to radio selections #}
-          <tr class="border-t-2 border-white border-opacity-20 font-bold"
+          <tr class="border-t-2 border-white/20 font-bold"
               style="background-color: var(--color-nav-bg);">
             <td class="sticky left-0 z-10 px-3 py-2 text-xs font-semibold opacity-60"
                 style="background-color: var(--color-nav-bg);">
@@ -157,20 +161,19 @@
     {# Color legend #}
     <div class="flex gap-6 text-xs mt-4 flex-wrap opacity-70">
       <span class="flex items-center gap-2">
-        <span class="w-4 h-4 rounded inline-block bg-green-500 bg-opacity-40"></span>
+        <span class="w-4 h-4 rounded inline-block bg-green-500/40"></span>
         Assigned
       </span>
       <span class="flex items-center gap-2">
-        <span class="w-4 h-4 rounded inline-block bg-red-500 bg-opacity-40"></span>
+        <span class="w-4 h-4 rounded inline-block bg-red-500/40"></span>
         Unassigned stint
       </span>
       <span class="flex items-center gap-2">
-        <span class="w-4 h-4 rounded inline-block bg-yellow-400 bg-opacity-60"></span>
+        <span class="w-4 h-4 rounded inline-block bg-yellow-400/60"></span>
         Availability conflict
       </span>
     </div>
 
-    {# Second save button below table #}
     <div class="mt-6">
       <button type="submit"
               class="px-5 py-2 rounded font-semibold text-sm transition hover:opacity-80 active:scale-95"
@@ -256,16 +259,16 @@
       rowClass(stintNumber) {
         // Red stint-number cell when no driver is assigned
         const assigned = this.assignments[stintNumber];
-        if (!assigned) return 'bg-red-500 bg-opacity-40';
+        if (!assigned) return 'bg-red-500/40';
         return '';
       },
 
       cellClass(stintNumber, driverId) {
         if (this.assignments[stintNumber] !== driverId) return '';
         if (this.hasConflict(stintNumber, driverId)) {
-          return 'bg-yellow-400 bg-opacity-60';
+          return 'bg-yellow-400/60';
         }
-        return 'bg-green-500 bg-opacity-40';
+        return 'bg-green-500/40';
       },
 
       conflictTooltip(stintNumber, driverId) {
@@ -274,6 +277,14 @@
           return '⚠ Driver not available for this stint';
         }
         return '';
+      },
+
+      get unassignedCount() {
+        return Object.values(this.assignments).filter(d => !d).length;
+      },
+
+      get hasUnassigned() {
+        return this.unassignedCount > 0;
       },
 
       driverStintCount(driverId) {

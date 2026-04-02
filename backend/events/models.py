@@ -21,6 +21,7 @@ class Event(models.Model):
     avg_lap_seconds = models.FloatField(null=True, blank=True)
     in_lap_seconds = models.FloatField(null=True, blank=True)
     out_lap_seconds = models.FloatField(null=True, blank=True)
+    team_name = models.CharField(max_length=255, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):

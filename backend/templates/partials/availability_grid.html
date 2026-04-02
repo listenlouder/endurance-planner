@@ -1,0 +1,31 @@
+{% if not slots %}
+  <div class="rounded-lg px-4 py-3 bg-amber-600 border border-amber-500 text-white text-sm">
+    This event has no availability slots configured. Contact the event admin.
+  </div>
+{% else %}
+  <div class="max-h-96 overflow-y-auto rounded-lg border"
+       style="border-color: var(--color-accent2);">
+    <template x-for="(slot, i) in slotTimestamps" :key="i">
+      <div>
+        <!-- Date divider when day changes -->
+        <div x-show="isNewDay(i)"
+             x-text="formatDate(slotTimestamps[i])"
+             class="px-3 py-1 text-xs font-semibold sticky top-0"
+             style="background-color: var(--color-nav-bg); color: var(--color-accent1); border-bottom: 1px solid var(--color-accent2);">
+        </div>
+        <!-- Slot row -->
+        <label class="flex items-center gap-3 px-4 py-3 min-h-[44px] cursor-pointer transition-colors select-none"
+               :class="checked[i] ? 'slot-selected' : ''">
+          <input type="checkbox"
+                 name="slots"
+                 :value="slotTimestamps[i]"
+                 x-model="checked[i]"
+                 class="w-5 h-5 shrink-0"
+                 style="accent-color: var(--color-accent1);">
+          <span x-text="formatTime(slotTimestamps[i])"
+                class="text-sm" style="color: var(--color-text);"></span>
+        </label>
+      </div>
+    </template>
+  </div>
+{% endif %}

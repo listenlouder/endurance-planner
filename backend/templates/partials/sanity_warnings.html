@@ -1,0 +1,8 @@
+{% if sanity_warnings %}
+  {% for warning in sanity_warnings %}
+  <div class="px-4 py-2 rounded text-sm mb-2"
+       style="border: 1px solid #f59e0b; color: #f59e0b;">
+    ⚠ {{ warning }}
+  </div>
+  {% endfor %}
+{% endif %}
