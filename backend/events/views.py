@@ -2,14 +2,14 @@ import hmac
 import json
 import logging
 from datetime import date, datetime, time as time_type, timezone as dt_utc
-
-logger = logging.getLogger(__name__)
 from zoneinfo import ZoneInfo
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
+
+logger = logging.getLogger(__name__)
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, render, redirect
 from django.template.loader import render_to_string
@@ -146,6 +146,7 @@ EDITABLE_FIELDS = {
     'track':              {'type': 'text',     'label': 'Track',                         'required': False},
     'team_name':          {'type': 'text',     'label': 'Team Name',                     'required': False},
     'setup':              {'type': 'textarea', 'label': 'Setup Notes',                   'required': False},
+    'recruiting':         {'type': 'checkbox', 'label': 'Recruiting Drivers',            'required': False},
     'avg_lap_seconds':    {'type': 'mmss',     'label': 'Average Lap Time',              'required': False},
     'in_lap_seconds':     {'type': 'mmss',     'label': 'In Lap Time',                   'required': False},
     'out_lap_seconds':    {'type': 'mmss',     'label': 'Out Lap Time',                  'required': False},
@@ -260,15 +261,9 @@ def _make_field_ctx(event, field_name):
         'sanity_warnings': validate_stint_sanity(event),
     }
     if field_name == 'length_hours':
-        total_secs = event.length_seconds
-        raw_hours = total_secs // 3600
-        raw_minutes = (total_secs % 3600) // 60
-        # Snap minutes to nearest quarter-hour choice
-        snapped = min((0, 15, 30, 45), key=lambda x: abs(x - raw_minutes))
-        ctx['current_hours'] = raw_hours
-        ctx['current_minutes'] = snapped
-        ctx['hours_range'] = range(0, 169)
-        ctx['minutes_choices'] = _MINUTES_CHOICES
+        total_secs = event.length_seconds or 0
+        ctx['current_hours'] = total_secs // 3600
+        ctx['current_minutes'] = (total_secs % 3600) // 60
     return ctx
 
 
@@ -327,6 +322,11 @@ def _validate_and_save_field(event, field_name, value_str):
         except (ValueError, IndexError):
             return 'Please enter time in M:SS format (e.g. 1:45)'
         setattr(event, field_name, float(total_secs))
+        event.save(update_fields=[field_name])
+        return None
+
+    if ftype == 'checkbox':
+        setattr(event, field_name, value == 'true')
         event.save(update_fields=[field_name])
         return None
 
@@ -418,26 +418,33 @@ def _validate_signup_post(post_data):
 # ---------------------------------------------------------------------------
 
 def home(request):
-    return render(request, 'home.html')
+    now_utc = datetime.now(tz=dt_utc.utc)
+
+    recruiting_qs = Event.objects.filter(
+        recruiting=True,
+        date__gte=now_utc.date(),
+    ).annotate(
+        driver_count=Count('drivers'),
+    ).order_by('date', 'start_time_utc')[:50]
+
+    upcoming = []
+    for event in recruiting_qs:
+        event_start = datetime.combine(
+            event.date,
+            event.start_time_utc,
+            tzinfo=dt_utc.utc,
+        )
+        if event_start > now_utc:
+            upcoming.append(event)
+        if len(upcoming) == 8:
+            break
+
+    return render(request, 'home.html', {'recruiting_events': upcoming})
 
 
 def event_create(request):
     def _create_ctx(form):
-        try:
-            current_hours = int(form.data.get('length_hours', 1)) if form.is_bound else 1
-        except (TypeError, ValueError):
-            current_hours = 1
-        try:
-            current_minutes = int(form.data.get('length_minutes', 0)) if form.is_bound else 0
-        except (TypeError, ValueError):
-            current_minutes = 0
-        return {
-            'form': form,
-            'hours_range': range(0, 169),
-            'minutes_choices': _MINUTES_CHOICES,
-            'current_length_hours': current_hours,
-            'current_length_minutes': current_minutes,
-        }
+        return {'form': form}
 
     if request.method == 'POST':
         form = EventCreateForm(request.POST)
@@ -447,6 +454,7 @@ def event_create(request):
                 date=form.cleaned_data['date'],
                 start_time_utc=form.cleaned_data['start_time_utc'],
                 length_seconds=form.cleaned_data['length_seconds'],
+                recruiting=form.cleaned_data.get('recruiting', False),
             )
             event.save()
             success_ctx = {
@@ -464,26 +472,44 @@ def event_create(request):
     return render(request, 'event_create.html', _create_ctx(form))
 
 
-def event_lookup_by_id(request):
-    """HTMX endpoint. POST with 'event_id' field."""
+def event_search(request):
+    """
+    HTMX endpoint. GET with 'q' parameter.
+    Returns a dropdown partial of matching future events.
+    Returns empty response if query is too short.
+    """
     if not request.htmx:
-        return HttpResponseBadRequest("This endpoint requires HTMX.")
+        return HttpResponseBadRequest("HTMX requests only.")
 
-    event_id = request.POST.get('event_id', '').strip()
-    error_html = (
-        '<p class="text-red-500 text-sm mt-2">'
-        'No event found with that ID. Please check and try again.'
-        '</p>'
-    )
+    query = request.GET.get('q', '').strip()
 
-    try:
-        event = Event.objects.get(id=event_id)
-    except (Event.DoesNotExist, ValueError, ValidationError):
-        return HttpResponse(error_html)
+    if len(query) < 2:
+        return HttpResponse('')
 
-    response = HttpResponse()
-    response['HX-Redirect'] = f'/{event.id}/view/'
-    return response
+    now_utc = datetime.now(tz=dt_utc.utc)
+
+    results = Event.objects.filter(
+        Q(name__icontains=query) |
+        Q(track__icontains=query) |
+        Q(car__icontains=query),
+        date__gte=now_utc.date()
+    ).order_by('date', 'start_time_utc')
+
+    upcoming = []
+    for event in results:
+        event_start = datetime.combine(
+            event.date,
+            event.start_time_utc,
+            tzinfo=dt_utc.utc,
+        )
+        if event_start > now_utc:
+            upcoming.append(event)
+        if len(upcoming) == 8:
+            break
+
+    return render(request,
+        'partials/search_results.html',
+        {'results': upcoming, 'query': query})
 
 
 def view_event(request, event_id):
@@ -541,6 +567,7 @@ def view_event(request, event_id):
         'length_hours_display': lh_display,
         'length_display': length_display,
         'has_unassigned': has_unassigned,
+        'show_signup_link': request.GET.get('from') == 'recruiting',
     })
 
 
@@ -725,7 +752,7 @@ def _build_admin_context(request, event):
             'fields': [
                 (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
                  str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
-                for name in ['car', 'track', 'team_name', 'setup']
+                for name in ['car', 'track', 'team_name', 'setup', 'recruiting']
             ],
         },
         {
@@ -806,23 +833,22 @@ def admin_edit_field(request, event_id):
         # Special handling for length_hours: also reads length_minutes
         if field_name == 'length_hours':
             try:
-                hours = int(request.POST.get('value', '0'))
+                hours = int(request.POST.get('length_hours', 0) or 0)
+                minutes = int(request.POST.get('length_minutes', 0) or 0)
+                if hours < 0 or hours > 168:
+                    raise ValueError
+                if minutes < 0 or minutes > 59:
+                    raise ValueError
+                if hours == 0 and minutes == 0:
+                    raise ValueError
             except (ValueError, TypeError):
-                hours = 0
-            try:
-                minutes = int(request.POST.get('length_minutes', '0'))
-            except (ValueError, TypeError):
-                minutes = 0
-
-            ctx = _make_field_ctx(event, field_name)
-            if hours < 0 or hours > 168 or minutes not in (0, 15, 30, 45):
-                ctx['error'] = 'Invalid race length values.'
+                ctx = _make_field_ctx(event, field_name)
+                ctx['error'] = (
+                    'Enter valid hours (0–168) and minutes (0–59). '
+                    'Total length must be greater than zero.'
+                )
                 return render(request, 'partials/field_edit_form.html', ctx)
-            total = hours * 3600 + minutes * 60
-            if total == 0:
-                ctx['error'] = 'Race length must be greater than zero.'
-                return render(request, 'partials/field_edit_form.html', ctx)
-            event.length_seconds = total
+            event.length_seconds = (hours * 3600) + (minutes * 60)
             event.save(update_fields=['length_seconds'])
             ctx = _make_field_ctx(event, field_name)
             return render(request, 'partials/field_display.html', ctx)
@@ -836,6 +862,42 @@ def admin_edit_field(request, event_id):
         return render(request, 'partials/field_display.html', ctx)
 
     return HttpResponse(status=405)
+
+
+def admin_edit_driver_name(request, event_id, driver_id):
+    """
+    GET: return an inline edit form for the driver's name
+    GET with cancel=1: return the display partial
+    POST: validate and save the new name, return display partial
+    """
+    event = require_admin_session(request, event_id)
+    driver = get_object_or_404(Driver, id=driver_id, event=event)
+
+    if request.method == 'POST':
+        name = request.POST.get('name', '').strip()
+        if not name:
+            return render(request,
+                'partials/driver_name_edit_form.html',
+                {
+                    'driver': driver,
+                    'event': event,
+                    'error': 'Driver name cannot be empty.'
+                })
+        driver.name = name
+        driver.save(update_fields=['name'])
+        return render(request,
+            'partials/driver_name_display.html',
+            {'driver': driver, 'event': event})
+
+    # GET
+    if request.GET.get('cancel'):
+        return render(request,
+            'partials/driver_name_display.html',
+            {'driver': driver, 'event': event})
+
+    return render(request,
+        'partials/driver_name_edit_form.html',
+        {'driver': driver, 'event': event})
 
 
 def admin_remove_driver(request, event_id, driver_id):

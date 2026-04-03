@@ -4,7 +4,7 @@ from . import views
 urlpatterns = [
     path('', views.home, name='home'),
     path('create/', views.event_create, name='event_create'),
-    path('lookup/', views.event_lookup_by_id, name='event_lookup_by_id'),
+    path('search/', views.event_search, name='event_search'),
     path('<uuid:event_id>/view/', views.view_event, name='view_event'),
     path('<uuid:event_id>/signup/', views.signup, name='signup'),
     path('<uuid:event_id>/signup/<uuid:driver_id>/edit/', views.signup_edit, name='signup_edit'),
@@ -14,6 +14,7 @@ urlpatterns = [
     # otherwise Django matches the literal segments (e.g. "edit-field") as the key.
     path('set-timezone/', views.set_timezone, name='set_timezone'),
     path('<uuid:event_id>/admin/edit-field/', views.admin_edit_field, name='admin_edit_field'),
+    path('<uuid:event_id>/admin/edit-driver/<uuid:driver_id>/', views.admin_edit_driver_name, name='admin_edit_driver_name'),
     path('<uuid:event_id>/admin/remove-driver/<uuid:driver_id>/', views.admin_remove_driver, name='admin_remove_driver'),
     path('<uuid:event_id>/admin/add-driver/', views.admin_add_driver, name='admin_add_driver'),
     path('<uuid:event_id>/admin/create-stints/', views.create_stints, name='create_stints'),

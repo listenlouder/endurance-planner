@@ -98,6 +98,21 @@ def dict_get(d, key):
 
 
 @register.filter
+def seconds_to_hours_display(seconds):
+    """
+    Converts seconds to a human readable duration string.
+    Examples: 86400 -> "24h", 23400 -> "6h 30m"
+    """
+    if not seconds:
+        return '—'
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if minutes:
+        return f"{hours}h {minutes}m"
+    return f"{hours}h"
+
+
+@register.filter
 def time_in_tz(dt, timezone_str):
     """
     Same as to_tz but returns only the time portion formatted as HH:MM.

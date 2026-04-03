@@ -1,0 +1,37 @@
+<div id="driver-name-{{ driver.id }}">
+  <form hx-post="{% url 'admin_edit_driver_name' event.id driver.id %}"
+        hx-target="#driver-name-{{ driver.id }}"
+        hx-swap="outerHTML">
+    {% csrf_token %}
+    <div class="flex items-center gap-2">
+      <input type="text"
+             name="name"
+             value="{{ driver.name }}"
+             required
+             autofocus
+             class="px-2 py-1 rounded border-2 text-sm
+                    focus:outline-none"
+             style="background-color: var(--color-base);
+                    color: var(--color-text);
+                    border-color: var(--color-accent1);">
+      <button type="submit"
+              class="text-xs px-2 py-1 rounded font-medium
+                     transition hover:opacity-80"
+              style="background-color: var(--color-accent1);
+                     color: #fff;">
+        Save
+      </button>
+      <button type="button"
+              hx-get="{% url 'admin_edit_driver_name' event.id driver.id %}?cancel=1"
+              hx-target="#driver-name-{{ driver.id }}"
+              hx-swap="outerHTML"
+              class="text-xs px-2 py-1 rounded font-medium
+                     opacity-50 hover:opacity-100 transition">
+        Cancel
+      </button>
+    </div>
+    {% if error %}
+    <p class="text-red-500 text-xs mt-1">{{ error }}</p>
+    {% endif %}
+  </form>
+</div>

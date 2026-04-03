@@ -84,36 +84,60 @@
       <p class="text-xs opacity-50 mt-1">Enter the race start time in UTC/GMT. Example: 13:00 for 1:00 PM UTC.</p>
     </div>
 
-    <!-- Race length: hours + minutes dropdowns -->
+    <!-- Race length: hours + minutes inputs -->
     <div class="flex flex-col gap-1">
       <label class="text-sm font-medium" style="color: var(--color-text);">
-        Race length
+        Race Length
       </label>
-      <div class="flex items-center gap-3">
-        <select
-          name="{{ form.length_hours.html_name }}"
-          class="px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
-          style="background-color: var(--color-base); color: var(--color-text); border-color: {% if form.length_hours.errors %}#ef4444{% else %}var(--color-accent2){% endif %};">
-          {% for h in hours_range %}
-            <option value="{{ h }}" {% if h == current_length_hours %}selected{% endif %}>{{ h }}</option>
-          {% endfor %}
-        </select>
-        <span class="text-sm opacity-70">hours</span>
-        <select
-          name="{{ form.length_minutes.html_name }}"
-          class="px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
-          style="background-color: var(--color-base); color: var(--color-text); border-color: {% if form.length_minutes.errors %}#ef4444{% else %}var(--color-accent2){% endif %};">
-          {% for v, label in minutes_choices %}
-            <option value="{{ v }}" {% if v == current_length_minutes %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        <span class="text-sm opacity-70">min</span>
+      <div class="flex items-center gap-3"
+           x-data
+           @input="$event.target.value = $event.target.value.replace(/[^0-9]/g, '')">
+        <div class="flex items-center gap-1">
+          {{ form.length_hours }}
+          <span class="text-sm opacity-60">hrs</span>
+        </div>
+        <div class="flex items-center gap-1">
+          {{ form.length_minutes }}
+          <span class="text-sm opacity-60">min</span>
+        </div>
       </div>
+      <p class="text-xs opacity-50 mt-1">Example: 24 hrs 0 min for a 24 hour race.</p>
       {% if form.length_hours.errors %}
-        <p class="text-red-500 text-sm mt-1">{{ form.length_hours.errors|join:", " }}</p>
+        <p class="text-red-500 text-xs mt-1">{{ form.length_hours.errors|join:", " }}</p>
+      {% endif %}
+      {% if form.length_minutes.errors %}
+        <p class="text-red-500 text-xs mt-1">{{ form.length_minutes.errors|join:", " }}</p>
       {% endif %}
       {% if form.non_field_errors %}
-        {# non_field_errors already shown above; skip repeating here #}
+        {% for error in form.non_field_errors %}
+          <p class="text-red-500 text-xs mt-1">{{ error }}</p>
+        {% endfor %}
+      {% endif %}
+    </div>
+
+    <!-- Recruiting -->
+    <div class="mb-6">
+      <label class="flex items-center gap-3 cursor-pointer group">
+        <input type="checkbox"
+               name="recruiting"
+               id="id_recruiting"
+               {% if form.recruiting.value %}checked{% endif %}
+               class="w-5 h-5 rounded cursor-pointer flex-shrink-0"
+               style="accent-color: var(--color-accent1);">
+        <div>
+          <span class="text-sm font-medium">
+            List this event as recruiting drivers
+          </span>
+          <p class="text-xs opacity-50 mt-0.5">
+            Shows your event on the home page so drivers can
+            find and sign up for it.
+          </p>
+        </div>
+      </label>
+      {% if form.recruiting.errors %}
+        <p class="text-red-500 text-xs mt-1">
+          {{ form.recruiting.errors|join:", " }}
+        </p>
       {% endif %}
     </div>
 

@@ -1,78 +1,210 @@
 {% extends "base.html" %}
+{% load tz_filters %}
 
 {% block title %}WeAreChecking{% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto">
+<div class="max-w-6xl mx-auto px-4 py-8">
 
-  <!-- Page header -->
-  <div class="text-center mb-10 mt-4">
-    <h1 class="text-4xl font-bold mb-2" style="color: var(--color-accent1);">
+  <!-- Page title -->
+  <div class="text-center mb-8">
+    <h1 class="text-4xl font-bold mb-2"
+        style="color: var(--color-accent1);">
       WeAreChecking
     </h1>
-    <p class="text-lg opacity-70">Plan your endurance race driver stints</p>
+    <p class="text-sm opacity-50">
+      Plan your endurance race driver stints
+    </p>
   </div>
 
-  <!-- Two-column layout -->
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-0 md:gap-0 rounded-xl overflow-hidden shadow-lg"
-       style="border: 1px solid var(--color-accent2); background-color: var(--color-nav-bg);">
+  <!-- Two column grid — left: create+find, right: recruiting -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
 
-    <!-- Section 1: Find existing event -->
-    <div class="p-8 flex flex-col gap-4">
-      <h2 class="text-xl font-semibold" style="color: var(--color-text);">
-        Find an existing event
-      </h2>
-      <p class="text-sm opacity-60">
-        Enter the event ID you received when the event was created.
-      </p>
+    <!-- LEFT COLUMN: Create and Find stacked -->
+    <div class="flex flex-col gap-6">
 
-      <form hx-post="{% url 'event_lookup_by_id' %}"
-            hx-target="#lookup-result"
-            hx-swap="innerHTML">
-        {% csrf_token %}
-        <div class="flex flex-col gap-3">
-          <input
-            type="text"
-            name="event_id"
-            placeholder="Paste event ID here…"
-            autocomplete="off"
-            class="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
-            style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
-          />
-          <button
-            type="submit"
-            class="w-full py-2 px-4 rounded-lg font-semibold text-sm transition hover:opacity-80 active:scale-95"
-            style="background-color: var(--color-accent1); color: #fff;">
-            Find Event
-          </button>
+      <!-- Create a new event card -->
+      <div class="rounded-xl p-6"
+           style="border: 1px solid var(--color-border);
+                  background-color: var(--color-nav-bg);">
+        <h2 class="text-base font-bold mb-2"
+            style="color: var(--color-text);">
+          Create a new event
+        </h2>
+        <p class="text-sm opacity-60 mb-4">
+          Set up a new endurance race and get shareable links
+          for your drivers.
+        </p>
+        <a href="{% url 'event_create' %}"
+           class="block text-center py-2 px-4 rounded-lg
+                  font-semibold text-sm transition hover:opacity-80"
+           style="background-color: var(--color-accent2);
+                  color: #111;">
+          Create New Event
+        </a>
+      </div>
+
+      <!-- Find an existing event card -->
+      <div class="rounded-xl p-6"
+           style="border: 1px solid var(--color-border);
+                  background-color: var(--color-nav-bg);">
+        <h2 class="text-base font-bold mb-2"
+            style="color: var(--color-text);">
+          Find an existing event
+        </h2>
+        <p class="text-sm opacity-60 mb-4">
+          Search by event name, track, or car.
+        </p>
+
+        <div x-data="{ open: false }" @click.outside="open = false">
+          <input type="text"
+                 name="q"
+                 placeholder="Search events…"
+                 autocomplete="off"
+                 @focus="open = true"
+                 hx-get="{% url 'event_search' %}"
+                 hx-trigger="input changed delay:300ms"
+                 hx-target="#search-results"
+                 hx-swap="innerHTML"
+                 class="w-full px-3 py-2 rounded-lg border-2
+                        text-sm focus:outline-none transition"
+                 style="background-color: var(--color-base);
+                        color: var(--color-text);
+                        border-color: var(--color-border);">
+
+          <div id="search-results"
+               x-show="open"
+               @click="open = false"
+               class="relative z-50">
+          </div>
         </div>
-      </form>
+      </div>
 
-      <div id="lookup-result"></div>
     </div>
+    <!-- END LEFT COLUMN -->
 
-    <!-- Vertical divider (desktop only) -->
-    <div class="hidden md:block w-px self-stretch my-6"
-         style="background-color: var(--color-accent2); opacity: 0.4;"></div>
-    <!-- Horizontal divider (mobile only) -->
-    <div class="block md:hidden h-px mx-8"
-         style="background-color: var(--color-accent2); opacity: 0.4;"></div>
+    <!-- RIGHT COLUMN: Recruiting — fills full height of left -->
+    <div class="rounded-xl p-6"
+         style="border: 1px solid var(--color-border);
+                background-color: var(--color-nav-bg);">
 
-    <!-- Section 2: Create new event -->
-    <div class="p-8 flex flex-col gap-4">
-      <h2 class="text-xl font-semibold" style="color: var(--color-text);">
-        Create a new event
+      <h2 class="text-base font-bold mb-1"
+          style="color: var(--color-accent2);">
+        Recruiting
       </h2>
-      <p class="text-sm opacity-60">
-        Set up a new endurance race and get shareable links for your drivers.
+      <p class="text-xs opacity-50 mb-4">
+        Upcoming events looking for drivers
       </p>
-      <a href="{% url 'event_create' %}"
-         class="inline-block text-center py-2 px-4 rounded-lg font-semibold text-sm transition hover:opacity-80 active:scale-95"
-         style="background-color: var(--color-accent2); color: #111;">
-        Create New Event
-      </a>
+
+      {% if recruiting_events %}
+
+        <!-- 2-wide tile grid for event cards -->
+        <div class="grid grid-cols-2 gap-3">
+          {% for event in recruiting_events %}
+          <a href="{% url 'view_event' event.id %}?from=recruiting"
+             class="block rounded-lg p-3 transition hover:opacity-80
+                    group"
+             style="border: 1px solid var(--color-border);">
+
+            <!-- Centered event name -->
+            <div class="text-center font-semibold text-xs mb-3
+                        group-hover:underline"
+                 style="color: var(--color-accent1);">
+              {{ event.name }}
+            </div>
+
+            <!-- Two-column info grid -->
+            <div class="grid grid-cols-2 gap-x-2 gap-y-2">
+
+              <!-- Left column -->
+              <div class="space-y-2">
+
+                <div>
+                  <span class="text-xs opacity-40 uppercase
+                               tracking-wider block">Date</span>
+                  <span class="text-xs">
+                    {{ event.date|date:"M j, Y" }}
+                  </span>
+                </div>
+
+                <div>
+                  <span class="text-xs opacity-40 uppercase
+                               tracking-wider block">Length</span>
+                  <span class="text-xs">
+                    {{ event.length_seconds|seconds_to_hours_display }}
+                  </span>
+                </div>
+
+                {% if event.team_name %}
+                <div>
+                  <span class="text-xs opacity-40 uppercase
+                               tracking-wider block">Team</span>
+                  <span class="text-xs truncate block">
+                    {{ event.team_name }}
+                  </span>
+                </div>
+                {% endif %}
+
+              </div>
+
+              <!-- Right column -->
+              <div class="space-y-2">
+
+                {% if event.track %}
+                <div>
+                  <span class="text-xs opacity-40 uppercase
+                               tracking-wider block">Track</span>
+                  <span class="text-xs truncate block">
+                    {{ event.track }}
+                  </span>
+                </div>
+                {% endif %}
+
+                {% if event.car %}
+                <div>
+                  <span class="text-xs opacity-40 uppercase
+                               tracking-wider block">Car</span>
+                  <span class="text-xs truncate block">
+                    {{ event.car }}
+                  </span>
+                </div>
+                {% endif %}
+
+                <div>
+                  <span class="text-xs opacity-40 uppercase
+                               tracking-wider block">Drivers</span>
+                  <span class="text-xs">
+                    {{ event.driver_count }} signed up
+                  </span>
+                </div>
+
+              </div>
+
+            </div>
+
+          </a>
+          {% endfor %}
+        </div>
+
+      {% else %}
+
+        <div class="flex flex-col items-center justify-center
+                    py-12 text-center">
+          <p class="text-sm opacity-40">
+            No events currently recruiting.
+          </p>
+          <p class="text-xs opacity-30 mt-1">
+            Create an event and mark it as recruiting to
+            list it here.
+          </p>
+        </div>
+
+      {% endif %}
+
     </div>
+    <!-- END RIGHT COLUMN -->
 
   </div>
+
 </div>
 {% endblock %}

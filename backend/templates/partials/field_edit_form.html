@@ -7,30 +7,52 @@
     {% csrf_token %}
     <input type="hidden" name="field" value="{{ field_name }}">
 
-    {% if field_type == 'textarea' %}
+    {% if field_type == 'checkbox' %}
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox"
+               name="value"
+               value="true"
+               {% if current_value %}checked{% endif %}
+               class="w-5 h-5 rounded"
+               style="accent-color: var(--color-accent1);">
+        <span class="text-sm">List as recruiting on home page</span>
+      </label>
+
+    {% elif field_type == 'textarea' %}
       <textarea name="value"
                 rows="3"
                 class="w-full rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
                 style="border: 1px solid var(--color-accent2);">{{ current_value }}</textarea>
 
     {% elif field_name == 'length_hours' %}
-      <div class="flex items-center gap-2">
-        <select name="value"
-                class="rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
-                style="border: 1px solid var(--color-accent2); background-color: var(--color-base); color: var(--color-text);">
-          {% for h in hours_range %}
-            <option value="{{ h }}" {% if h == current_hours %}selected{% endif %}>{{ h }}</option>
-          {% endfor %}
-        </select>
-        <span class="text-xs opacity-70">h</span>
-        <select name="length_minutes"
-                class="rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
-                style="border: 1px solid var(--color-accent2); background-color: var(--color-base); color: var(--color-text);">
-          {% for v, label in minutes_choices %}
-            <option value="{{ v }}" {% if v == current_minutes %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        <span class="text-xs opacity-70">min</span>
+      <div class="flex items-center gap-3"
+           x-data
+           @input="$event.target.value = $event.target.value.replace(/[^0-9]/g, '')">
+        <div class="flex items-center gap-1">
+          <input type="number"
+                 name="length_hours"
+                 value="{{ current_hours }}"
+                 min="0" max="168"
+                 placeholder="0"
+                 autofocus
+                 class="w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none"
+                 style="background-color: var(--color-base);
+                        color: var(--color-text);
+                        border-color: var(--color-accent1);">
+          <span class="text-xs opacity-60">hrs</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <input type="number"
+                 name="length_minutes"
+                 value="{{ current_minutes }}"
+                 min="0" max="59"
+                 placeholder="0"
+                 class="w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none"
+                 style="background-color: var(--color-base);
+                        color: var(--color-text);
+                        border-color: var(--color-accent1);">
+          <span class="text-xs opacity-60">min</span>
+        </div>
       </div>
 
     {% elif field_type == 'mmss' %}

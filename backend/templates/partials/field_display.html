@@ -7,8 +7,20 @@
      class="cursor-pointer rounded p-2 group hover:bg-white/5 transition-colors">
   <span class="text-xs font-medium opacity-50">{{ field_label }}</span>
   <div class="flex items-center justify-between mt-0.5">
-    <span class="{% if not current_value and current_value != 0 %}opacity-30 italic text-sm{% endif %}">
-      {% if field_name == 'length_hours' %}{{ current_value|format_hours }}{% else %}{{ current_value|default:"—" }}{% endif %}
+    <span class="{% if not current_value and current_value != 0 and field_type != 'checkbox' %}opacity-30 italic text-sm{% endif %}">
+      {% if field_name == 'length_hours' %}
+        {{ current_value|format_hours }}
+      {% elif field_type == 'checkbox' %}
+        {% if current_value %}
+          <span style="color: var(--color-accent2);">✓</span>
+          Recruiting — listed on home page
+        {% else %}
+          <span class="opacity-40">✗</span>
+          <span class="opacity-40">Not recruiting</span>
+        {% endif %}
+      {% else %}
+        {{ current_value|default:"—" }}
+      {% endif %}
     </span>
     <span class="text-xs opacity-0 group-hover:opacity-40 transition-opacity ml-2 shrink-0">
       click to edit

@@ -78,6 +78,22 @@
       </div>
       {% endif %}
 
+      {% if show_signup_link %}
+      <div class="flex flex-col pt-3 mt-3 border-t"
+           style="border-color: var(--color-border);">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">
+          Interested in driving?
+        </dt>
+        <dd class="text-sm mt-1">
+          <a href="{% url 'signup' event.id %}"
+             class="font-medium hover:opacity-80 transition-opacity underline"
+             style="color: var(--color-accent1);">
+            Sign up for this event →
+          </a>
+        </dd>
+      </div>
+      {% endif %}
+
     </dl>
 
     <div class="mt-6">

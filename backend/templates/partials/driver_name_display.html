@@ -1,0 +1,13 @@
+<div id="driver-name-{{ driver.id }}"
+     hx-get="{% url 'admin_edit_driver_name' event.id driver.id %}"
+     hx-trigger="click"
+     hx-target="#driver-name-{{ driver.id }}"
+     hx-swap="outerHTML"
+     class="cursor-pointer group inline-flex items-center gap-2
+            hover:opacity-80 transition-opacity">
+  <span class="font-medium">{{ driver.name }}</span>
+  <span class="text-xs opacity-0 group-hover:opacity-40
+               transition-opacity">
+    ✎
+  </span>
+</div>

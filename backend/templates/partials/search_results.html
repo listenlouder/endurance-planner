@@ -1,0 +1,48 @@
+{% load tz_filters %}
+{% if results %}
+<div class="rounded-lg border-2 overflow-hidden mt-1"
+     style="border-color: var(--color-border);
+            background-color: var(--color-nav-bg);">
+  {% for event in results %}
+  <a href="{% url 'view_event' event.id %}"
+     class="flex items-start justify-between gap-3
+            px-4 py-3 transition hover:opacity-80 block
+            {% if not forloop.last %}border-b{% endif %}"
+     style="{% if not forloop.last %}border-color: var(--color-border);{% endif %}">
+
+    <!-- Left: name and date -->
+    <div class="min-w-0">
+      <div class="text-sm font-semibold truncate"
+           style="color: var(--color-accent1);">
+        {{ event.name }}
+      </div>
+      <div class="text-xs opacity-50 mt-0.5">
+        {{ event.date|date:"M j, Y" }}
+        · {{ event.length_seconds|seconds_to_hours_display }}
+      </div>
+    </div>
+
+    <!-- Right: track and car -->
+    <div class="text-right flex-shrink-0">
+      {% if event.track %}
+      <div class="text-xs opacity-60 truncate">
+        {{ event.track }}
+      </div>
+      {% endif %}
+      {% if event.car %}
+      <div class="text-xs opacity-40 truncate">
+        {{ event.car }}
+      </div>
+      {% endif %}
+    </div>
+
+  </a>
+  {% endfor %}
+</div>
+
+{% elif query %}
+<div class="mt-1 px-4 py-3 rounded-lg text-sm opacity-50"
+     style="border: 1px solid var(--color-border);">
+  No upcoming events found for "{{ query }}".
+</div>
+{% endif %}

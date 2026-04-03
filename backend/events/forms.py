@@ -14,16 +14,38 @@ class EventCreateForm(forms.Form):
         label='Start time (UTC)',
     )
     length_hours = forms.IntegerField(
-        min_value=0, max_value=168,
-        label='Race length',
-        widget=forms.Select(choices=[(i, str(i)) for i in range(0, 169)])
+        min_value=0,
+        max_value=168,
+        label='Race Length',
+        required=True,
+        widget=forms.NumberInput(attrs={
+            'placeholder': '0',
+            'min': '0',
+            'max': '168',
+            'class': 'w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none',
+        })
     )
     length_minutes = forms.IntegerField(
-        min_value=0, max_value=59,
+        min_value=0,
+        max_value=59,
         initial=0,
-        widget=forms.Select(
-            choices=[(0, '00'), (15, '15'), (30, '30'), (45, '45')]
-        )
+        required=False,
+        widget=forms.NumberInput(attrs={
+            'placeholder': '0',
+            'min': '0',
+            'max': '59',
+            'class': 'w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none',
+        })
+    )
+
+    recruiting = forms.BooleanField(
+        required=False,
+        initial=False,
+        label='List this event as recruiting drivers',
+        help_text=(
+            'Shows your event on the home page so drivers '
+            'can find and sign up for it.'
+        ),
     )
 
     def clean(self):
@@ -44,11 +66,13 @@ class EventCreateForm(forms.Form):
                     'Start time is in the past. Please choose a future start time.'
                 )
 
-        hours = cleaned_data.get('length_hours')
-        minutes = cleaned_data.get('length_minutes')
-        if hours is not None and minutes is not None:
-            if hours == 0 and minutes == 0:
-                raise ValidationError('Race length must be greater than zero.')
-            cleaned_data['length_seconds'] = (hours * 3600) + (minutes * 60)
+        hours = cleaned_data.get('length_hours') or 0
+        minutes = cleaned_data.get('length_minutes') or 0
 
+        if hours == 0 and minutes == 0:
+            raise ValidationError('Race length must be greater than zero.')
+        if minutes > 59:
+            self.add_error('length_minutes', 'Minutes must be between 0 and 59.')
+
+        cleaned_data['length_seconds'] = (hours * 3600) + (minutes * 60)
         return cleaned_data
