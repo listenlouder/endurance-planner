@@ -1,5 +1,6 @@
 import hmac
 import json
+import time
 import logging
 from datetime import date, datetime, time as time_type, timezone as dt_utc
 from zoneinfo import ZoneInfo
@@ -16,7 +17,9 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 
 from .forms import EventCreateForm
-from .models import Availability, Driver, Event, StintAssignment
+from django.conf import settings as django_settings
+
+from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .utils import (
     build_stint_availability_matrix,
     get_availability_slots,
@@ -1093,3 +1096,84 @@ def create_stints(request, event_id):
     }
 
     return render(request, 'create_stints.html', context)
+
+
+# ---------------------------------------------------------------------------
+# Feedback views
+# ---------------------------------------------------------------------------
+
+
+def feedback_submit(request):
+    """
+    HTMX POST only. Saves feedback to the database.
+    Returns a success or error partial.
+    """
+    if request.method != 'POST':
+        return HttpResponseBadRequest()
+
+    text = request.POST.get('text', '').strip()
+    page_url = request.POST.get('page_url', '').strip()[:500]
+    user_agent = request.POST.get('user_agent', '').strip()[:500]
+
+    if not text:
+        return HttpResponse(
+            '<p class="text-red-500 text-xs mt-1">'
+            'Please enter some feedback before submitting.'
+            '</p>'
+        )
+
+    if len(text) > 1000:
+        return HttpResponse(
+            '<p class="text-red-500 text-xs mt-1">'
+            'Feedback must be under 1000 characters.'
+            '</p>'
+        )
+
+    Feedback.objects.create(
+        text=text,
+        page_url=page_url,
+        user_agent=user_agent,
+    )
+
+    response = HttpResponse('')
+    response['HX-Trigger'] = 'feedbackSuccess'
+    return response
+
+
+def feedback_view(request):
+    """
+    Password-protected feedback viewer.
+    GET: show password prompt if not authenticated.
+    POST: validate password, show feedback list on success.
+    Session persists authentication for the browser session.
+    """
+    session_key = 'feedback_authenticated'
+
+    # Handle logout
+    if request.GET.get('logout'):
+        request.session.pop(session_key, None)
+        return redirect('feedback_view')
+
+    if request.method == 'POST':
+        password = request.POST.get('password', '')
+        if (django_settings.FEEDBACK_PASSWORD
+                and hmac.compare_digest(password, django_settings.FEEDBACK_PASSWORD)):
+            request.session[session_key] = True
+        else:
+            time.sleep(1)
+            return render(request, 'feedback_view.html', {
+                'authenticated': False,
+                'error': 'Incorrect password.'
+            })
+
+    if not request.session.get(session_key):
+        return render(request, 'feedback_view.html', {
+            'authenticated': False,
+        })
+
+    feedback_items = list(Feedback.objects.all()[:200])
+    return render(request, 'feedback_view.html', {
+        'authenticated': True,
+        'feedback_items': feedback_items,
+        'total': len(feedback_items),
+    })

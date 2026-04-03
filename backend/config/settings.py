@@ -104,3 +104,5 @@ SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_AGE = 28800  # 8 hours — server-side session record expiry
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True  # no Max-Age on cookie; browser discards on close (overrides age from client side)
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+FEEDBACK_PASSWORD = os.environ.get('FEEDBACK_PASSWORD', '')

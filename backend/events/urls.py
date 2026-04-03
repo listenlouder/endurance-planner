@@ -20,4 +20,6 @@ urlpatterns = [
     path('<uuid:event_id>/admin/create-stints/', views.create_stints, name='create_stints'),
     path('<uuid:event_id>/admin/', views.admin_dashboard, name='admin_dashboard'),
     path('<uuid:event_id>/admin/<str:admin_key>/', views.admin_page, name='admin_page'),
+    path('feedback/submit/', views.feedback_submit, name='feedback_submit'),
+    path('feedback/view/', views.feedback_view, name='feedback_view'),
 ]
