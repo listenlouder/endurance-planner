@@ -217,8 +217,13 @@ def build_stint_availability_matrix(drivers, stint_windows):
             start = sw['start_utc']
             end = sw['end_utc']
 
+            snapped_start = _snap_to_grid(start, grid_anchor, slot_duration)
             total_slots = []
-            current = _snap_to_grid(start, grid_anchor, slot_duration)
+            # If the stint starts before the first grid slot, include the slot
+            # that covers the pre-grid portion (snapped_start - 30min).
+            if start < snapped_start:
+                total_slots.append(snapped_start - slot_duration)
+            current = snapped_start
             while current < end:
                 total_slots.append(current)
                 current += slot_duration
@@ -263,7 +268,14 @@ def check_driver_conflict(driver, stint_window, grid_anchor=None):
         driver.availability.values_list('slot_utc', flat=True)
     )
 
-    current = _snap_to_grid(start, anchor, slot_duration)
+    snapped_start = _snap_to_grid(start, anchor, slot_duration)
+    # If the stint starts before the first grid slot, also check the slot
+    # covering the pre-grid portion (snapped_start - 30min).
+    if start < snapped_start:
+        if (snapped_start - slot_duration) not in available_slots:
+            return True
+
+    current = snapped_start
     while current < end:
         if current not in available_slots:
             return True
