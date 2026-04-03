@@ -21,17 +21,20 @@ Test groups:
     AdminDashboardTests       - views.admin_dashboard() session-gated access
     SetTimezoneTests          - views.set_timezone() POST-only timezone cookie
     AdminPageSessionTests     - views.admin_page() key login and session handling
+    FeedbackSubmitTests       - views.feedback_submit() POST endpoint
+    FeedbackViewTests         - views.feedback_view() password-protected viewer
 """
 
 import datetime as dt
 import uuid
 from datetime import timezone
+from unittest.mock import patch
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from .forms import EventCreateForm
-from .models import Availability, Driver, Event
+from .models import Availability, Driver, Event, Feedback
 from .templatetags.tz_filters import (
     datetime_in_tz,
     dict_get,
@@ -1446,19 +1449,19 @@ class BuildStintAvailabilityMatrixTests(TestCase):
 
     # --- Grid anchor snap (critical regression test) ---
 
-    def test_grid_snap_slot_before_ceil_boundary_not_counted(self):
+    def test_pre_grid_slot_covering_stint_start_counted_as_partial(self):
         # Default event: stint_length=3615s, grid_anchor=12:00:00 UTC
         # Stint 2 starts at 13:00:15 UTC.
-        # ceil(3615 / 1800) = 3 → first_grid_slot = 12:00 + 3*30min = 13:30:00 UTC
-        # A driver with availability at 13:00 UTC must NOT count for stint 2
-        # because 13:00 is before the first grid slot (13:30).
-        self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))  # off-grid for stint 2
+        # snapped_start = 12:00 + ceil(3615/1800)*30min = 13:30
+        # Because stint start (13:00:15) < snapped_start (13:30), the pre-slot
+        # (13:00) is included — it covers the 13:00:15 stint start.
+        # total_slots = [13:00 (pre), 13:30, 14:00] — driver has only 13:00 → 'partial'
+        self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))
 
         windows = self._stint_windows()
         result = build_stint_availability_matrix([self.driver], windows)
 
-        # Stint 2 grid slots are 13:30 and 14:00; driver has neither → 'none'
-        self.assertEqual(result[str(self.driver.id)][2], 'none')
+        self.assertEqual(result[str(self.driver.id)][2], 'partial')
 
     def test_grid_snap_slot_at_ceil_boundary_counts_for_stint(self):
         # 13:30 is the first grid slot for stint 2 (see above); driver has it
@@ -1495,20 +1498,18 @@ class BuildStintAvailabilityMatrixTests(TestCase):
     # --- Full matrix across multiple stints ---
 
     def test_different_statuses_per_stint_in_same_matrix(self):
-        # Stint 1 grid slots: 12:00, 12:30, 13:00
-        # Stint 2 grid slots: 13:30, 14:00
-        # Stint 3: start=14:00:30, ceil(7230/1800)=ceil(4.0167)=5
-        #          first_grid_slot = 12:00 + 5*30min = 14:30
-        #          end of stint 3 = start of stint 4 = 12:00 + 3*3615s = 12:00 + 10845s = 15:00:45
-        #          grid slots: 14:30 and 15:00 (both < 15:00:45)
-        #
-        # Give driver: full coverage of stint 1, nothing for stint 2, partial for stint 3
-        # Stint 1 — all three slots
+        # Stint 1: start=12:00:00, slots [12:00, 12:30, 13:00] — driver has all → 'full'
+        # Stint 2: start=13:00:15, snapped=13:30, pre_slot=13:00
+        #          total_slots = [13:00 (pre), 13:30, 14:00]
+        #          driver has 13:00 (from stint 1 coverage) but not 13:30/14:00 → 'partial'
+        # Stint 3: start=14:00:30, snapped=14:30, pre_slot=14:00
+        #          end = 15:00:45, total_slots = [14:00 (pre), 14:30, 15:00]
+        #          driver has 14:30 only → 'partial'
         self._add_slot(self.driver, utc(2026, 6, 1, 12, 0))
         self._add_slot(self.driver, utc(2026, 6, 1, 12, 30))
         self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))
-        # Stint 2 — no slots (13:30, 14:00 not added)
-        # Stint 3 — only first grid slot (14:30)
+        # Stint 2 on-grid slots (13:30, 14:00) not added
+        # Stint 3 — only 14:30 (pre-slot 14:00 not added)
         self._add_slot(self.driver, utc(2026, 6, 1, 14, 30))
 
         windows = self._stint_windows()
@@ -1516,7 +1517,7 @@ class BuildStintAvailabilityMatrixTests(TestCase):
 
         driver_matrix = result[str(self.driver.id)]
         self.assertEqual(driver_matrix[1], 'full')
-        self.assertEqual(driver_matrix[2], 'none')
+        self.assertEqual(driver_matrix[2], 'partial')
         self.assertEqual(driver_matrix[3], 'partial')
 
     def test_empty_stint_windows_returns_empty_dict(self):
@@ -1524,12 +1525,13 @@ class BuildStintAvailabilityMatrixTests(TestCase):
         result = build_stint_availability_matrix([self.driver], [])
         self.assertEqual(result, {})
 
-    def test_ceil_snap_past_end_returns_empty(self):
+    def test_ceil_snap_past_end_pre_slot_still_checked(self):
         # grid_anchor = 12:00 (first window's start_utc).
         # Second window: starts at 12:10 (off-grid), ends at 12:15.
-        # snap: ceil((12:10 - 12:00) / 30min) = ceil(1/3) = 1
-        # first_grid_slot = 12:00 + 30min = 12:30, which is past end (12:15).
-        # total_slots is empty → result must be 'empty', not 'none'.
+        # snapped_start = 12:00 + ceil(10/30)*30min = 12:30, which is past end.
+        # Because start (12:10) < snapped_start (12:30), the pre-slot (12:00)
+        # is included — it covers the 12:10–12:15 window.
+        # total_slots = [12:00], driver has no availability → 'none'.
         anchor = utc(2026, 6, 1, 12, 0)
         windows = [
             {'stint_number': 1, 'start_utc': anchor, 'end_utc': anchor + dt.timedelta(minutes=30)},
@@ -1539,7 +1541,7 @@ class BuildStintAvailabilityMatrixTests(TestCase):
 
         result = build_stint_availability_matrix([self.driver], windows)
 
-        self.assertEqual(result[str(self.driver.id)][2], 'empty')
+        self.assertEqual(result[str(self.driver.id)][2], 'none')
 
 
 # ---------------------------------------------------------------------------
@@ -1587,3 +1589,251 @@ class DictGetFilterTests(SimpleTestCase):
         inner = dict_get(outer, 'section')
         result = dict_get(inner, 3)
         self.assertEqual(result, 'three')
+
+
+
+# ---------------------------------------------------------------------------
+# feedback_submit view
+# ---------------------------------------------------------------------------
+
+class FeedbackSubmitTests(TestCase):
+    """Tests for views.feedback_submit() — HTMX POST endpoint."""
+
+    def setUp(self):
+        self.url = reverse('feedback_submit')
+
+    def test_get_request_returns_400(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_empty_text_returns_inline_error_html(self):
+        response = self.client.post(self.url, {'text': ''})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Please enter some feedback', response.content)
+
+    def test_empty_text_does_not_create_feedback_record(self):
+        self.client.post(self.url, {'text': ''})
+
+        self.assertEqual(Feedback.objects.count(), 0)
+
+    def test_whitespace_only_text_returns_inline_error_html(self):
+        response = self.client.post(self.url, {'text': '   '})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Please enter some feedback', response.content)
+
+    def test_whitespace_only_text_does_not_create_feedback_record(self):
+        self.client.post(self.url, {'text': '   '})
+
+        self.assertEqual(Feedback.objects.count(), 0)
+
+    def test_text_over_1000_chars_returns_inline_error_html(self):
+        response = self.client.post(self.url, {'text': 'x' * 1001})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'under 1000 characters', response.content)
+
+    def test_text_over_1000_chars_does_not_create_feedback_record(self):
+        self.client.post(self.url, {'text': 'x' * 1001})
+
+        self.assertEqual(Feedback.objects.count(), 0)
+
+    def test_text_exactly_1000_chars_is_accepted(self):
+        response = self.client.post(self.url, {'text': 'x' * 1000})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Feedback.objects.count(), 1)
+
+    def test_valid_submission_creates_feedback_record(self):
+        self.client.post(self.url, {'text': 'Great app!'})
+
+        self.assertEqual(Feedback.objects.count(), 1)
+
+    def test_valid_submission_stores_correct_text(self):
+        self.client.post(self.url, {'text': 'Great app!'})
+
+        feedback = Feedback.objects.get()
+        self.assertEqual(feedback.text, 'Great app!')
+
+    def test_valid_submission_stores_page_url(self):
+        self.client.post(self.url, {'text': 'Good', 'page_url': '/some/page/'})
+
+        feedback = Feedback.objects.get()
+        self.assertEqual(feedback.page_url, '/some/page/')
+
+    def test_valid_submission_stores_user_agent(self):
+        self.client.post(self.url, {'text': 'Good', 'user_agent': 'TestBrowser/1.0'})
+
+        feedback = Feedback.objects.get()
+        self.assertEqual(feedback.user_agent, 'TestBrowser/1.0')
+
+    def test_valid_submission_returns_200_with_hx_trigger_header(self):
+        response = self.client.post(self.url, {'text': 'Nice work'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['HX-Trigger'], 'feedbackSuccess')
+
+    def test_valid_submission_returns_empty_body(self):
+        response = self.client.post(self.url, {'text': 'Nice work'})
+
+        self.assertEqual(response.content, b'')
+
+    def test_page_url_longer_than_500_chars_is_truncated_to_500(self):
+        long_url = '/path/' + 'a' * 600
+        self.client.post(self.url, {'text': 'Hi', 'page_url': long_url})
+
+        feedback = Feedback.objects.get()
+        self.assertEqual(len(feedback.page_url), 500)
+
+    def test_user_agent_longer_than_500_chars_is_truncated_to_500(self):
+        long_ua = 'Mozilla/' + 'x' * 600
+        self.client.post(self.url, {'text': 'Hi', 'user_agent': long_ua})
+
+        feedback = Feedback.objects.get()
+        self.assertEqual(len(feedback.user_agent), 500)
+
+
+# ---------------------------------------------------------------------------
+# feedback_view view
+# ---------------------------------------------------------------------------
+
+class FeedbackViewTests(TestCase):
+    """Tests for views.feedback_view() — password-protected feedback viewer."""
+
+    def setUp(self):
+        self.url = reverse('feedback_view')
+
+    def _authenticate(self):
+        """Helper: set the session flag that marks the browser as authenticated."""
+        session = self.client.session
+        session['feedback_authenticated'] = True
+        session.save()
+
+    # --- GET when not authenticated ---
+
+    def test_get_unauthenticated_returns_200(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_unauthenticated_renders_password_prompt(self):
+        response = self.client.get(self.url)
+
+        self.assertFalse(response.context['authenticated'])
+
+    def test_get_unauthenticated_does_not_expose_feedback_items(self):
+        response = self.client.get(self.url)
+
+        self.assertNotIn('feedback_items', response.context)
+
+    # --- POST with wrong password ---
+
+    @override_settings(FEEDBACK_PASSWORD='testpass')
+    @patch('events.views.time.sleep')
+    def test_post_wrong_password_returns_200(self, mock_sleep):
+        response = self.client.post(self.url, {'password': 'wrongpass'})
+
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(FEEDBACK_PASSWORD='testpass')
+    @patch('events.views.time.sleep')
+    def test_post_wrong_password_renders_error_message(self, mock_sleep):
+        response = self.client.post(self.url, {'password': 'wrongpass'})
+
+        self.assertFalse(response.context['authenticated'])
+        self.assertIn('error', response.context)
+        self.assertIn('Incorrect', response.context['error'])
+
+    @override_settings(FEEDBACK_PASSWORD='testpass')
+    @patch('events.views.time.sleep')
+    def test_post_wrong_password_does_not_set_session(self, mock_sleep):
+        self.client.post(self.url, {'password': 'wrongpass'})
+
+        self.assertFalse(bool(self.client.session.get('feedback_authenticated')))
+
+    # --- POST with correct password ---
+
+    @override_settings(FEEDBACK_PASSWORD='testpass')
+    def test_post_correct_password_sets_session(self):
+        self.client.post(self.url, {'password': 'testpass'})
+
+        self.assertTrue(self.client.session.get('feedback_authenticated'))
+
+    @override_settings(FEEDBACK_PASSWORD='testpass')
+    def test_post_correct_password_shows_feedback_list(self):
+        response = self.client.post(self.url, {'password': 'testpass'})
+
+        self.assertTrue(response.context['authenticated'])
+        self.assertIn('feedback_items', response.context)
+
+    # --- POST with empty password when FEEDBACK_PASSWORD is also empty ---
+
+    @override_settings(FEEDBACK_PASSWORD='')
+    @patch('events.views.time.sleep')
+    def test_post_empty_password_rejected_when_setting_is_also_empty(self, mock_sleep):
+        # The `and django_settings.FEEDBACK_PASSWORD` guard must prevent login
+        # even when both sides of compare_digest would be empty strings.
+        response = self.client.post(self.url, {'password': ''})
+
+        self.assertFalse(response.context['authenticated'])
+        self.assertFalse(bool(self.client.session.get('feedback_authenticated')))
+
+    # --- GET when authenticated via session ---
+
+    def test_get_authenticated_shows_feedback_list(self):
+        self._authenticate()
+
+        response = self.client.get(self.url)
+
+        self.assertTrue(response.context['authenticated'])
+        self.assertIn('feedback_items', response.context)
+
+    def test_get_authenticated_returns_200(self):
+        self._authenticate()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    # --- Logout ---
+
+    def test_logout_clears_session_and_redirects(self):
+        self._authenticate()
+
+        response = self.client.get(self.url + '?logout=1')
+
+        self.assertRedirects(response, self.url)
+        self.assertFalse(bool(self.client.session.get('feedback_authenticated')))
+
+    def test_logout_unauthenticated_session_still_redirects(self):
+        # Logout should redirect even if the session flag was never set.
+        response = self.client.get(self.url + '?logout=1')
+
+        self.assertRedirects(response, self.url)
+
+    # --- Ordering and queryset cap ---
+
+    def test_feedback_items_are_shown_most_recent_first(self):
+        # Create two items in chronological order; the view must return them reversed.
+        older = Feedback.objects.create(text='First post')
+        newer = Feedback.objects.create(text='Second post')
+        self._authenticate()
+
+        response = self.client.get(self.url)
+
+        items = response.context['feedback_items']
+        self.assertEqual(items[0].pk, newer.pk)
+        self.assertEqual(items[1].pk, older.pk)
+
+    def test_queryset_is_capped_at_200_items(self):
+        Feedback.objects.bulk_create(
+            [Feedback(text=f'item {i}') for i in range(201)]
+        )
+        self._authenticate()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(len(response.context['feedback_items']), 200)
+        self.assertEqual(response.context['total'], 200)

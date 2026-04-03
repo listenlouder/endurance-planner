@@ -78,6 +78,23 @@ class Availability(models.Model):
         return f"{self.driver.name} available at {self.slot_utc}"
 
 
+class Feedback(models.Model):
+    text = models.TextField()
+    page_url = models.CharField(max_length=500, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-submitted_at']
+
+    def __str__(self):
+        return (
+            f"Feedback at "
+            f"{self.submitted_at:%Y-%m-%d %H:%M} — "
+            f"{self.text[:50]}"
+        )
+
+
 class StintAssignment(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='stint_assignments')
     stint_number = models.PositiveIntegerField()

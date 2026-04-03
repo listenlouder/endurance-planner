@@ -1,0 +1,114 @@
+{% extends 'base.html' %}
+{% block title %}Feedback — WeAreChecking{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  <h1 class="text-2xl font-bold mb-6"
+      style="color: var(--color-accent1);">
+    Feedback
+  </h1>
+
+  {% if not authenticated %}
+
+  <!-- Password prompt -->
+  <div class="max-w-sm mx-auto mt-20">
+    <div class="rounded-xl p-6"
+         style="border: 1px solid var(--color-border);
+                background-color: var(--color-nav-bg);">
+      <h2 class="text-base font-bold mb-4">
+        Enter password to view feedback
+      </h2>
+      {% if error %}
+      <p class="text-red-500 text-sm mb-3">{{ error }}</p>
+      {% endif %}
+      <form method="post">
+        {% csrf_token %}
+        <input type="password"
+               name="password"
+               placeholder="Password"
+               autofocus
+               class="w-full px-3 py-2 rounded-lg border-2
+                      text-sm focus:outline-none mb-3"
+               style="background-color: var(--color-base);
+                      color: var(--color-text);
+                      border-color: var(--color-border);">
+        <button type="submit"
+                class="w-full py-2 rounded-lg text-sm
+                       font-semibold transition hover:opacity-80"
+                style="background-color: var(--color-accent1);
+                       color: #fff;">
+          View Feedback
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% else %}
+
+  <!-- Stats row -->
+  <div class="flex items-center justify-between mb-6">
+    <p class="text-sm opacity-50">
+      {{ total }} submission{{ total|pluralize }} total
+    </p>
+    <!-- Logout link -->
+    <a href="?logout=1"
+       class="text-xs opacity-40 hover:opacity-100
+              transition underline">
+      Log out
+    </a>
+  </div>
+
+  {% if feedback_items %}
+  <div class="flex flex-col gap-4">
+    {% for item in feedback_items %}
+    <div class="rounded-xl p-5"
+         style="border: 1px solid var(--color-border);
+                background-color: var(--color-nav-bg);">
+
+      <!-- Meta row -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3
+                  pb-3 border-b"
+           style="border-color: var(--color-border);">
+        <div>
+          <span class="text-xs opacity-40 uppercase
+                       tracking-wider block">Submitted</span>
+          <span class="text-xs font-mono">
+            {{ item.submitted_at|date:"M j, Y H:i" }} UTC
+          </span>
+        </div>
+        <div>
+          <span class="text-xs opacity-40 uppercase
+                       tracking-wider block">Page</span>
+          <span class="text-xs font-mono opacity-60 truncate block">
+            {{ item.page_url|default:"Unknown" }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Browser/device -->
+      {% if item.user_agent %}
+      <p class="text-xs opacity-30 font-mono mb-3 truncate">
+        {{ item.user_agent }}
+      </p>
+      {% endif %}
+
+      <!-- Feedback text -->
+      <p class="text-sm whitespace-pre-wrap leading-relaxed">
+        {{ item.text }}
+      </p>
+
+    </div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="text-center py-20 opacity-40">
+    <p class="text-sm">No feedback submitted yet.</p>
+  </div>
+  {% endif %}
+
+  {% endif %}
+
+</div>
+{% endblock %}
