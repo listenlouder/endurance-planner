@@ -2,8 +2,7 @@
 <tr id="driver-row-{{ driver.id }}"
     class="border-b border-white/5 hover:bg-white/5 transition-colors">
   <td class="py-2 pr-4 font-medium">{{ driver.name }}</td>
-  <td class="py-2 pr-4 opacity-70">{{ driver.timezone }}</td>
-  <td class="py-2 pr-4 opacity-70">{{ driver.signed_up_at|datetime_in_tz:admin_tz }}</td>
+  <td class="py-2 pr-4 opacity-70 hidden lg:table-cell">{{ driver.timezone }}</td>
   <td class="py-2 pr-4 text-center">{{ driver.stint_count }}</td>
   <td class="py-2">
     <div class="flex items-center gap-3">

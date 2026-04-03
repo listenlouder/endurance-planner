@@ -8,7 +8,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{% block title %}Endurance Planner{% endblock %}</title>
+  <title>{% block title %}WeAreChecking{% endblock %}</title>
 
   {% load static %}
   <!-- Compiled Tailwind CSS -->
@@ -28,9 +28,9 @@
        style="background-color: var(--color-nav-bg); border-bottom: 2px solid var(--color-accent1);">
 
     <a href="{% url 'home' %}"
-       class="text-xl font-bold tracking-tight hover:opacity-80 transition-opacity"
-       style="color: var(--color-accent1);">
-      Endurance Planner
+       class="font-bold hover:opacity-80 transition-opacity"
+       style="color: var(--color-accent1); font-size: 1.25rem; letter-spacing: -0.02em;">
+      WeAreChecking
     </a>
 
     <!-- Dark mode toggle -->
@@ -57,6 +57,38 @@
   <main class="px-6 py-8 max-w-7xl mx-auto">
     {% block content %}{% endblock %}
   </main>
+
+  <script>
+    function timezonePicker(initialTz) {
+      return {
+        selected: initialTz || 'UTC',
+        open: false,
+        groups: [],
+
+        init() {
+          this.groups = typeof timezoneList !== 'undefined' ? timezoneList : [];
+        },
+
+        get selectedLabel() {
+          for (const group of this.groups) {
+            const match = group.zones.find(z => z.value === this.selected);
+            if (match) return match.label;
+          }
+          return this.selected;
+        },
+
+        select(value) {
+          this.selected = value;
+          this.open = false;
+          this.$dispatch('timezone-selected', { value: value });
+        },
+
+        closeDropdown() {
+          this.open = false;
+        },
+      };
+    }
+  </script>
 
   {% block extra_js %}{% endblock %}
 </body>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Update Availability — {{ event.name }}{% endblock %}
+{% block title %}{{ event.name }} Signup — WeAreChecking{% endblock %}
 
 {% block content %}
 <div class="max-w-lg mx-auto">
@@ -41,23 +41,15 @@
 
 {% block extra_js %}
 <script>
+  const timezoneList = {{ timezone_list_json|safe }};
   const slotTimestamps = {{ slot_timestamps_json|safe }};
-  const allTimezones = {{ timezone_list_json|safe }};
+  const detectedTz = '{{ driver.timezone|escapejs }}';
 
   function signupEditData() {
     return {
-      detected: '{{ driver.timezone|escapejs }}',
-      showManual: false,
-      timezone: '{{ driver.timezone|escapejs }}',
-      tzSearch: '',
+      timezone: detectedTz,
       slotTimestamps: slotTimestamps,
       checked: slotTimestamps.map(s => existingSlots.includes(s)),
-
-      get filteredTimezones() {
-        if (!this.tzSearch) return allTimezones;
-        const q = this.tzSearch.toLowerCase();
-        return allTimezones.filter(tz => tz.toLowerCase().includes(q));
-      },
 
       formatTime(utcString) {
         return new Date(utcString).toLocaleTimeString('en-US', {

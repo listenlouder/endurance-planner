@@ -1,7 +1,10 @@
 import hmac
 import json
+import logging
 from datetime import date, datetime, time as time_type, timezone as dt_utc
-from zoneinfo import available_timezones, ZoneInfo
+
+logger = logging.getLogger(__name__)
+from zoneinfo import ZoneInfo
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -15,6 +18,7 @@ from django.urls import reverse
 from .forms import EventCreateForm
 from .models import Availability, Driver, Event, StintAssignment
 from .utils import (
+    build_stint_availability_matrix,
     get_availability_slots,
     get_stint_windows,
     seconds_to_mmss,
@@ -23,9 +27,105 @@ from .utils import (
     validate_stint_sanity,
 )
 
-# Computed once at module load — available_timezones() is expensive
-VALID_TIMEZONES = frozenset(available_timezones())
-SORTED_TIMEZONES = sorted(VALID_TIMEZONES)
+CURATED_TIMEZONES = [
+    {
+        'region': 'UTC',
+        'zones': [('UTC', 'UTC')],
+    },
+    {
+        'region': 'United States & Canada',
+        'zones': [
+            ('Hawaii (HST)', 'Pacific/Honolulu'),
+            ('Alaska (AKST/AKDT)', 'America/Anchorage'),
+            ('Pacific (PST/PDT)', 'America/Los_Angeles'),
+            ('Mountain (MST/MDT)', 'America/Denver'),
+            ('Mountain - no DST (MST)', 'America/Phoenix'),
+            ('Central (CST/CDT)', 'America/Chicago'),
+            ('Eastern (EST/EDT)', 'America/New_York'),
+            ('Atlantic (AST/ADT)', 'America/Halifax'),
+            ('Newfoundland (NST/NDT)', 'America/St_Johns'),
+        ],
+    },
+    {
+        'region': 'Central & South America',
+        'zones': [
+            ('Mexico City', 'America/Mexico_City'),
+            ('Colombia & Peru', 'America/Bogota'),
+            ('Brazil - Brasilia', 'America/Sao_Paulo'),
+            ('Argentina', 'America/Argentina/Buenos_Aires'),
+            ('Chile', 'America/Santiago'),
+        ],
+    },
+    {
+        'region': 'Europe',
+        'zones': [
+            ('UK & Ireland (GMT/BST)', 'Europe/London'),
+            ('Portugal (WET/WEST)', 'Europe/Lisbon'),
+            ('Western Europe (CET/CEST)', 'Europe/Paris'),
+            ('Central Europe (CET/CEST)', 'Europe/Berlin'),
+            ('Eastern Europe (EET/EEST)', 'Europe/Helsinki'),
+            ('Greece & Romania (EET/EEST)', 'Europe/Athens'),
+            ('Turkey (TRT)', 'Europe/Istanbul'),
+            ('Russia - Moscow (MSK)', 'Europe/Moscow'),
+        ],
+    },
+    {
+        'region': 'Middle East & Africa',
+        'zones': [
+            ('South Africa (SAST)', 'Africa/Johannesburg'),
+            ('East Africa (EAT)', 'Africa/Nairobi'),
+            ('Egypt (EET)', 'Africa/Cairo'),
+            ('UAE & Oman (GST)', 'Asia/Dubai'),
+            ('Saudi Arabia (AST)', 'Asia/Riyadh'),
+            ('Israel (IST/IDT)', 'Asia/Jerusalem'),
+        ],
+    },
+    {
+        'region': 'Asia',
+        'zones': [
+            ('India (IST)', 'Asia/Kolkata'),
+            ('Pakistan (PKT)', 'Asia/Karachi'),
+            ('Bangladesh (BST)', 'Asia/Dhaka'),
+            ('Thailand & Vietnam (ICT)', 'Asia/Bangkok'),
+            ('China, HK & Taiwan (CST)', 'Asia/Shanghai'),
+            ('Singapore & Malaysia (SGT)', 'Asia/Singapore'),
+            ('South Korea (KST)', 'Asia/Seoul'),
+            ('Japan (JST)', 'Asia/Tokyo'),
+            ('Philippines (PST)', 'Asia/Manila'),
+        ],
+    },
+    {
+        'region': 'Australia & Pacific',
+        'zones': [
+            ('Australia - Perth (AWST)', 'Australia/Perth'),
+            ('Australia - Darwin (ACST)', 'Australia/Darwin'),
+            ('Australia - Adelaide (ACST/ACDT)', 'Australia/Adelaide'),
+            ('Australia - Brisbane (AEST)', 'Australia/Brisbane'),
+            ('Australia - Sydney (AEST/AEDT)', 'Australia/Sydney'),
+            ('New Zealand (NZST/NZDT)', 'Pacific/Auckland'),
+        ],
+    },
+]
+
+VALID_TIMEZONES = frozenset(
+    zone[1]
+    for group in CURATED_TIMEZONES
+    for zone in group['zones']
+)
+
+SORTED_TIMEZONES = [
+    zone[1]
+    for group in CURATED_TIMEZONES
+    for zone in group['zones']
+]
+
+_TIMEZONE_LIST_JSON = json.dumps([
+    {
+        'region': group['region'],
+        'zones': [{'label': z[0], 'value': z[1]} for z in group['zones']],
+    }
+    for group in CURATED_TIMEZONES
+])
 
 
 def normalize_iso(dt):
@@ -279,8 +379,7 @@ def get_signup_context(event):
             s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
             for s in slots
         ]),
-        'timezone_list': SORTED_TIMEZONES,
-        'timezone_list_json': json.dumps(SORTED_TIMEZONES),
+        'timezone_list_json': _TIMEZONE_LIST_JSON,
     }
 
 
@@ -426,6 +525,11 @@ def view_event(request, event_id):
     lh = round(event.length_seconds / 3600, 1)
     lh_display = f"{int(lh)} hours" if event.length_seconds % 3600 == 0 else f"{lh} hours"
 
+    total_seconds = event.length_seconds
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    length_display = f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
     has_unassigned = StintAssignment.objects.filter(event=event, driver=None).exists()
 
     return render(request, 'view.html', {
@@ -435,6 +539,7 @@ def view_event(request, event_id):
         'has_stints': bool(assignments),
         'stints_ready': event.has_required_stint_fields,
         'length_hours_display': lh_display,
+        'length_display': length_display,
         'has_unassigned': has_unassigned,
     })
 
@@ -656,7 +761,7 @@ def _build_admin_context(request, event):
         'missing_required_fields': missing_required_fields,
         'table_data': table_data,
         'sanity_warnings': validate_stint_sanity(event),
-        'timezone_list_json': json.dumps(SORTED_TIMEZONES),
+        'timezone_list_json': _TIMEZONE_LIST_JSON,
         'slot_timestamps_json': slot_timestamps_json,
         'slots': slots,
     }
@@ -862,12 +967,20 @@ def create_stints(request, event_id):
                 try:
                     driver = Driver.objects.get(id=driver_id, event=event)
                 except Driver.DoesNotExist:
-                    pass
+                    logger.warning(
+                        "create_stints: driver_id %r not found for event %s — stint %d unassigned",
+                        driver_id, event_id, n,
+                    )
             assignments_to_create.append(
                 StintAssignment(event=event, stint_number=n, driver=driver)
             )
         StintAssignment.objects.bulk_create(assignments_to_create)
+
+        if request.htmx:
+            return HttpResponse(status=204)
+
         messages.success(request, "Stint assignments saved.")
+        return redirect('create_stints', event_id=event_id)
 
     assignments = {
         sa.stint_number: sa.driver_id
@@ -886,9 +999,7 @@ def create_stints(request, event_id):
     for sw in stint_windows:
         sw['start_local'] = sw['start_utc'].astimezone(admin_tz_zone).strftime('%H:%M')
 
-    slots = get_availability_slots(event)
-    availability_matrix, uncovered_slots = _build_availability_matrix(drivers, slots)
-    table_data = _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz)
+    stint_availability = build_stint_availability_matrix(drivers, stint_windows)
 
     sl = stint_length_seconds(event)
     stint_length_display = f"{int(sl // 60)}m {int(sl % 60)}s"
@@ -900,7 +1011,7 @@ def create_stints(request, event_id):
         'admin_tz': admin_tz,
         'stint_length_display': stint_length_display,
         'total_stints_count': len(stint_windows),
-        'table_data': table_data,
+        'stint_availability': stint_availability,
         'stint_windows_json': json.dumps([
             {
                 'stint_number': sw['stint_number'],

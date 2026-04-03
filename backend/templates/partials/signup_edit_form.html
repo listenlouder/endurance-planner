@@ -9,51 +9,18 @@
         hx-post="{% url 'signup_edit' event.id driver.id %}{% if from_admin %}?from=admin{% endif %}"
         hx-target="#signup-edit-form-container"
         hx-swap="outerHTML"
-        x-data="signupEditData()">
+        x-data="signupEditData()"
+        @timezone-selected.window="timezone = $event.detail.value">
     {% csrf_token %}
     <div class="flex flex-col gap-6">
 
-      <!-- ── Timezone ── -->
-      <div class="rounded-xl border p-4 flex flex-col gap-3"
-           style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
-
-        <div class="flex items-center gap-3 p-3 rounded-lg"
-             style="border: 1px solid var(--color-border);">
-          <span class="text-sm" style="color: var(--color-text);">Your timezone:</span>
-          <span class="font-mono text-sm font-semibold"
-                x-text="detected"
-                style="color: var(--color-accent1);"></span>
-          <button type="button"
-                  @click="showManual = !showManual"
-                  class="ml-auto text-xs underline opacity-60 hover:opacity-100"
-                  style="color: var(--color-text);">
-            Not correct?
-          </button>
-        </div>
-
-        <div x-show="showManual" x-transition class="mt-2">
-          <div class="flex flex-col gap-1">
-            <input type="text"
-                   x-model="tzSearch"
-                   placeholder="Search timezones..."
-                   class="w-full px-3 py-2 rounded border text-sm focus:outline-none"
-                   style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-border);">
-            <select x-model="timezone"
-                    size="6"
-                    class="w-full mt-1 rounded border text-sm focus:outline-none"
-                    style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-border);">
-              <template x-for="tz in filteredTimezones" :key="tz">
-                <option :value="tz" x-text="tz"></option>
-              </template>
-            </select>
-          </div>
-        </div>
-
+      <!-- ── Timezone picker ── -->
+      <div class="flex flex-col gap-1">
+        <label class="text-sm font-medium" style="color: var(--color-text);">Your Timezone</label>
+        {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
         {% if errors.timezone %}
-          <p class="text-red-500 text-xs">{{ errors.timezone }}</p>
+          <p class="text-red-500 text-xs mt-1">{{ errors.timezone }}</p>
         {% endif %}
-
-        <input type="hidden" name="timezone" :value="showManual ? timezone : detected">
       </div>
 
       <!-- ── Driver name ── -->

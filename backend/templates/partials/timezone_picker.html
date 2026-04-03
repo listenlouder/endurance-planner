@@ -1,0 +1,77 @@
+<div x-data="timezonePicker(typeof detectedTz !== 'undefined' ? detectedTz : 'UTC')"
+     @click.outside="closeDropdown()"
+     @driver-form-reset.window="selected = 'UTC'; open = false;"
+     class="relative">
+
+  <!-- Hidden input submitted with the form -->
+  <input type="hidden"
+         name="{{ field_name|default:'timezone' }}"
+         :value="selected">
+
+  <!-- Trigger button -->
+  <button type="button"
+          @click="open = !open"
+          class="w-full flex items-center justify-between
+                 px-3 py-2 rounded-lg border-2 text-sm
+                 text-left transition hover:opacity-80"
+          style="background-color: var(--color-base);
+                 color: var(--color-text);
+                 border-color: var(--color-border);">
+    <span x-text="selectedLabel" class="truncate"></span>
+    <svg class="w-4 h-4 ml-2 flex-shrink-0 transition-transform duration-150"
+         :class="open ? 'rotate-180' : ''"
+         fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            stroke-width="2" d="M19 9l-7 7-7-7"/>
+    </svg>
+  </button>
+
+  <!-- Dropdown -->
+  <div x-show="open"
+       x-transition:enter="transition ease-out duration-150"
+       x-transition:enter-start="opacity-0 -translate-y-1"
+       x-transition:enter-end="opacity-100 translate-y-0"
+       x-transition:leave="transition ease-in duration-100"
+       x-transition:leave-start="opacity-100 translate-y-0"
+       x-transition:leave-end="opacity-0 -translate-y-1"
+       class="absolute z-50 w-full mt-1 rounded-lg border-2 shadow-lg overflow-hidden"
+       style="background-color: var(--color-base);
+              border-color: var(--color-border);
+              min-width: 260px;">
+
+    <ul class="max-h-72 overflow-y-auto" role="listbox">
+      <template x-for="group in groups" :key="group.region">
+        <li>
+          <!-- Region header -->
+          <div class="px-3 py-1 text-xs font-bold uppercase tracking-wider sticky top-0"
+               style="background-color: var(--color-nav-bg);
+                      color: var(--color-accent1);
+                      border-bottom: 1px solid var(--color-border);">
+            <span x-text="group.region"></span>
+          </div>
+
+          <!-- Zones -->
+          <ul>
+            <template x-for="tz in group.zones" :key="tz.value">
+              <li @click="select(tz.value)"
+                  :class="selected === tz.value ? 'font-semibold' : 'opacity-75 hover:opacity-100'"
+                  class="px-4 py-2 text-sm cursor-pointer hover:bg-white hover:bg-opacity-10
+                         flex items-center justify-between"
+                  role="option"
+                  :aria-selected="selected === tz.value">
+                <span x-text="tz.label"></span>
+                <svg x-show="selected === tz.value"
+                     class="w-4 h-4 flex-shrink-0 ml-2"
+                     style="color: var(--color-accent2);"
+                     fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                        stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+              </li>
+            </template>
+          </ul>
+        </li>
+      </template>
+    </ul>
+  </div>
+</div>

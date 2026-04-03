@@ -34,11 +34,13 @@ from .forms import EventCreateForm
 from .models import Availability, Driver, Event
 from .templatetags.tz_filters import (
     datetime_in_tz,
+    dict_get,
     time_in_tz,
     to_tz,
     to_utc_z,
 )
 from .utils import (
+    build_stint_availability_matrix,
     check_driver_conflict,
     get_availability_slots,
     get_stint_windows,
@@ -1365,3 +1367,223 @@ class AdminPageSessionTests(TestCase):
         response = self.client.get(dashboard_url)
 
         self.assertEqual(response.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# build_stint_availability_matrix
+# ---------------------------------------------------------------------------
+
+class BuildStintAvailabilityMatrixTests(TestCase):
+    """Tests for utils.build_stint_availability_matrix().
+
+    Requires the database because Availability records are fetched via ORM.
+    """
+
+    def setUp(self):
+        self.event = save_event()  # 6-hour race, stint_length=3615s, 6 stints
+        self.driver = Driver.objects.create(
+            event=self.event,
+            name='Alice',
+            timezone='UTC',
+        )
+
+    def _add_slot(self, driver, slot_utc):
+        Availability.objects.create(driver=driver, slot_utc=slot_utc)
+
+    def _stint_windows(self, event=None):
+        return get_stint_windows(event or self.event)
+
+    # --- Empty drivers list ---
+
+    def test_empty_drivers_list_returns_empty_dict(self):
+        result = build_stint_availability_matrix([], self._stint_windows())
+        self.assertEqual(result, {})
+
+    # --- All slots available → 'full' ---
+
+    def test_all_slots_available_returns_full(self):
+        # Stint 1: anchor=12:00, first_grid_slot=12:00, end=13:00:15
+        # Grid slots: 12:00, 12:30, 13:00  (all < 13:00:15)
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 0))
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 30))
+        self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))
+
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        self.assertEqual(result[str(self.driver.id)][1], 'full')
+
+    # --- No slots available → 'none' ---
+
+    def test_no_slots_available_returns_none(self):
+        # Driver has no availability at all
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        self.assertEqual(result[str(self.driver.id)][1], 'none')
+
+    # --- Some slots available → 'partial' ---
+
+    def test_some_slots_available_returns_partial(self):
+        # Stint 1 has grid slots: 12:00, 12:30, 13:00 — driver only has 12:00
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 0))
+
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        self.assertEqual(result[str(self.driver.id)][1], 'partial')
+
+    # --- Empty stint → 'empty' ---
+
+    def test_empty_stint_window_returns_empty(self):
+        # Construct an artificial window where end == start so no grid slots exist
+        start = utc(2026, 6, 1, 12, 0)
+        artificial_windows = [{'stint_number': 1, 'start_utc': start, 'end_utc': start}]
+
+        result = build_stint_availability_matrix([self.driver], artificial_windows)
+
+        self.assertEqual(result[str(self.driver.id)][1], 'empty')
+
+    # --- Grid anchor snap (critical regression test) ---
+
+    def test_grid_snap_slot_before_ceil_boundary_not_counted(self):
+        # Default event: stint_length=3615s, grid_anchor=12:00:00 UTC
+        # Stint 2 starts at 13:00:15 UTC.
+        # ceil(3615 / 1800) = 3 → first_grid_slot = 12:00 + 3*30min = 13:30:00 UTC
+        # A driver with availability at 13:00 UTC must NOT count for stint 2
+        # because 13:00 is before the first grid slot (13:30).
+        self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))  # off-grid for stint 2
+
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        # Stint 2 grid slots are 13:30 and 14:00; driver has neither → 'none'
+        self.assertEqual(result[str(self.driver.id)][2], 'none')
+
+    def test_grid_snap_slot_at_ceil_boundary_counts_for_stint(self):
+        # 13:30 is the first grid slot for stint 2 (see above); driver has it
+        self._add_slot(self.driver, utc(2026, 6, 1, 13, 30))
+
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        # Stint 2 has slots 13:30 and 14:00; driver has only 13:30 → 'partial'
+        self.assertEqual(result[str(self.driver.id)][2], 'partial')
+
+    # --- Multiple drivers keyed by str(driver.id) ---
+
+    def test_two_drivers_keyed_independently(self):
+        bob = Driver.objects.create(event=self.event, name='Bob', timezone='UTC')
+
+        # Alice has all slots for stint 1; Bob has none
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 0))
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 30))
+        self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))
+
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver, bob], windows)
+
+        self.assertEqual(result[str(self.driver.id)][1], 'full')
+        self.assertEqual(result[str(bob.id)][1], 'none')
+
+    def test_result_keys_are_strings_of_driver_ids(self):
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        self.assertIn(str(self.driver.id), result)
+
+    # --- Full matrix across multiple stints ---
+
+    def test_different_statuses_per_stint_in_same_matrix(self):
+        # Stint 1 grid slots: 12:00, 12:30, 13:00
+        # Stint 2 grid slots: 13:30, 14:00
+        # Stint 3: start=14:00:30, ceil(7230/1800)=ceil(4.0167)=5
+        #          first_grid_slot = 12:00 + 5*30min = 14:30
+        #          end of stint 3 = start of stint 4 = 12:00 + 3*3615s = 12:00 + 10845s = 15:00:45
+        #          grid slots: 14:30 and 15:00 (both < 15:00:45)
+        #
+        # Give driver: full coverage of stint 1, nothing for stint 2, partial for stint 3
+        # Stint 1 — all three slots
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 0))
+        self._add_slot(self.driver, utc(2026, 6, 1, 12, 30))
+        self._add_slot(self.driver, utc(2026, 6, 1, 13, 0))
+        # Stint 2 — no slots (13:30, 14:00 not added)
+        # Stint 3 — only first grid slot (14:30)
+        self._add_slot(self.driver, utc(2026, 6, 1, 14, 30))
+
+        windows = self._stint_windows()
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        driver_matrix = result[str(self.driver.id)]
+        self.assertEqual(driver_matrix[1], 'full')
+        self.assertEqual(driver_matrix[2], 'none')
+        self.assertEqual(driver_matrix[3], 'partial')
+
+    def test_empty_stint_windows_returns_empty_dict(self):
+        # Guard: empty stint_windows must not raise IndexError
+        result = build_stint_availability_matrix([self.driver], [])
+        self.assertEqual(result, {})
+
+    def test_ceil_snap_past_end_returns_empty(self):
+        # grid_anchor = 12:00 (first window's start_utc).
+        # Second window: starts at 12:10 (off-grid), ends at 12:15.
+        # snap: ceil((12:10 - 12:00) / 30min) = ceil(1/3) = 1
+        # first_grid_slot = 12:00 + 30min = 12:30, which is past end (12:15).
+        # total_slots is empty → result must be 'empty', not 'none'.
+        anchor = utc(2026, 6, 1, 12, 0)
+        windows = [
+            {'stint_number': 1, 'start_utc': anchor, 'end_utc': anchor + dt.timedelta(minutes=30)},
+            {'stint_number': 2, 'start_utc': anchor + dt.timedelta(minutes=10),
+             'end_utc': anchor + dt.timedelta(minutes=15)},
+        ]
+
+        result = build_stint_availability_matrix([self.driver], windows)
+
+        self.assertEqual(result[str(self.driver.id)][2], 'empty')
+
+
+# ---------------------------------------------------------------------------
+# dict_get template filter
+# ---------------------------------------------------------------------------
+
+class DictGetFilterTests(SimpleTestCase):
+    """Tests for templatetags.tz_filters.dict_get."""
+
+    def test_string_key_that_exists_returns_value(self):
+        result = dict_get({'foo': 'bar'}, 'foo')
+        self.assertEqual(result, 'bar')
+
+    def test_integer_key_where_dict_has_int_key_returns_value(self):
+        result = dict_get({1: 'one'}, 1)
+        self.assertEqual(result, 'one')
+
+    def test_integer_key_where_dict_has_string_key_falls_back_to_str(self):
+        # Key passed as int; dict has the string equivalent → str(key) fallback
+        result = dict_get({'1': 'one'}, 1)
+        self.assertEqual(result, 'one')
+
+    def test_no_reverse_coercion_str_key_for_int_keyed_dict(self):
+        # By design: str→int coercion is not performed; '1' does not match int key 1
+        result = dict_get({1: 'one'}, '1')
+        self.assertIsNone(result)
+
+    def test_missing_key_returns_none(self):
+        result = dict_get({'a': 1}, 'b')
+        self.assertIsNone(result)
+
+    def test_none_dict_returns_none(self):
+        result = dict_get(None, 'any')
+        self.assertIsNone(result)
+
+    def test_nested_usage_with_string_keys(self):
+        outer = {'x': {'y': 42}}
+        inner = dict_get(outer, 'x')
+        result = dict_get(inner, 'y')
+        self.assertEqual(result, 42)
+
+    def test_nested_usage_with_int_key_on_inner_string_keyed_dict(self):
+        # Inner dict has string keys; passing int key falls back to str(key)
+        outer = {'section': {'3': 'three'}}
+        inner = dict_get(outer, 'section')
+        result = dict_get(inner, 3)
+        self.assertEqual(result, 'three')

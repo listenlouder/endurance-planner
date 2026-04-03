@@ -175,28 +175,99 @@ def get_availability_slots(event):
     return slots
 
 
-def check_driver_conflict(driver, stint_window):
+def _snap_to_grid(start_utc, grid_anchor, slot_duration=timedelta(minutes=30)):
+    """
+    Snap start_utc forward to the first 30-min grid boundary >= start_utc.
+
+    Availability slots live on a grid anchored at the event start time.
+    When stint length is not a multiple of 30 min, a stint's start_utc
+    falls off that grid. Ceiling-snapping ensures we only check slots that
+    can actually exist in the availability table.
+    """
+    offset_slots = math.ceil((start_utc - grid_anchor) / slot_duration)
+    return grid_anchor + offset_slots * slot_duration
+
+
+def build_stint_availability_matrix(drivers, stint_windows):
+    """
+    For each driver and each stint window, determine availability status.
+
+    Returns a dict:
+    {
+        driver_id (str): {
+            stint_number (int): 'full' | 'partial' | 'none' | 'empty'
+        }
+    }
+    """
+    if not stint_windows:
+        return {}
+
+    result = {}
+    slot_duration = timedelta(minutes=30)
+    # Availability slots sit on a 30-min grid anchored at stint 1's start.
+    # When stint length isn't a multiple of 30 min, a stint's start_utc
+    # falls off-grid, so we snap to the first grid point >= start.
+    grid_anchor = stint_windows[0]['start_utc']
+
+    for driver in drivers:
+        driver_avail = set(a.slot_utc for a in driver.availability.all())
+        result[str(driver.id)] = {}
+
+        for sw in stint_windows:
+            start = sw['start_utc']
+            end = sw['end_utc']
+
+            total_slots = []
+            current = _snap_to_grid(start, grid_anchor, slot_duration)
+            while current < end:
+                total_slots.append(current)
+                current += slot_duration
+
+            if not total_slots:
+                result[str(driver.id)][sw['stint_number']] = 'empty'
+                continue
+
+            available_count = sum(1 for slot in total_slots if slot in driver_avail)
+
+            if available_count == len(total_slots):
+                result[str(driver.id)][sw['stint_number']] = 'full'
+            elif available_count == 0:
+                result[str(driver.id)][sw['stint_number']] = 'none'
+            else:
+                result[str(driver.id)][sw['stint_number']] = 'partial'
+
+    return result
+
+
+def check_driver_conflict(driver, stint_window, grid_anchor=None):
     """
     Returns True if the driver has a conflict for the given stint window.
 
-    A conflict exists if any 30-minute slot in [start_utc, end_utc) is NOT
-    in the driver's availability. In other words, the driver must be available
-    for every 30-minute block that overlaps with this stint.
+    A conflict exists if any 30-minute slot in [first_grid_slot, end_utc) is
+    NOT in the driver's availability, where first_grid_slot is the first 30-min
+    grid boundary >= start_utc (using the same ceil-snap as
+    build_stint_availability_matrix).
+
+    grid_anchor defaults to stint_window['start_utc'] (i.e. the window itself
+    is on-grid). Pass the event's race-start datetime when checking stints
+    whose start times may fall off the 30-min grid.
 
     stint_window is a dict with 'start_utc' and 'end_utc'.
     """
     start = stint_window['start_utc']
     end = stint_window['end_utc']
+    anchor = grid_anchor if grid_anchor is not None else start
+    slot_duration = timedelta(minutes=30)
 
     available_slots = set(
         driver.availability.values_list('slot_utc', flat=True)
     )
 
-    current = start
+    current = _snap_to_grid(start, anchor, slot_duration)
     while current < end:
         if current not in available_slots:
             return True
-        current += timedelta(minutes=30)
+        current += slot_duration
 
     return False
 

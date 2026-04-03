@@ -79,6 +79,25 @@ def to_utc_z(dt):
 
 
 @register.filter
+def dict_get(d, key):
+    """
+    Dict lookup by variable key for use in templates.
+    Usage: {{ my_dict|dict_get:variable_key }}
+    Tries the key as-is first, then str(key) as a fallback (int → str coercion
+    only). Uses 'key in d' to distinguish a missing key from a key whose value
+    is None or another falsy value.
+    """
+    if d is None:
+        return None
+    if key in d:
+        return d[key]
+    str_key = str(key)
+    if str_key in d:
+        return d[str_key]
+    return None
+
+
+@register.filter
 def time_in_tz(dt, timezone_str):
     """
     Same as to_tz but returns only the time portion formatted as HH:MM.

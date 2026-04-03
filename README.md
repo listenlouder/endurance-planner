@@ -1,4 +1,4 @@
-# Endurance Planner
+# WeAreChecking
 
 A web application for planning driver stints in endurance racing events.
 

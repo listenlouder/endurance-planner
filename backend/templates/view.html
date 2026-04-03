@@ -1,172 +1,192 @@
 {% extends "base.html" %}
 {% load tz_filters %}
 
-{% block title %}{{ event.name }}{% endblock %}
+{% block title %}{{ event.name }} — WeAreChecking{% endblock %}
 
 {% block content %}
 
-{# ── Page header ─────────────────────────────────────────────── #}
-<div x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+{# ── Centered header ──────────────────────────────────────────── #}
+<div class="text-center mb-8">
+  <h1 class="text-4xl font-bold mb-2"
+      style="color: var(--color-accent1);">
+    {{ event.name }}
+  </h1>
+  <p class="text-sm opacity-50"
+     x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+    Times shown in your local timezone:
+    <span x-text="tz" class="font-mono"></span>
+  </p>
+</div>
 
-  <div class="mb-6">
-    <h1 class="text-3xl font-bold" style="color: var(--color-accent1);">
-      {{ event.name }}
-    </h1>
-    <p class="text-xs mt-1 opacity-50">
-      Times shown in your local timezone:
-      <span x-text="tz" class="font-mono"></span>
-    </p>
-  </div>
+{# ── Two-column body ──────────────────────────────────────────── #}
+<div class="grid grid-cols-1 md:grid-cols-2 md:gap-8 lg:gap-12">
 
-  {# ── Event info grid ────────────────────────────────────────── #}
-  <div class="rounded-lg border border-white/10 p-5 mb-8"
-       style="background-color: var(--color-nav-bg);">
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+  {# ── Left column: Event Info ───────────────────────────────── #}
+  <div class="mb-8 md:mb-0">
 
-      <div>
-        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Date</span>
-        <span class="font-medium">{{ event.date|date:"l, F j, Y" }}</span>
+    <h2 class="text-lg font-bold mb-4 pb-2 border-b"
+        style="border-color: var(--color-border);
+               color: var(--color-accent2);">
+      Event Info
+    </h2>
+
+    <dl class="space-y-3">
+
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Date</dt>
+        <dd class="text-sm mt-0.5">{{ event.date|date:"l, F j, Y" }}</dd>
       </div>
 
-      <div>
-        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Start Time</span>
-        <span class="font-medium"
-              x-text="formatTime('{{ event.start_datetime_utc|to_utc_z }}', tz)">
-        </span>
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Start Time</dt>
+        <dd class="text-sm mt-0.5 font-mono"
+            x-data
+            x-text="new Date('{{ event.start_datetime_utc|to_utc_z }}').toLocaleTimeString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour: '2-digit', minute: '2-digit', hour12: true })">
+        </dd>
       </div>
 
-      <div>
-        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Race Length</span>
-        <span class="font-medium">{{ length_hours_display }}</span>
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Race Length</dt>
+        <dd class="text-sm mt-0.5">{{ length_display }}</dd>
       </div>
 
       {% if event.car %}
-      <div>
-        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Car</span>
-        <span class="font-medium">{{ event.car }}</span>
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Car</dt>
+        <dd class="text-sm mt-0.5">{{ event.car }}</dd>
       </div>
       {% endif %}
 
       {% if event.track %}
-      <div>
-        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Track</span>
-        <span class="font-medium">{{ event.track }}</span>
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Track</dt>
+        <dd class="text-sm mt-0.5">{{ event.track }}</dd>
       </div>
       {% endif %}
 
       {% if event.team_name %}
-      <div>
-        <span class="opacity-50 block text-xs uppercase tracking-wider mb-0.5">Team</span>
-        <span class="font-medium">{{ event.team_name }}</span>
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Team</dt>
+        <dd class="text-sm mt-0.5">{{ event.team_name }}</dd>
       </div>
       {% endif %}
 
+      {% if event.setup %}
+      <div class="flex flex-col">
+        <dt class="text-xs font-semibold uppercase tracking-wider opacity-50">Setup</dt>
+        <dd class="text-sm mt-0.5 whitespace-pre-wrap font-mono leading-relaxed opacity-80">{{ event.setup }}</dd>
+      </div>
+      {% endif %}
+
+    </dl>
+
+    <div class="mt-6">
+      <a href="{% url 'home' %}"
+         class="text-sm opacity-50 hover:opacity-100 transition-opacity"
+         style="color: var(--color-text);">
+        ← Home
+      </a>
     </div>
 
-    {% if event.setup %}
-    <div class="mt-4 pt-4 border-t border-white/10 text-sm">
-      <span class="opacity-50 block text-xs uppercase tracking-wider mb-1">Setup Notes</span>
-      <pre class="whitespace-pre-wrap font-sans opacity-80 leading-relaxed">{{ event.setup }}</pre>
+  </div>
+
+  {# ── Right column: Stint Schedule ─────────────────────────── #}
+  <div class="md:border-l md:pl-8 lg:pl-12"
+       style="border-color: var(--color-border);">
+
+    <h2 class="text-lg font-bold mb-4 pb-2 border-b"
+        style="border-color: var(--color-border);
+               color: var(--color-accent2);">
+      Stint Schedule
+    </h2>
+
+    {% if has_unassigned %}
+    <div class="mb-4 px-3 py-2 rounded text-xs"
+         style="border: 1px solid #f59e0b; color: #f59e0b;">
+      ⚠ Some stints do not have a driver assigned yet.
     </div>
     {% endif %}
-  </div>
 
-  {# ── Unassigned warning ─────────────────────────────────────── #}
-  {% if has_unassigned %}
-  <div class="mb-4 px-4 py-3 rounded-lg text-sm"
-       style="border: 1px solid #f59e0b; color: #f59e0b;">
-    ⚠ Some stints do not have a driver assigned yet.
-  </div>
-  {% endif %}
+    {% if not stints_ready %}
 
-  {# ── Stint schedule ─────────────────────────────────────────── #}
-  {% if not stints_ready %}
-
-    <div class="rounded border border-amber-500 bg-amber-600 p-4 text-white text-sm">
-      ⚠ Stint schedule not yet available. The event admin has not configured all required timing fields yet.
-    </div>
-
-  {% elif not has_stints %}
-
-    <div class="rounded border border-white/20 p-4 text-sm opacity-50">
-      Stint assignments have not been created yet. Check back later.
-    </div>
-
-  {% else %}
-
-    <script>
-      const stintRows = {{ stint_rows_json|safe }};
-    </script>
-
-    <div x-data="stintTable()" x-init="init()" class="mt-2">
-
-      <h2 class="text-xl font-bold mb-2" style="color: var(--color-accent1);">
-        Stint Schedule
-      </h2>
-      <p class="text-xs opacity-50 mb-4">
-        Times in: <span x-text="tz" class="font-mono"></span>
-      </p>
-
-      <div class="overflow-x-auto rounded border border-white/10">
-        <table class="w-full text-sm border-collapse" style="min-width: 22rem;">
-          <thead>
-            <tr style="background-color: var(--color-nav-bg); border-bottom: 2px solid var(--color-accent1);">
-              <th class="sticky left-0 z-10 text-left px-3 py-2 font-medium opacity-60 w-16"
-                  style="background-color: var(--color-nav-bg);">
-                Stint
-              </th>
-              <th class="text-left px-3 py-2 font-medium opacity-60 whitespace-nowrap">
-                Start Time
-              </th>
-              <th class="text-left px-3 py-2 font-medium opacity-60">
-                Driver
-              </th>
-            </tr>
-          </thead>
-          <template x-for="(row, index) in stintRows" :key="row.stint_number">
-            <tbody>
-              <tr x-show="isNewDay(index)">
-                <td colspan="3"
-                    class="text-center text-xs font-semibold py-1 tracking-wider"
-                    style="background-color: var(--color-accent2); color: #111; opacity: 0.9;">
-                  <span x-text="formatDate(row.start_utc, tz)"></span>
-                </td>
-              </tr>
-              <tr :class="[
-                    !row.driver_name ? 'opacity-50' : '',
-                    index % 2 === 0 ? 'row-stripe' : ''
-                  ]"
-                  class="border-t border-white/5">
-                <td class="sticky left-0 z-10 px-3 py-3 font-mono font-bold text-center"
-                    style="background-color: var(--color-base);">
-                  <span x-text="row.stint_number"></span>
-                </td>
-                <td class="px-3 py-3 font-mono whitespace-nowrap text-xs">
-                  <span x-text="formatTime(row.start_utc, tz)"></span>
-                </td>
-                <td class="px-3 py-3">
-                  <span x-text="row.driver_name || 'TBD'"
-                        :class="!row.driver_name ? 'italic opacity-50' : ''">
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </template>
-        </table>
+      <div class="px-3 py-2 rounded text-sm"
+           style="border: 1px solid #f59e0b; color: #f59e0b;">
+        ⚠ Stint schedule not yet available — the event admin has not configured all required timing fields.
       </div>
-    </div>
 
-  {% endif %}
+    {% elif not has_stints %}
 
-</div>
+      <div class="px-3 py-2 rounded text-sm opacity-50"
+           style="border: 1px solid var(--color-border);">
+        Stint assignments have not been created yet. Check back later.
+      </div>
 
-{# ── Footer ──────────────────────────────────────────────────── #}
-<div class="mt-12 pt-4 border-t border-white/10 text-sm opacity-50">
-  <a href="{% url 'home' %}"
-     class="hover:opacity-100 transition"
-     style="color: var(--color-text);">
-    ← Back to Home
-  </a>
+    {% else %}
+
+      <script>
+        const stintRows = {{ stint_rows_json|safe }};
+      </script>
+
+      <div x-data="stintTable()" x-init="init()">
+        <div class="overflow-x-auto overflow-y-auto max-h-[70vh]">
+          <table class="w-full text-sm border-collapse">
+            <thead>
+              <tr>
+                <th class="sticky top-0 left-0 z-20 text-left px-3 py-2 border-b text-xs
+                           font-semibold uppercase tracking-wider opacity-50"
+                    style="background-color: var(--color-base); border-color: var(--color-border);">
+                  Stint
+                </th>
+                <th class="sticky top-0 z-10 text-left px-3 py-2 border-b text-xs
+                           font-semibold uppercase tracking-wider opacity-50"
+                    style="background-color: var(--color-base); border-color: var(--color-border);">
+                  Start Time
+                </th>
+                <th class="sticky top-0 z-10 text-left px-3 py-2 border-b text-xs
+                           font-semibold uppercase tracking-wider opacity-50"
+                    style="background-color: var(--color-base); border-color: var(--color-border);">
+                  Driver
+                </th>
+              </tr>
+            </thead>
+            <template x-for="(row, index) in stintRows" :key="row.stint_number">
+              <tbody>
+                <tr x-show="isNewDay(index)">
+                  <td colspan="3"
+                      class="text-center text-xs font-semibold py-1 px-3 tracking-wider"
+                      style="background-color: var(--color-accent2); color: #111; opacity: 0.9;">
+                    <span x-text="formatDate(row.start_utc, tz)"></span>
+                  </td>
+                </tr>
+                <tr :class="[
+                      !row.driver_name ? 'opacity-40' : '',
+                      index % 2 === 0 ? 'bg-black/5 dark:bg-white/5' : ''
+                    ]">
+                  <td class="sticky left-0 px-3 py-2 border-b font-mono font-bold text-center text-xs"
+                      style="background-color: var(--color-base); border-color: var(--color-border);">
+                    <span x-text="row.stint_number"></span>
+                  </td>
+                  <td class="px-3 py-2 border-b font-mono whitespace-nowrap text-sm"
+                      style="border-color: var(--color-border);">
+                    <span x-text="formatTime(row.start_utc, tz)"></span>
+                  </td>
+                  <td class="px-3 py-2 border-b text-sm"
+                      style="border-color: var(--color-border);">
+                    <span x-text="row.driver_name || 'TBD'"
+                          :class="!row.driver_name ? 'italic opacity-40' : ''">
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </template>
+          </table>
+        </div>
+      </div>
+
+    {% endif %}
+
+  </div>
+
 </div>
 
 {% endblock %}

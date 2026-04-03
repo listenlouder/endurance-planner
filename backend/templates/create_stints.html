@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load tz_filters %}
 
-{% block title %}Create Stints — {{ event.name }}{% endblock %}
+{% block title %}{{ event.name }} Stints — WeAreChecking{% endblock %}
 
 {% block content %}
 
@@ -57,13 +57,21 @@
 
 {% else %}
 
-<form method="post" id="stints-form">
-  {% csrf_token %}
-  {% for sw in stint_windows %}
-    <input type="hidden" name="stint_{{ sw.stint_number }}" value="">
-  {% endfor %}
+<div x-data="stintPlanner('{{ admin_tz }}')" x-init="init()">
 
-  <div x-data="stintPlanner('{{ admin_tz }}')" x-init="init()">
+  <form method="post" id="stints-form"
+        hx-post="{% url 'create_stints' event.id %}"
+        hx-target="#save-response"
+        hx-swap="none"
+        @htmx:before-request="onSaveStart()"
+        @htmx:after-on-load="onSaveSuccess()"
+        @htmx:response-error="onSaveError()">
+    {% csrf_token %}
+    {% for sw in stint_windows %}
+      <input type="hidden" name="stint_{{ sw.stint_number }}" value="">
+    {% endfor %}
+
+  <div>
 
     {# Unassigned stints warning banner #}
     <div x-show="hasUnassigned"
@@ -76,16 +84,19 @@
     </div>
 
     <div class="overflow-x-auto overflow-y-auto max-h-[70vh] rounded border border-white/10">
-      <table class="border-collapse text-sm" style="min-width: max-content;">
+      <table class="border-collapse text-sm w-full" style="min-width: max-content;">
         <thead>
           <tr style="background-color: var(--color-nav-bg);">
             <th class="sticky top-0 left-0 z-20 px-3 py-2 text-left font-medium opacity-60 min-w-[5rem] border-b border-white/10"
                 style="background-color: var(--color-nav-bg);">
               Stint
             </th>
-            <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium opacity-60 whitespace-nowrap min-w-[9rem] border-b border-white/10"
+            <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium opacity-60 whitespace-nowrap min-w-[6rem] border-b border-white/10"
                 style="background-color: var(--color-nav-bg);">
               Start Time
+            </th>
+            <th class="sticky top-0 z-10 px-2 py-2 border-b border-white/10"
+                style="background-color: var(--color-nav-bg);">
             </th>
             {% for driver in drivers %}
             <th class="sticky top-0 z-10 px-3 py-2 text-center font-medium min-w-[7rem] border-b border-white/10"
@@ -101,7 +112,7 @@
           {# Date separator row — shown when the stint crosses into a new calendar day #}
           <template x-if="isNewDay({{ forloop.counter0 }})">
             <tr>
-              <td colspan="{{ drivers|length|add:2 }}"
+              <td colspan="{{ drivers|length|add:3 }}"
                   class="text-center font-semibold py-1 text-xs tracking-wider"
                   style="background-color: var(--color-accent2); color: #111; opacity: 0.9;">
                 <span x-text="formatStintDate('{{ sw.start_utc|to_utc_z }}')"></span>
@@ -119,6 +130,23 @@
 
             <td class="px-3 py-1.5 whitespace-nowrap font-mono text-xs opacity-80">
               {{ sw.start_local }}
+            </td>
+
+            <td class="px-2 py-1 text-center">
+              <button type="button"
+                      x-show="!!assignments[{{ sw.stint_number }}]"
+                      x-transition:enter="transition ease-out duration-150"
+                      x-transition:enter-start="opacity-0 scale-90"
+                      x-transition:enter-end="opacity-100 scale-100"
+                      x-transition:leave="transition ease-in duration-100"
+                      x-transition:leave-start="opacity-100 scale-100"
+                      x-transition:leave-end="opacity-0 scale-90"
+                      @click="unassignDriver({{ sw.stint_number }})"
+                      class="text-xs px-2 py-1 rounded border hover:opacity-80 transition-opacity"
+                      style="border-color: #ef4444; color: #ef4444;"
+                      title="Remove driver from this stint">
+                Unassign
+              </button>
             </td>
 
             {# One radio cell per driver #}
@@ -148,6 +176,7 @@
               Total
             </td>
             <td></td>
+            <td></td>
             {% for driver in drivers %}
             <td class="text-center px-2 py-2 font-mono"
                 x-text="driverStintCount('{{ driver.id }}')">
@@ -159,7 +188,7 @@
     </div>
 
     {# Color legend #}
-    <div class="flex gap-6 text-xs mt-4 flex-wrap opacity-70">
+    <div class="flex gap-6 text-xs mt-4 mb-4 flex-wrap opacity-70">
       <span class="flex items-center gap-2">
         <span class="w-4 h-4 rounded inline-block bg-green-500/40"></span>
         Assigned
@@ -174,26 +203,120 @@
       </span>
     </div>
 
-    <div class="mt-6">
+    <div class="flex items-center gap-3 my-4">
       <button type="submit"
-              class="px-5 py-2 rounded font-semibold text-sm transition hover:opacity-80 active:scale-95"
-              style="background-color: var(--color-accent1); color: #fff;">
-        Save Assignments
+              :disabled="saveState === 'saving'"
+              :class="saveButtonClass"
+              class="px-6 py-2 rounded-lg font-semibold text-sm
+                     transition-all duration-200"
+              style="background-color: var(--color-accent1);
+                     color: #fff;">
+        <span x-text="saveButtonLabel">Save Assignments</span>
       </button>
+
+      <span x-show="isDirty && saveState === 'idle'"
+            x-transition
+            class="text-xs"
+            style="color: #f59e0b;">
+        Unsaved changes
+      </span>
+
+      <span x-show="showToast && !toastIsError"
+            x-transition
+            class="text-xs"
+            style="color: #22c55e;">
+        Saved
+      </span>
+
+      <span x-show="showToast && toastIsError"
+            x-transition
+            class="text-xs"
+            style="color: #ef4444;">
+        Save failed. Please try again.
+      </span>
     </div>
 
+    <!-- Hidden response target for HTMX -->
+    <div id="save-response" class="hidden"></div>
+
   </div>
-</form>
+  </form>
+
+</div>
 
 {% endif %}
 
-{# ── Driver availability table (reused from admin page) ──────── #}
-<section class="mt-10 mb-6">
-  <h2 class="text-lg font-semibold mb-4 pb-2 border-b" style="border-color: var(--color-accent1);">
-    Driver Availability
-  </h2>
-  {% include 'partials/availability_table.html' with table_data=table_data drivers=drivers admin_tz=admin_tz only %}
-</section>
+{# ── Driver availability by stint ──────────────────────────────── #}
+<div class="mt-10 mb-6">
+  <h2 class="text-xl font-bold mb-3">Driver Availability by Stint</h2>
+
+  <div class="flex gap-4 text-xs mb-3 flex-wrap">
+    <span class="flex items-center gap-1">
+      <span class="w-4 h-4 rounded inline-block bg-green-500/40"></span>
+      Available for full stint
+    </span>
+    <span class="flex items-center gap-1">
+      <span class="w-4 h-4 rounded inline-block bg-yellow-400/60"></span>
+      Partially available
+    </span>
+    <span class="flex items-center gap-1">
+      <span class="w-4 h-4 rounded inline-block bg-red-500/40"></span>
+      Unavailable
+    </span>
+  </div>
+
+  {% if drivers and stint_windows %}
+  <div class="overflow-x-auto overflow-y-auto max-h-96 rounded border border-white/10">
+    <table class="text-xs border-collapse w-full" style="min-width: max-content;">
+      <thead>
+        <tr>
+          <th class="sticky top-0 left-0 z-20 px-2 py-2 text-left font-semibold opacity-60 border-b border-white/10"
+              style="background-color: var(--color-nav-bg);">
+            Stint
+          </th>
+          <th class="sticky top-0 z-10 px-3 py-2 text-left font-semibold opacity-60 border-b border-white/10 whitespace-nowrap"
+              style="background-color: var(--color-nav-bg);">
+            Start Time
+          </th>
+          {% for driver in drivers %}
+          <th class="sticky top-0 z-10 px-3 py-2 text-center font-semibold border-b border-white/10 whitespace-nowrap min-w-[7rem]"
+              style="background-color: var(--color-nav-bg);">
+            {{ driver.name }}
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for sw in stint_windows %}
+        <tr class="border-t border-white/5 hover:bg-white/5 transition-colors">
+          <td class="sticky left-0 z-10 px-2 py-1.5 font-mono font-bold text-center"
+              style="background-color: var(--color-base);">
+            {{ sw.stint_number }}
+          </td>
+          <td class="px-3 py-1.5 font-mono whitespace-nowrap opacity-80">
+            {{ sw.start_local }}
+          </td>
+          {% for driver in drivers %}
+          {% with status=stint_availability|dict_get:driver.id|dict_get:sw.stint_number %}
+          <td class="px-3 py-1.5 text-center
+                     {% if status == 'full' %}bg-green-500/40
+                     {% elif status == 'partial' %}bg-yellow-400/60
+                     {% elif status == 'none' %}bg-red-500/40
+                     {% endif %}"
+              title="{% if status == 'full' %}Available for full stint{% elif status == 'partial' %}Partially available{% elif status == 'none' %}Unavailable{% else %}No data{% endif %}">
+            {% if status == 'full' %}✓{% elif status == 'partial' %}~{% elif status == 'none' %}✗{% else %}—{% endif %}
+          </td>
+          {% endwith %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm opacity-50">No drivers or stints to display.</p>
+  {% endif %}
+</div>
 
 {% endblock %}
 
@@ -211,15 +334,69 @@
       // { stint_number (int): driver_id (string) | null }
       assignments: {},
 
+      // Save state
+      isDirty: false,
+      saveState: 'idle',  // 'idle' | 'saving' | 'saved' | 'error'
+      showToast: false,
+      toastMessage: '',
+      toastIsError: false,
+
       init() {
         stintWindows.forEach(sw => {
           const n = sw.stint_number;
           this.assignments[n] = existingAssignments[String(n)] || null;
         });
+        // isDirty must be false after init — assignments came from the server
+        this.isDirty = false;
       },
 
       assignDriver(stintNumber, driverId) {
         this.assignments[stintNumber] = driverId || null;
+        this.isDirty = true;
+      },
+
+      unassignDriver(stintNumber) {
+        this.assignments[stintNumber] = null;
+        this.isDirty = true;
+      },
+
+      onSaveStart() {
+        this.saveState = 'saving';
+      },
+
+      onSaveSuccess() {
+        this.saveState = 'idle';
+        this.isDirty = false;
+        this.triggerToast('Assignments saved successfully.');
+      },
+
+      onSaveError() {
+        this.saveState = 'idle';
+        this.triggerToast('Save failed. Please try again.', true);
+      },
+
+      triggerToast(message, isError = false) {
+        this.toastMessage = message;
+        this.toastIsError = isError;
+        this.showToast = true;
+        setTimeout(() => {
+          this.showToast = false;
+        }, 3000);
+      },
+
+      get saveButtonLabel() {
+        if (this.saveState === 'saving') return 'Saving…';
+        return this.isDirty ? '● Save Assignments' : 'Save Assignments';
+      },
+
+      get saveButtonClass() {
+        if (this.saveState === 'saving') {
+          return 'opacity-60 cursor-not-allowed';
+        }
+        if (this.isDirty) {
+          return 'ring-2 ring-offset-2 ring-[var(--color-accent1)] brightness-110';
+        }
+        return '';
       },
 
       hasConflict(stintNumber, driverId) {
