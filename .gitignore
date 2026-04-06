@@ -16,3 +16,9 @@ bin/tailwindcss.exe
 
 # Compiled Tailwind CSS — committed for production deploy
 # backend/static/css/output.css
+
+# Django collectstatic output — generated, not committed
+backend/staticfiles/
+
+# Design reference files - local only
+design/

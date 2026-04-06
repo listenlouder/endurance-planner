@@ -1,6 +1,6 @@
 <div id="create-form-container">
 
-  <h1 class="text-3xl font-bold mb-6" style="color: var(--color-accent1);">
+  <h1 class="text-3xl font-bold mb-6" style="color: var(--primary);">
     Create New Event
   </h1>
 
@@ -24,7 +24,7 @@
     <div class="flex flex-col gap-1">
       <label for="{{ form.name.id_for_label }}"
              class="text-sm font-medium"
-             style="color: var(--color-text);">
+             style="color: var(--text);">
         {{ form.name.label }}
       </label>
       <input
@@ -34,8 +34,8 @@
         value="{{ form.name.value|default:'' }}"
         maxlength="255"
         placeholder="e.g. Spa 24 Hours 2025"
-        class="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
-        style="background-color: var(--color-base); color: var(--color-text); border-color: {% if form.name.errors %}#ef4444{% else %}var(--color-accent2){% endif %};"
+        class="w-full"
+        style="background-color: var(--bg); color: var(--text); border-color: {% if form.name.errors %}#ef4444{% else %}var(--secondary){% endif %};"
       />
       {% if form.name.errors %}
         <p class="text-red-500 text-sm mt-1">{{ form.name.errors|join:", " }}</p>
@@ -46,7 +46,7 @@
     <div class="flex flex-col gap-1">
       <label for="{{ form.date.id_for_label }}"
              class="text-sm font-medium"
-             style="color: var(--color-text);">
+             style="color: var(--text);">
         {{ form.date.label }}
       </label>
       <input
@@ -54,8 +54,8 @@
         name="{{ form.date.html_name }}"
         id="{{ form.date.id_for_label }}"
         value="{{ form.date.value|default:'' }}"
-        class="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
-        style="background-color: var(--color-base); color: var(--color-text); border-color: {% if form.date.errors %}#ef4444{% else %}var(--color-accent2){% endif %};"
+        class="w-full"
+        style="background-color: var(--bg); color: var(--text); border-color: {% if form.date.errors %}#ef4444{% else %}var(--secondary){% endif %};"
       />
       {% if form.date.errors %}
         <p class="text-red-500 text-sm mt-1">{{ form.date.errors|join:", " }}</p>
@@ -67,7 +67,7 @@
     <div class="flex flex-col gap-1">
       <label for="{{ form.start_time_utc.id_for_label }}"
              class="text-sm font-medium"
-             style="color: var(--color-text);">
+             style="color: var(--text);">
         {{ form.start_time_utc.label }}
       </label>
       <input
@@ -75,8 +75,8 @@
         name="{{ form.start_time_utc.html_name }}"
         id="{{ form.start_time_utc.id_for_label }}"
         value="{{ form.start_time_utc.value|default:'' }}"
-        class="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--color-accent1)] transition"
-        style="background-color: var(--color-base); color: var(--color-text); border-color: {% if form.start_time_utc.errors %}#ef4444{% else %}var(--color-accent2){% endif %};"
+        class="w-full"
+        style="background-color: var(--bg); color: var(--text); border-color: {% if form.start_time_utc.errors %}#ef4444{% else %}var(--secondary){% endif %};"
       />
       {% if form.start_time_utc.errors %}
         <p class="text-red-500 text-sm mt-1">{{ form.start_time_utc.errors|join:", " }}</p>
@@ -86,7 +86,7 @@
 
     <!-- Race length: hours + minutes inputs -->
     <div class="flex flex-col gap-1">
-      <label class="text-sm font-medium" style="color: var(--color-text);">
+      <label class="text-sm font-medium" style="color: var(--text);">
         Race Length
       </label>
       <div class="flex items-center gap-3"
@@ -108,11 +108,6 @@
       {% if form.length_minutes.errors %}
         <p class="text-red-500 text-xs mt-1">{{ form.length_minutes.errors|join:", " }}</p>
       {% endif %}
-      {% if form.non_field_errors %}
-        {% for error in form.non_field_errors %}
-          <p class="text-red-500 text-xs mt-1">{{ error }}</p>
-        {% endfor %}
-      {% endif %}
     </div>
 
     <!-- Recruiting -->
@@ -123,7 +118,7 @@
                id="id_recruiting"
                {% if form.recruiting.value %}checked{% endif %}
                class="w-5 h-5 rounded cursor-pointer flex-shrink-0"
-               style="accent-color: var(--color-accent1);">
+               style="accent-color: var(--primary);">
         <div>
           <span class="text-sm font-medium">
             List this event as recruiting drivers
@@ -142,10 +137,7 @@
     </div>
 
     <!-- Submit -->
-    <button
-      type="submit"
-      class="w-full py-2 px-4 rounded-lg font-semibold transition hover:opacity-80 active:scale-95 mt-2"
-      style="background-color: var(--color-accent1); color: #fff;">
+    <button type="submit" class="btn-primary w-full mt-2">
       Create Event
     </button>
 

@@ -38,6 +38,8 @@ from .models import Availability, Driver, Event, Feedback
 from .templatetags.tz_filters import (
     datetime_in_tz,
     dict_get,
+    get_item,
+    seconds_to_hours_display,
     time_in_tz,
     to_tz,
     to_utc_z,
@@ -1837,3 +1839,748 @@ class FeedbackViewTests(TestCase):
 
         self.assertEqual(len(response.context['feedback_items']), 200)
         self.assertEqual(response.context['total'], 200)
+
+
+# ===========================================================================
+# Phase A/B/C design system tests
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# seconds_to_hours_display filter (Phase A)
+# ---------------------------------------------------------------------------
+
+class SecondsToHoursDisplayFilterTests(SimpleTestCase):
+    """Tests for templatetags.tz_filters.seconds_to_hours_display.
+
+    The filter converts a seconds integer to a human-readable duration.
+    It returns only hours when minutes == 0, e.g. 3600 → "1h".
+    When minutes > 0, format is "Xh Ym", e.g. 5400 → "1h 30m".
+    A falsy value (0, None) returns the em-dash sentinel "—".
+    """
+
+    def test_exact_hours_no_minutes_suffix(self):
+        # 3600 s = 1 hour exactly → only hours shown
+        self.assertEqual(seconds_to_hours_display(3600), '1h')
+
+    def test_hours_and_minutes(self):
+        # 5400 s = 1 h 30 m
+        self.assertEqual(seconds_to_hours_display(5400), '1h 30m')
+
+    def test_twenty_four_hours(self):
+        # 86400 s = 24 h (a typical race length)
+        self.assertEqual(seconds_to_hours_display(86400), '24h')
+
+    def test_six_hours_thirty_minutes(self):
+        # 23400 s = 6 h 30 m
+        self.assertEqual(seconds_to_hours_display(23400), '6h 30m')
+
+    def test_one_minute_only(self):
+        # 60 s = 0 h 1 m
+        self.assertEqual(seconds_to_hours_display(60), '0h 1m')
+
+    def test_fifty_nine_minutes(self):
+        # 3540 s = 0 h 59 m
+        self.assertEqual(seconds_to_hours_display(3540), '0h 59m')
+
+    def test_zero_returns_em_dash(self):
+        # 0 is falsy — the filter returns the sentinel
+        self.assertEqual(seconds_to_hours_display(0), '—')
+
+    def test_none_returns_em_dash(self):
+        self.assertEqual(seconds_to_hours_display(None), '—')
+
+    def test_large_race_with_remainder(self):
+        # 25 h 15 m = 90900 s
+        self.assertEqual(seconds_to_hours_display(90900), '25h 15m')
+
+    def test_seconds_less_than_one_minute_ignored(self):
+        # 3615 s = 1 h 0 m 15 s → minutes part is 0 → only "1h"
+        self.assertEqual(seconds_to_hours_display(3615), '1h')
+
+
+# ---------------------------------------------------------------------------
+# get_item filter (Phase A)
+# ---------------------------------------------------------------------------
+
+class GetItemFilterTests(SimpleTestCase):
+    """Tests for templatetags.tz_filters.get_item.
+
+    get_item is a simple dict.get() wrapper for template use.
+    Unlike dict_get it does NOT fall back to str(key) coercion.
+    """
+
+    def test_string_key_present_returns_value(self):
+        self.assertEqual(get_item({'a': 1}, 'a'), 1)
+
+    def test_string_key_absent_returns_none(self):
+        self.assertIsNone(get_item({'a': 1}, 'b'))
+
+    def test_integer_key_present_returns_value(self):
+        self.assertEqual(get_item({1: 'one'}, 1), 'one')
+
+    def test_key_with_falsy_value_returns_falsy_value(self):
+        # Must distinguish "missing key" from "key with falsy value"
+        self.assertEqual(get_item({'x': 0}, 'x'), 0)
+        self.assertEqual(get_item({'x': False}, 'x'), False)
+        self.assertEqual(get_item({'x': ''}, 'x'), '')
+
+    def test_empty_dict_returns_none(self):
+        self.assertIsNone(get_item({}, 'anything'))
+
+
+# ---------------------------------------------------------------------------
+# Home view — recruiting_events context (Phase C)
+# ---------------------------------------------------------------------------
+
+class HomeViewRecruitingContextTests(TestCase):
+    """Tests for the home view's recruiting_events context variable.
+
+    The view filters to recruiting=True events whose start_datetime is in
+    the future, annotates with driver_count, and caps at 8 results.
+    """
+
+    def setUp(self):
+        self.url = reverse('home')
+        # A fixed future start time well beyond today
+        self.future_date = dt.date(2030, 6, 1)
+        self.future_time = dt.time(12, 0, 0)
+
+    def _make_recruiting(self, name='Race', **overrides):
+        return save_event(
+            name=name,
+            date=overrides.pop('date', self.future_date),
+            start_time_utc=overrides.pop('start_time_utc', self.future_time),
+            recruiting=True,
+            **overrides,
+        )
+
+    def _make_non_recruiting(self, name='Non-recruiting Race'):
+        return save_event(
+            name=name,
+            date=self.future_date,
+            start_time_utc=self.future_time,
+            recruiting=False,
+        )
+
+    def test_home_returns_200(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_no_recruiting_events_gives_empty_list(self):
+        self._make_non_recruiting()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(list(response.context['recruiting_events']), [])
+
+    def test_recruiting_event_appears_in_context(self):
+        event = self._make_recruiting(name='Recruiting Race')
+
+        response = self.client.get(self.url)
+
+        names = [e.name for e in response.context['recruiting_events']]
+        self.assertIn('Recruiting Race', names)
+
+    def test_non_recruiting_event_excluded_from_context(self):
+        self._make_recruiting(name='Recruiting Race')
+        self._make_non_recruiting(name='Hidden Race')
+
+        response = self.client.get(self.url)
+
+        names = [e.name for e in response.context['recruiting_events']]
+        self.assertNotIn('Hidden Race', names)
+
+    def test_driver_count_annotation_present_and_zero_with_no_drivers(self):
+        self._make_recruiting()
+
+        response = self.client.get(self.url)
+
+        event = response.context['recruiting_events'][0]
+        self.assertEqual(event.driver_count, 0)
+
+    def test_driver_count_annotation_reflects_actual_signup_count(self):
+        event = self._make_recruiting()
+        Driver.objects.create(event=event, name='Alice', timezone='UTC')
+        Driver.objects.create(event=event, name='Bob', timezone='UTC')
+
+        response = self.client.get(self.url)
+
+        ctx_event = response.context['recruiting_events'][0]
+        self.assertEqual(ctx_event.driver_count, 2)
+
+    def test_driver_count_not_cross_contaminated_between_events(self):
+        event_a = self._make_recruiting(name='Race A')
+        event_b = self._make_recruiting(name='Race B')
+        Driver.objects.create(event=event_a, name='Alice', timezone='UTC')
+        # event_b has no drivers
+
+        response = self.client.get(self.url)
+
+        ctx_events = {e.name: e for e in response.context['recruiting_events']}
+        self.assertEqual(ctx_events['Race A'].driver_count, 1)
+        self.assertEqual(ctx_events['Race B'].driver_count, 0)
+
+    def test_past_recruiting_event_excluded(self):
+        # An event dated yesterday, recruiting=True — must not appear
+        yesterday = dt.date.today() - dt.timedelta(days=1)
+        save_event(
+            name='Past Recruiting',
+            date=yesterday,
+            start_time_utc=dt.time(12, 0, 0),
+            recruiting=True,
+        )
+
+        response = self.client.get(self.url)
+
+        names = [e.name for e in response.context['recruiting_events']]
+        self.assertNotIn('Past Recruiting', names)
+
+    def test_results_capped_at_eight(self):
+        # Create 10 recruiting events, all in the future
+        for i in range(10):
+            save_event(
+                name=f'Race {i}',
+                date=dt.date(2030, 6, i + 1),
+                start_time_utc=dt.time(12, 0, 0),
+                recruiting=True,
+            )
+
+        response = self.client.get(self.url)
+
+        self.assertLessEqual(len(response.context['recruiting_events']), 8)
+
+    def test_uses_home_template(self):
+        response = self.client.get(self.url)
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('home.html', template_names)
+
+
+# ---------------------------------------------------------------------------
+# Home template rendering (Phase C)
+# ---------------------------------------------------------------------------
+
+class HomeTemplateRenderingTests(TestCase):
+    """Tests for home.html template content.
+
+    Verifies that Phase C changes render correctly: the recruiting section,
+    HTMX search input attributes, and the create event link.
+    """
+
+    def setUp(self):
+        self.url = reverse('home')
+        self.future_date = dt.date(2030, 6, 1)
+        self.future_time = dt.time(14, 0, 0)
+
+    def _make_recruiting(self, **overrides):
+        return save_event(
+            name=overrides.pop('name', 'Test Recruiting Race'),
+            date=overrides.pop('date', self.future_date),
+            start_time_utc=overrides.pop('start_time_utc', self.future_time),
+            recruiting=True,
+            **overrides,
+        )
+
+    def test_recruiting_section_absent_when_no_recruiting_events(self):
+        response = self.client.get(self.url)
+
+        # The recruiting section only appears inside {% if recruiting_events %}
+        self.assertNotContains(response, 'Recruiting — looking for drivers')
+
+    def test_recruiting_section_present_when_events_exist(self):
+        self._make_recruiting()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Recruiting — looking for drivers')
+
+    def test_recruiting_section_shows_event_name(self):
+        self._make_recruiting(name='Spa 24H 2030')
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Spa 24H 2030')
+
+    def test_recruiting_section_shows_track_when_set(self):
+        self._make_recruiting(track='Monza')
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Monza')
+
+    def test_recruiting_section_shows_car_when_set(self):
+        self._make_recruiting(car='Ferrari GT3')
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Ferrari GT3')
+
+    def test_recruiting_event_link_uses_from_recruiting_param(self):
+        event = self._make_recruiting()
+
+        response = self.client.get(self.url)
+
+        expected_url = reverse('view_event', kwargs={'event_id': event.id}) + '?from=recruiting'
+        self.assertContains(response, expected_url)
+
+    def test_create_event_link_resolves_correctly(self):
+        response = self.client.get(self.url)
+
+        expected_url = reverse('event_create')
+        self.assertContains(response, f'href="{expected_url}"')
+
+    def test_htmx_search_input_has_correct_hx_get_attribute(self):
+        response = self.client.get(self.url)
+
+        expected_search_url = reverse('event_search')
+        self.assertContains(response, f'hx-get="{expected_search_url}"')
+
+    def test_recruiting_section_shows_driver_count_singular(self):
+        event = self._make_recruiting()
+        Driver.objects.create(event=event, name='Alice', timezone='UTC')
+
+        response = self.client.get(self.url)
+
+        # Template: "{{ event.driver_count }} driver{{ event.driver_count|pluralize }}"
+        self.assertContains(response, '1 driver signed up')
+
+    def test_recruiting_section_shows_driver_count_plural(self):
+        event = self._make_recruiting()
+        Driver.objects.create(event=event, name='Alice', timezone='UTC')
+        Driver.objects.create(event=event, name='Bob', timezone='UTC')
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '2 drivers signed up')
+
+    def test_recruiting_section_shows_length_via_filter(self):
+        # 7200 s = 2 h exactly → "2h" via seconds_to_hours_display
+        self._make_recruiting(length_seconds=7200)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '2h')
+
+    def test_track_not_rendered_when_blank(self):
+        self._make_recruiting(track='')
+
+        response = self.client.get(self.url)
+
+        # The template wraps track in {% if event.track %} so no "·" with empty
+        # We verify the word "Track" doesn't appear as a label in the recruiting section
+        # by checking the full recruiting item doesn't have a trailing "· " artifact.
+        # A simpler proxy: count occurrences of "recent-item" to confirm the block renders,
+        # then confirm track placeholder isn't present.
+        self.assertContains(response, 'recent-item')
+        self.assertNotContains(response, '· Monza')  # No track text present
+
+
+# ---------------------------------------------------------------------------
+# event_create_form.html — non-field errors rendered exactly once (Phase C)
+# ---------------------------------------------------------------------------
+
+class EventCreateFormNonFieldErrorRenderingTests(TestCase):
+    """Tests for partials/event_create_form.html non-field error rendering.
+
+    Phase C fixed a bug where non-field errors were rendered twice.
+    These tests confirm the error text appears exactly once in the
+    HTMX partial response.
+    """
+
+    def setUp(self):
+        self.url = reverse('event_create')
+
+    def _post_with_zero_length(self):
+        """POST data that triggers the 'Race length must be greater than zero'
+        non-field ValidationError."""
+        return self.client.post(
+            self.url,
+            {
+                'name': 'Test Race',
+                'date': '2030-06-01',
+                'start_time_utc': '12:00',
+                'length_hours': '0',
+                'length_minutes': '0',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+
+    def test_non_field_error_message_appears_in_response(self):
+        response = self._post_with_zero_length()
+
+        self.assertContains(response, 'Race length must be greater than zero')
+
+    def test_non_field_error_rendered_exactly_once(self):
+        response = self._post_with_zero_length()
+
+        content = response.content.decode()
+        count = content.count('Race length must be greater than zero')
+        self.assertEqual(count, 1, f"Expected exactly 1 occurrence, found {count}")
+
+    def test_field_error_for_past_date_appears_in_response(self):
+        response = self.client.post(
+            self.url,
+            {
+                'name': 'Test Race',
+                'date': '2000-01-01',
+                'start_time_utc': '12:00',
+                'length_hours': '6',
+                'length_minutes': '0',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertContains(response, 'past')
+
+    def test_name_field_error_appears_in_response(self):
+        response = self.client.post(
+            self.url,
+            {
+                'name': '',
+                'date': '2030-06-01',
+                'start_time_utc': '12:00',
+                'length_hours': '6',
+                'length_minutes': '0',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertContains(response, 'required')
+
+    def test_valid_submission_does_not_return_form_errors(self):
+        response = self.client.post(
+            self.url,
+            {
+                'name': 'Valid Race',
+                'date': '2030-06-01',
+                'start_time_utc': '12:00',
+                'length_hours': '6',
+                'length_minutes': '0',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+
+        # A successful HTMX POST returns the success partial, not the form
+        self.assertNotContains(response, 'Race length must be greater than zero')
+
+
+# ---------------------------------------------------------------------------
+# event_search view (HTMX endpoint, Phase C)
+# ---------------------------------------------------------------------------
+
+class EventSearchViewTests(TestCase):
+    """Tests for views.event_search() — the HTMX live-search endpoint.
+
+    The view rejects non-HTMX requests, returns empty for short queries,
+    and returns partial HTML matching events by name, track, or car.
+    Only future events are returned.
+    """
+
+    def setUp(self):
+        self.url = reverse('event_search')
+        self.future_date = dt.date(2030, 6, 1)
+        self.future_time = dt.time(12, 0, 0)
+
+    def _htmx_get(self, query):
+        return self.client.get(
+            self.url,
+            {'q': query},
+            HTTP_HX_REQUEST='true',
+        )
+
+    def _make_future_event(self, **overrides):
+        return save_event(
+            date=overrides.pop('date', self.future_date),
+            start_time_utc=overrides.pop('start_time_utc', self.future_time),
+            **overrides,
+        )
+
+    def test_non_htmx_request_returns_400(self):
+        response = self.client.get(self.url, {'q': 'spa'})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_query_shorter_than_two_chars_returns_empty_body(self):
+        response = self._htmx_get('s')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.strip(), b'')
+
+    def test_empty_query_returns_empty_body(self):
+        response = self._htmx_get('')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.strip(), b'')
+
+    def test_match_by_event_name(self):
+        self._make_future_event(name='Spa 24H 2030')
+
+        response = self._htmx_get('Spa')
+
+        self.assertContains(response, 'Spa 24H 2030')
+
+    def test_match_by_track(self):
+        self._make_future_event(name='Night Race', track='Nurburgring')
+
+        response = self._htmx_get('Nurb')
+
+        self.assertContains(response, 'Night Race')
+
+    def test_match_by_car(self):
+        self._make_future_event(name='GT3 Cup', car='Ferrari GT3')
+
+        response = self._htmx_get('Ferrari')
+
+        self.assertContains(response, 'GT3 Cup')
+
+    def test_case_insensitive_matching(self):
+        self._make_future_event(name='Monza Sprint')
+
+        response = self._htmx_get('monza')
+
+        self.assertContains(response, 'Monza Sprint')
+
+    def test_non_matching_query_returns_no_results(self):
+        self._make_future_event(name='Spa 24H')
+
+        response = self._htmx_get('zzz')
+
+        self.assertNotContains(response, 'Spa 24H')
+
+    def test_past_event_excluded_from_results(self):
+        save_event(
+            name='Old Race',
+            date=dt.date(2020, 1, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+
+        response = self._htmx_get('Old')
+
+        self.assertNotContains(response, 'Old Race')
+
+    def test_two_char_query_is_accepted(self):
+        self._make_future_event(name='GT Championship')
+
+        response = self._htmx_get('GT')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'GT Championship')
+
+    def test_multiple_matching_events_all_appear(self):
+        self._make_future_event(name='Spa Race 1', track='Spa')
+        self._make_future_event(name='Spa Race 2', track='Spa')
+
+        response = self._htmx_get('Spa')
+
+        self.assertContains(response, 'Spa Race 1')
+        self.assertContains(response, 'Spa Race 2')
+
+
+# ---------------------------------------------------------------------------
+# view_event view — context variables (Phase C)
+# ---------------------------------------------------------------------------
+
+class ViewEventContextTests(TestCase):
+    """Tests for views.view_event() context variables.
+
+    Covers: stints_ready, has_stints, has_unassigned, show_signup_link,
+    length_display, and the ?from=recruiting query param.
+    """
+
+    def setUp(self):
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        self.url = reverse('view_event', kwargs={'event_id': self.event.id})
+
+    def test_returns_200(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_nonexistent_event_returns_404(self):
+        bad_url = reverse('view_event', kwargs={'event_id': uuid.uuid4()})
+
+        response = self.client.get(bad_url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_stints_ready_true_when_all_fields_set(self):
+        # save_event() uses make_event() which populates all stint fields
+        response = self.client.get(self.url)
+
+        self.assertTrue(response.context['stints_ready'])
+
+    def test_stints_ready_false_when_required_fields_missing(self):
+        event = save_event(
+            name='No Stint Fields',
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        url = reverse('view_event', kwargs={'event_id': event.id})
+
+        response = self.client.get(url)
+
+        self.assertFalse(response.context['stints_ready'])
+
+    def test_has_stints_false_when_no_stint_assignments_exist(self):
+        response = self.client.get(self.url)
+
+        self.assertFalse(response.context['has_stints'])
+
+    def test_has_stints_true_when_stint_assignments_exist(self):
+        from .models import StintAssignment
+        driver = Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
+        StintAssignment.objects.create(event=self.event, stint_number=1, driver=driver)
+
+        response = self.client.get(self.url)
+
+        self.assertTrue(response.context['has_stints'])
+
+    def test_has_unassigned_false_when_all_stints_have_drivers(self):
+        from .models import StintAssignment
+        driver = Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
+        StintAssignment.objects.create(event=self.event, stint_number=1, driver=driver)
+
+        response = self.client.get(self.url)
+
+        self.assertFalse(response.context['has_unassigned'])
+
+    def test_has_unassigned_true_when_any_stint_has_no_driver(self):
+        from .models import StintAssignment
+        StintAssignment.objects.create(event=self.event, stint_number=1, driver=None)
+
+        response = self.client.get(self.url)
+
+        self.assertTrue(response.context['has_unassigned'])
+
+    def test_show_signup_link_false_without_from_param(self):
+        response = self.client.get(self.url)
+
+        self.assertFalse(response.context['show_signup_link'])
+
+    def test_show_signup_link_true_with_from_recruiting_param(self):
+        response = self.client.get(self.url + '?from=recruiting')
+
+        self.assertTrue(response.context['show_signup_link'])
+
+    def test_show_signup_link_false_with_other_from_param(self):
+        response = self.client.get(self.url + '?from=admin')
+
+        self.assertFalse(response.context['show_signup_link'])
+
+    def test_from_recruiting_param_accepted_without_error(self):
+        # Regression: ensure the query param does not raise a 500
+        response = self.client.get(self.url + '?from=recruiting')
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_length_display_whole_hours(self):
+        # 7200 s = 2 h exactly → "2h"
+        event = save_event(
+            name='2h Race',
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+            length_seconds=7200,
+        )
+        url = reverse('view_event', kwargs={'event_id': event.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.context['length_display'], '2h')
+
+    def test_length_display_hours_and_minutes(self):
+        # 9000 s = 2 h 30 m
+        event = save_event(
+            name='2.5h Race',
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+            length_seconds=9000,
+        )
+        url = reverse('view_event', kwargs={'event_id': event.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.context['length_display'], '2h 30m')
+
+    def test_event_name_present_in_rendered_page(self):
+        event = save_event(
+            name='Branded Race 2030',
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        url = reverse('view_event', kwargs={'event_id': event.id})
+
+        response = self.client.get(url)
+
+        self.assertContains(response, 'Branded Race 2030')
+
+    def test_signup_link_visible_when_from_recruiting(self):
+        response = self.client.get(self.url + '?from=recruiting')
+
+        signup_url = reverse('signup', kwargs={'event_id': self.event.id})
+        self.assertContains(response, signup_url)
+
+    def test_signup_link_hidden_without_from_recruiting(self):
+        response = self.client.get(self.url)
+
+        # The template wraps signup link in {% if show_signup_link %}
+        # so the signup anchor should not appear in the page body
+        signup_url = reverse('signup', kwargs={'event_id': self.event.id})
+        self.assertNotContains(response, signup_url)
+
+    def test_wac_table_class_present_when_stints_exist(self):
+        from .models import StintAssignment
+        driver = Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
+        StintAssignment.objects.create(event=self.event, stint_number=1, driver=driver)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'wac-table')
+
+
+# ---------------------------------------------------------------------------
+# driver_list.html — wac-table class (Phase B)
+# ---------------------------------------------------------------------------
+
+class DriverListTemplateClassTests(TestCase):
+    """Smoke test that driver_list.html uses the wac-table component class.
+
+    We access the admin dashboard (which renders driver_list.html as a partial)
+    and confirm the class is present when drivers exist.
+    """
+
+    def setUp(self):
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        self.admin_url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_wac_table_class_present_when_drivers_exist(self):
+        Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
+        self._set_admin_session()
+
+        response = self.client.get(self.admin_url)
+
+        self.assertContains(response, 'wac-table')
+
+    def test_no_drivers_message_shown_when_driver_list_empty(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.admin_url)
+
+        self.assertContains(response, 'No drivers have signed up yet')

@@ -22,41 +22,41 @@
     </p>
 
     <div class="rounded-xl border p-6 flex flex-col gap-6"
-         style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
+         style="border-color: var(--secondary); background-color: var(--bg-raised);">
 
       <div class="flex flex-col gap-2">
-        <p class="text-sm font-semibold" style="color: var(--color-text);">
+        <p class="text-sm font-semibold" style="color: var(--text);">
           View the event schedule
         </p>
         <a href="{{ base_url }}{{ event.id }}/view/"
            class="text-sm break-all hover:underline"
-           style="color: var(--color-accent1);"
+           style="color: var(--primary);"
            target="_blank">
           {{ base_url }}{{ event.id }}/view/
         </a>
         <input type="text" readonly
                value="{{ base_url }}{{ event.id }}/view/"
                class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
-               style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+               style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
                onclick="this.select()" />
       </div>
 
-      <hr style="border-color: var(--color-accent2); opacity: 0.3;" />
+      <hr style="border-color: var(--secondary); opacity: 0.3;" />
 
       <div class="flex flex-col gap-2">
-        <p class="text-sm font-semibold" style="color: var(--color-text);">
+        <p class="text-sm font-semibold" style="color: var(--text);">
           Update your availability
         </p>
         <a href="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
            class="text-sm break-all hover:underline"
-           style="color: var(--color-accent1);"
+           style="color: var(--primary);"
            target="_blank">
           {{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/
         </a>
         <input type="text" readonly
                value="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
                class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
-               style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+               style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
                onclick="this.select()" />
         <p class="text-xs opacity-60">
           Keep this link private — anyone with it can edit your availability.

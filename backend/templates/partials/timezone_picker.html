@@ -14,9 +14,9 @@
           class="w-full flex items-center justify-between
                  px-3 py-2 rounded-lg border-2 text-sm
                  text-left transition hover:opacity-80"
-          style="background-color: var(--color-base);
-                 color: var(--color-text);
-                 border-color: var(--color-border);">
+          style="background-color: var(--bg);
+                 color: var(--text);
+                 border-color: var(--border);">
     <span x-text="selectedLabel" class="truncate"></span>
     <svg class="w-4 h-4 ml-2 flex-shrink-0 transition-transform duration-150"
          :class="open ? 'rotate-180' : ''"
@@ -35,8 +35,8 @@
        x-transition:leave-start="opacity-100 translate-y-0"
        x-transition:leave-end="opacity-0 -translate-y-1"
        class="absolute z-50 w-full mt-1 rounded-lg border-2 shadow-lg overflow-hidden"
-       style="background-color: var(--color-base);
-              border-color: var(--color-border);
+       style="background-color: var(--bg);
+              border-color: var(--border);
               min-width: 260px;">
 
     <ul class="max-h-72 overflow-y-auto" role="listbox">
@@ -44,9 +44,9 @@
         <li>
           <!-- Region header -->
           <div class="px-3 py-1 text-xs font-bold uppercase tracking-wider sticky top-0"
-               style="background-color: var(--color-nav-bg);
-                      color: var(--color-accent1);
-                      border-bottom: 1px solid var(--color-border);">
+               style="background-color: var(--bg-raised);
+                      color: var(--primary);
+                      border-bottom: 1px solid var(--border);">
             <span x-text="group.region"></span>
           </div>
 
@@ -62,7 +62,7 @@
                 <span x-text="tz.label"></span>
                 <svg x-show="selected === tz.value"
                      class="w-4 h-4 flex-shrink-0 ml-2"
-                     style="color: var(--color-accent2);"
+                     style="color: var(--secondary);"
                      fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round"
                         stroke-width="2" d="M5 13l4 4L19 7"/>

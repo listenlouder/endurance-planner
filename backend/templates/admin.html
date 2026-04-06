@@ -31,7 +31,7 @@
 {# ── Page header ──────────────────────────────────────────────── #}
 <div class="mb-6">
   <div class="text-center mb-4">
-    <h1 class="text-4xl font-bold mb-1" style="color: var(--color-accent1);">
+    <h1 class="text-4xl font-bold mb-1" style="color: var(--primary);">
       {{ event.name }}
     </h1>
     <p class="text-sm opacity-50">Times in: <span class="font-mono">{{ admin_tz }}</span></p>
@@ -39,19 +39,16 @@
 
   <div class="flex flex-wrap justify-center gap-3">
     <a href="{% url 'view_event' event.id %}" target="_blank"
-       class="text-sm px-4 py-2 rounded-lg font-medium transition hover:opacity-80"
-       style="border: 1px solid var(--color-accent2); color: var(--color-accent2);">
+       class="btn-secondary">
       View Event ↗
     </a>
     {% if event.has_required_stint_fields %}
     <a href="{% url 'create_stints' event.id %}"
-       class="text-sm px-4 py-2 rounded-lg font-medium transition hover:opacity-80"
-       style="background-color: var(--color-accent2); color: #111;">
+       class="btn-primary">
       Create Stints →
     </a>
     {% else %}
-    <span class="text-sm px-4 py-2 rounded-lg font-medium opacity-40 cursor-not-allowed"
-          style="border: 1px solid var(--color-border);"
+    <span class="btn-ghost opacity-40 cursor-not-allowed"
           title="Fill in all required timing and fuel fields to enable stint planning">
       Create Stints (fields required)
     </span>
@@ -63,11 +60,9 @@
 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
 
   {# Basic Info #}
-  <div class="rounded-xl p-6"
-       style="border: 1px solid var(--color-border);
-              background-color: var(--color-nav-bg);">
+  <div class="card">
     <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--color-border); color: var(--color-accent2);">
+        style="border-color: var(--border); color: var(--secondary);">
       Basic Info
     </h2>
     <div class="space-y-1">
@@ -80,11 +75,9 @@
   </div>
 
   {# Race Details #}
-  <div class="rounded-xl p-6"
-       style="border: 1px solid var(--color-border);
-              background-color: var(--color-nav-bg);">
+  <div class="card">
     <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--color-border); color: var(--color-accent2);">
+        style="border-color: var(--border); color: var(--secondary);">
       Race Details
     </h2>
     <div class="space-y-1">
@@ -102,11 +95,9 @@
 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 md:items-start">
 
   {# Timing & Fuel #}
-  <div class="rounded-xl p-6"
-       style="border: 1px solid var(--color-border);
-              background-color: var(--color-nav-bg);">
+  <div class="card">
     <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--color-border); color: var(--color-accent2);">
+        style="border-color: var(--border); color: var(--secondary);">
       Timing &amp; Fuel
     </h2>
     <div class="space-y-1">
@@ -119,25 +110,21 @@
   </div>
 
   {# Drivers #}
-  <div class="rounded-xl p-6"
-       style="border: 1px solid var(--color-border);
-              background-color: var(--color-nav-bg);">
+  <div class="card">
     <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--color-border); color: var(--color-accent2);">
+        style="border-color: var(--border); color: var(--secondary);">
       Drivers Signed Up
       <span class="text-sm font-normal opacity-50">({{ drivers|length }})</span>
     </h2>
 
     {# Add Driver collapsible #}
     <div x-data="{ open: false }" class="mb-4">
-      <button @click="open = !open"
-              class="px-4 py-2 rounded text-sm font-semibold transition hover:opacity-80 active:scale-95"
-              style="background-color: var(--color-accent2); color: #111;">
+      <button @click="open = !open" class="btn-secondary">
         <span x-text="open ? 'Cancel' : '+ Add Driver'"></span>
       </button>
 
       <div x-show="open" x-transition class="mt-4 p-4 rounded-lg border"
-           style="border-color: var(--color-border); background-color: var(--color-base);">
+           style="border-color: var(--border); background-color: var(--bg);">
 
         <form hx-post="{% url 'admin_add_driver' event.id %}"
               hx-target="#driver-list-container"
@@ -175,37 +162,35 @@
           class="flex flex-col gap-4">
 
             <div>
-              <label class="text-sm font-medium block mb-1" style="color: var(--color-text);">Driver Name</label>
+              <label class="text-sm font-medium block mb-1" style="color: var(--text);">Driver Name</label>
               <input type="text" name="driver_name" required
                      class="w-full px-3 py-2 rounded border text-sm focus:outline-none focus:ring-1"
-                     style="background-color: var(--color-nav-bg); color: var(--color-text); border-color: var(--color-border);">
+                     style="background-color: var(--bg-raised); color: var(--text); border-color: var(--border);">
             </div>
 
             <div>
-              <label class="text-sm font-medium block mb-1" style="color: var(--color-text);">Timezone</label>
+              <label class="text-sm font-medium block mb-1" style="color: var(--text);">Timezone</label>
               {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
             </div>
 
             {% if slots %}
             <div>
               <div class="flex items-center justify-between mb-2">
-                <span class="text-sm font-medium" style="color: var(--color-text);">Availability</span>
+                <span class="text-sm font-medium" style="color: var(--text);">Availability</span>
                 <div class="flex gap-2">
                   <button type="button" @click="selectAll()"
                           class="px-2 py-1 rounded text-xs border transition hover:opacity-80"
-                          style="border-color: var(--color-accent2); color: var(--color-text);">Select All</button>
+                          style="border-color: var(--secondary); color: var(--text);">Select All</button>
                   <button type="button" @click="clearAll()"
                           class="px-2 py-1 rounded text-xs border transition hover:opacity-80"
-                          style="border-color: var(--color-accent2); color: var(--color-text);">Clear All</button>
+                          style="border-color: var(--secondary); color: var(--text);">Clear All</button>
                 </div>
               </div>
               {% include 'partials/availability_grid.html' %}
             </div>
             {% endif %}
 
-            <button type="submit"
-                    class="px-4 py-2 rounded text-sm font-semibold transition hover:opacity-80 active:scale-95"
-                    style="background-color: var(--color-accent1); color: #fff;">
+            <button type="submit" class="btn-primary">
               Add Driver
             </button>
 
@@ -223,10 +208,10 @@
 
 {# ── Row 3: Stint Calculation ─────────────────────────────────── #}
 <div class="rounded-xl p-6 mb-6"
-     style="border: 1px solid var(--color-border);
-            background-color: var(--color-nav-bg);">
+     style="border: 1px solid var(--border);
+            background-color: var(--bg-raised);">
   <h2 class="text-base font-bold mb-4 pb-2 border-b"
-      style="border-color: var(--color-border); color: var(--color-accent2);">
+      style="border-color: var(--border); color: var(--secondary);">
     Stint Calculation
   </h2>
 
@@ -241,10 +226,10 @@
 
 {# ── Row 4: Availability Overview ─────────────────────────────── #}
 <div class="rounded-xl p-6 mb-6"
-     style="border: 1px solid var(--color-border);
-            background-color: var(--color-nav-bg);">
+     style="border: 1px solid var(--border);
+            background-color: var(--bg-raised);">
   <h2 class="text-base font-bold mb-4 pb-2 border-b"
-      style="border-color: var(--color-border); color: var(--color-accent2);">
+      style="border-color: var(--border); color: var(--secondary);">
     Availability Overview
   </h2>
   <div id="availability-table-container">
@@ -255,7 +240,7 @@
 <div class="mt-4">
   <a href="{% url 'home' %}"
      class="text-sm opacity-50 hover:opacity-100 transition-opacity"
-     style="color: var(--color-text);">
+     style="color: var(--text);">
     ← Home
   </a>
 </div>

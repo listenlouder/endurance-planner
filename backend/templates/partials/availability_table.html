@@ -5,12 +5,12 @@
       <thead>
         <tr>
           <th class="sticky top-0 left-0 z-20 px-3 py-2 text-left font-medium opacity-60 min-w-[9rem]"
-              style="background-color: var(--color-base);">
+              style="background-color: var(--bg);">
             Time ({{ admin_tz }})
           </th>
           {% for driver in drivers %}
             <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium min-w-[8rem]"
-                style="background-color: var(--color-base);">
+                style="background-color: var(--bg);">
               {{ driver.name }}
             </th>
           {% endfor %}
@@ -21,7 +21,7 @@
           <tr class="border-t border-white/5">
             <td class="sticky left-0 z-10 px-3 py-1.5 font-mono whitespace-nowrap
                        {% if row.is_uncovered %}bg-red-500/25 text-red-300{% endif %}"
-                style="background-color: {% if not row.is_uncovered %}var(--color-base){% endif %}">
+                style="background-color: {% if not row.is_uncovered %}var(--bg){% endif %}">
               {{ row.slot_local_str }}
             </td>
             {% for driver in drivers %}

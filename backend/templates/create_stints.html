@@ -24,10 +24,10 @@
 <div class="mb-6">
   <a href="{% url 'admin_dashboard' event.id %}"
      class="inline-flex items-center gap-1 text-sm mb-4 opacity-60 hover:opacity-100 transition"
-     style="color: var(--color-text);">
+     style="color: var(--text);">
     ← Back to Admin
   </a>
-  <h1 class="text-3xl font-bold" style="color: var(--color-accent1);">
+  <h1 class="text-3xl font-bold" style="color: var(--primary);">
     Create Stints — {{ event.name }}
   </h1>
   <p class="text-sm opacity-60 mt-1">
@@ -86,21 +86,21 @@
     <div class="overflow-x-auto overflow-y-auto max-h-[70vh] rounded border border-white/10">
       <table class="border-collapse text-sm w-full" style="min-width: max-content;">
         <thead>
-          <tr style="background-color: var(--color-nav-bg);">
+          <tr style="background-color: var(--bg-raised);">
             <th class="sticky top-0 left-0 z-20 px-3 py-2 text-left font-medium opacity-60 min-w-[5rem] border-b border-white/10"
-                style="background-color: var(--color-nav-bg);">
+                style="background-color: var(--bg-raised);">
               Stint
             </th>
             <th class="sticky top-0 z-10 px-3 py-2 text-left font-medium opacity-60 whitespace-nowrap min-w-[6rem] border-b border-white/10"
-                style="background-color: var(--color-nav-bg);">
+                style="background-color: var(--bg-raised);">
               Start Time
             </th>
             <th class="sticky top-0 z-10 px-2 py-2 border-b border-white/10"
-                style="background-color: var(--color-nav-bg);">
+                style="background-color: var(--bg-raised);">
             </th>
             {% for driver in drivers %}
             <th class="sticky top-0 z-10 px-3 py-2 text-center font-medium min-w-[7rem] border-b border-white/10"
-                style="background-color: var(--color-nav-bg);">
+                style="background-color: var(--bg-raised);">
               {{ driver.name }}
             </th>
             {% endfor %}
@@ -114,7 +114,7 @@
             <tr>
               <td colspan="{{ drivers|length|add:3 }}"
                   class="text-center font-semibold py-1 text-xs tracking-wider"
-                  style="background-color: var(--color-accent2); color: #111; opacity: 0.9;">
+                  style="background-color: var(--secondary); color: #111; opacity: 0.9;">
                 <span x-text="formatStintDate('{{ sw.start_utc|to_utc_z }}')"></span>
               </td>
             </tr>
@@ -123,7 +123,7 @@
           <tr class="border-t border-white/5 hover:bg-white/5 transition-colors">
 
             <td :class="rowClass({{ sw.stint_number }})"
-                :style="assignments[{{ sw.stint_number }}] ? 'background-color: var(--color-base)' : ''"
+                :style="assignments[{{ sw.stint_number }}] ? 'background-color: var(--bg)' : ''"
                 class="sticky left-0 z-10 font-mono text-center font-bold px-2 py-1.5">
               {{ sw.stint_number }}
             </td>
@@ -160,7 +160,7 @@
                      x-model="assignments[{{ sw.stint_number }}]"
                      @change="assignDriver({{ sw.stint_number }}, '{{ driver.id }}')"
                      class="cursor-pointer w-4 h-4"
-                     style="accent-color: var(--color-accent1);">
+                     style="accent-color: var(--primary);">
             </td>
             {% endfor %}
 
@@ -170,9 +170,9 @@
 
           {# Footer row: per-driver stint counts, reactive to radio selections #}
           <tr class="border-t-2 border-white/20 font-bold"
-              style="background-color: var(--color-nav-bg);">
+              style="background-color: var(--bg-raised);">
             <td class="sticky left-0 z-10 px-3 py-2 text-xs font-semibold opacity-60"
-                style="background-color: var(--color-nav-bg);">
+                style="background-color: var(--bg-raised);">
               Total
             </td>
             <td></td>
@@ -207,10 +207,7 @@
       <button type="submit"
               :disabled="saveState === 'saving'"
               :class="saveButtonClass"
-              class="px-6 py-2 rounded-lg font-semibold text-sm
-                     transition-all duration-200"
-              style="background-color: var(--color-accent1);
-                     color: #fff;">
+              class="btn-primary transition-all duration-200">
         <span x-text="saveButtonLabel">Save Assignments</span>
       </button>
 
@@ -271,16 +268,16 @@
       <thead>
         <tr>
           <th class="sticky top-0 left-0 z-20 px-2 py-2 text-left font-semibold opacity-60 border-b border-white/10"
-              style="background-color: var(--color-nav-bg);">
+              style="background-color: var(--bg-raised);">
             Stint
           </th>
           <th class="sticky top-0 z-10 px-3 py-2 text-left font-semibold opacity-60 border-b border-white/10 whitespace-nowrap"
-              style="background-color: var(--color-nav-bg);">
+              style="background-color: var(--bg-raised);">
             Start Time
           </th>
           {% for driver in drivers %}
           <th class="sticky top-0 z-10 px-3 py-2 text-center font-semibold border-b border-white/10 whitespace-nowrap min-w-[7rem]"
-              style="background-color: var(--color-nav-bg);">
+              style="background-color: var(--bg-raised);">
             {{ driver.name }}
           </th>
           {% endfor %}
@@ -290,7 +287,7 @@
         {% for sw in stint_windows %}
         <tr class="border-t border-white/5 hover:bg-white/5 transition-colors">
           <td class="sticky left-0 z-10 px-2 py-1.5 font-mono font-bold text-center"
-              style="background-color: var(--color-base);">
+              style="background-color: var(--bg);">
             {{ sw.stint_number }}
           </td>
           <td class="px-3 py-1.5 font-mono whitespace-nowrap opacity-80">
@@ -394,7 +391,7 @@
           return 'opacity-60 cursor-not-allowed';
         }
         if (this.isDirty) {
-          return 'ring-2 ring-offset-2 ring-[var(--color-accent1)] brightness-110';
+          return 'ring-2 ring-offset-2 ring-[var(--primary)] brightness-110';
         }
         return '';
       },

@@ -7,9 +7,9 @@
 
   <a href="{% url 'home' %}"
      class="inline-flex items-center gap-1 text-sm mb-6 opacity-60 hover:opacity-100 transition"
-     style="color: var(--color-text);">← Back to Home</a>
+     style="color: var(--text);">← Back to Home</a>
 
-  <h1 class="text-3xl font-bold mb-1" style="color: var(--color-accent1);">
+  <h1 class="text-3xl font-bold mb-1" style="color: var(--primary);">
     Update Your Availability
   </h1>
   <p class="text-base opacity-70 mb-6">{{ event.name }}</p>
@@ -17,8 +17,8 @@
   {% include "partials/signup_edit_form.html" with from_admin=from_admin %}
 
   <!-- ── Remove driver section ── -->
-  <div class="mt-10 pt-6 border-t" style="border-color: var(--color-accent2); opacity: 0.8;">
-    <p class="text-sm font-semibold mb-2" style="color: var(--color-text);">
+  <div class="mt-10 pt-6 border-t" style="border-color: var(--secondary); opacity: 0.8;">
+    <p class="text-sm font-semibold mb-2" style="color: var(--text);">
       Remove yourself from this event
     </p>
     <p class="text-xs opacity-60 mb-3">

@@ -3,52 +3,710 @@
 @source "../../templates/**/*.html";
 @source "../../events/**/*.py";
 
+/* ============================================================
+   EASING
+============================================================ */
 :root {
-  --color-base: #FFFFFF;
-  --color-accent1: #ff1493;
-  --color-accent2: #b9ff22;
-  --color-text: #111111;
-  --color-text-muted: #666666;
-  --color-border: #cccccc;
-  --color-nav-bg: #f5f5f5;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-html.dark {
-  --color-base: #191919;
-  --color-accent1: #dd630b;
-  --color-accent2: #46cecf;
-  --color-text: #f0f0f0;
-  --color-text-muted: #999999;
-  --color-border: #444444;
-  --color-nav-bg: #242424;
+/* ============================================================
+   DARK MODE TOKENS — data-theme="dark"
+============================================================ */
+[data-theme="dark"] {
+  --bg:          #191919;
+  --bg-raised:   #1f1f1f;
+  --bg-card:     #222222;
+  --border:      #2a2a2a;
+  --border-mid:  #333333;
+  --text:        #eeeeee;
+  --text-mid:    #888888;
+  --text-dim:    #444444;
+  --primary:     #dd630b;
+  --primary-dim: rgba(221, 99, 11, 0.12);
+  --secondary:   #46cecf;
+  --secondary-dim: rgba(70, 206, 207, 0.1);
+  --danger:      #c44444;
+  --rule:        rgba(221, 99, 11, 0.3);
+}
+
+/* ============================================================
+   LIGHT MODE TOKENS — data-theme="light"
+============================================================ */
+[data-theme="light"] {
+  --bg:          #ffffff;
+  --bg-raised:   #f7f7f7;
+  --bg-card:     #f0f0f0;
+  --border:      #e8e8e8;
+  --border-mid:  #d0d0d0;
+  --text:        #333333;
+  --text-mid:    #888888;
+  --text-dim:    #cccccc;
+  --primary:     #ff1493;
+  --primary-dim: rgba(255, 20, 147, 0.08);
+  --secondary:   #814dff;
+  --secondary-dim: rgba(129, 77, 255, 0.08);
+  --danger:      #c44444;
+  --rule:        rgba(255, 20, 147, 0.25);
+}
+
+/* ============================================================
+   BASE STYLES
+============================================================ */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
 }
 
 body {
-  background-color: var(--color-base);
-  color: var(--color-text);
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  min-height: 100vh;
+  transition: background 0.3s var(--ease), color 0.3s var(--ease);
+  overflow-x: hidden;
 }
 
-input, select, textarea {
-  background-color: var(--color-base);
-  color: var(--color-text);
-  border-color: var(--color-border);
+/* ============================================================
+   TYPOGRAPHY BASE
+============================================================ */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
 }
 
-input:not([type="checkbox"]):not([type="radio"]),
+/* ============================================================
+   ANIMATIONS
+============================================================ */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1; }
+}
+
+/* ============================================================
+   BACKGROUND TEXTURE
+   Subtle CSS grid lines with radial mask — applied to
+   .bg-grid element only, not the whole page
+============================================================ */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.35;
+  mask-image: radial-gradient(
+    ellipse 80% 60% at 50% 0%,
+    black 0%,
+    transparent 100%
+  );
+}
+
+/* ============================================================
+   ALPINE CLOAK
+============================================================ */
+[x-cloak] { display: none !important; }
+
+/* ============================================================
+   HEADER
+============================================================ */
+header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.3s var(--ease),
+              border-color 0.3s var(--ease);
+}
+
+/* ============================================================
+   BUTTONS
+   All buttons: DM Mono, 11px, 500 weight, uppercase, 0.1em tracking
+   No border-radius on any button.
+============================================================ */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--primary);
+  color: #fff;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  text-decoration: none;
+}
+.btn-primary:hover { opacity: 0.85; }
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--secondary);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--secondary);
+  border-radius: 0;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  text-decoration: none;
+}
+.btn-secondary:hover {
+  background: var(--secondary);
+  color: var(--bg);
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--text-mid);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-mid);
+  border-radius: 0;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  text-decoration: none;
+}
+.btn-ghost:hover {
+  border-color: var(--text-mid);
+  color: var(--text);
+}
+
+/* ============================================================
+   CARDS
+   Sharp corners. --bg-card background. 1px --border border.
+   2px gap between adjacent cards (spreadsheet feel).
+============================================================ */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 32px;
+  border-radius: 0;
+  transition: border-color 0.2s var(--ease),
+              background 0.2s var(--ease);
+}
+.card:hover {
+  border-color: var(--border-mid);
+}
+.card-primary:hover {
+  border-color: var(--primary);
+  background: var(--primary-dim);
+}
+.card-secondary:hover {
+  border-color: var(--secondary);
+  background: var(--secondary-dim);
+}
+
+/* ============================================================
+   INPUTS
+   No border-radius. DM Mono 12px. --border-mid border.
+   Transitions to --secondary on focus.
+============================================================ */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
 select,
 textarea {
-  border-width: 2px;
-  border-style: solid;
-  border-color: var(--color-border);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-mid);
+  border-radius: 0;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  padding: 10px 14px;
+  transition: border-color 0.2s var(--ease);
+  width: 100%;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--secondary);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-dim);
 }
 
-input:focus, select:focus, textarea:focus {
-  outline-color: var(--color-accent1);
+/* ============================================================
+   TABLES
+   1-2px row gap (not border-collapse).
+   Header row: --bg-raised, --text-dim, DM Mono 10px uppercase.
+   Data rows: --bg-card.
+============================================================ */
+.wac-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 2px;
+}
+.wac-table th {
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 7px 10px;
+  text-align: left;
+}
+.wac-table td {
+  background: var(--bg-card);
+  padding: 7px 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+.wac-table tbody tr:hover td {
+  background: var(--bg-raised);
 }
 
-.row-stripe {
-  background-color: rgba(0, 0, 0, 0.06);
+/* ============================================================
+   THEME TOGGLE BUTTON
+============================================================ */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border-mid);
+  color: var(--text-mid);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  border-radius: 2px;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
 }
-html.dark .row-stripe {
-  background-color: rgba(255, 255, 255, 0.06);
+.theme-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-dim);
+}
+
+/* ============================================================
+   WORDMARK
+============================================================ */
+.wordmark {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+  line-height: 1;
+  transition: color 0.3s var(--ease);
+  text-decoration: none;
+}
+.wordmark:hover {
+  color: var(--text);
+  opacity: 0.8;
+}
+
+/* ============================================================
+   LOGO DIVIDER
+============================================================ */
+.logo-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-mid);
+}
+
+/* ============================================================
+   EYEBROW / LABEL TEXT
+============================================================ */
+.eyebrow {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--secondary);
+}
+
+/* ============================================================
+   PAGE LOAD ANIMATION
+============================================================ */
+.fade-up {
+  animation: fadeUp 0.6s var(--ease) both;
+}
+.fade-up-delay-1 {
+  animation: fadeUp 0.6s 0.15s var(--ease) both;
+}
+.fade-up-delay-2 {
+  animation: fadeUp 0.6s 0.3s var(--ease) both;
+}
+
+/* ============================================================
+   FOOTER
+============================================================ */
+footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  z-index: 1;
+}
+.footer-left {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+}
+.footer-left span {
+  color: var(--primary);
+}
+.footer-right {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  font-style: italic;
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+/* ============================================================
+   MAIN CONTENT OFFSET
+   Accounts for fixed 56px header
+============================================================ */
+main {
+  padding-top: 56px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+
+/* ============================================================
+   HERO
+============================================================ */
+.hero {
+  padding: 80px 32px 72px;
+  max-width: 640px;
+}
+
+.hero-eyebrow {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-eyebrow::before {
+  content: '';
+  display: block;
+  width: 24px;
+  height: 1px;
+  background: var(--secondary);
+  flex-shrink: 0;
+}
+
+.hero-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: clamp(36px, 6vw, 64px);
+  font-weight: 700;
+  line-height: 1.0;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin-bottom: 20px;
+}
+
+.hero-title span {
+  color: var(--primary);
+}
+
+.hero-sub {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--text-mid);
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  max-width: 420px;
+  margin-bottom: 8px;
+}
+
+.hero-loading {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  font-style: italic;
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+/* ============================================================
+   DIVIDER RULE
+============================================================ */
+.rule {
+  height: 1px;
+  background: var(--border);
+  margin: 0 32px;
+  position: relative;
+  overflow: visible;
+}
+
+.rule::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0;
+  width: 80px;
+  height: 1px;
+  background: var(--primary);
+  opacity: 0.6;
+}
+
+/* ============================================================
+   ACTION SECTION
+============================================================ */
+.action-section {
+  padding: 56px 32px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  max-width: 900px;
+}
+
+.action-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 32px;
+  position: relative;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+.action-card:hover {
+  border-color: var(--border-mid);
+}
+
+.action-card.primary-card:hover {
+  border-color: var(--primary);
+  background: var(--primary-dim);
+}
+
+.action-card.secondary-card:hover {
+  border-color: var(--secondary);
+  background: var(--secondary-dim);
+}
+
+.card-number {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--text-dim);
+  margin-bottom: 24px;
+  text-transform: uppercase;
+}
+
+.card-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  line-height: 1;
+}
+
+.primary-card .card-title { color: var(--primary); }
+.secondary-card .card-title { color: var(--secondary); }
+
+.card-desc {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  color: var(--text-mid);
+  line-height: 1.7;
+  letter-spacing: 0.02em;
+  margin-bottom: 28px;
+}
+
+/* ============================================================
+   FIND FORM
+============================================================ */
+.find-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.find-form label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.find-hint {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   RECRUITING / RECENT SECTION
+============================================================ */
+.recent-section {
+  padding: 0 32px 64px;
+}
+
+.recent-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.recent-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  max-width: 200px;
+}
+
+.recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.recent-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  transition: border-color 0.15s, background 0.15s;
+  text-decoration: none;
+  color: inherit;
+}
+
+.recent-item:hover {
+  border-color: var(--border-mid);
+  background: var(--bg-raised);
+}
+
+.recent-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-item-name {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text);
+}
+
+.recent-item-meta {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-mid);
+  letter-spacing: 0.06em;
+}
+
+.recent-item-arrow {
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: color 0.15s, transform 0.15s;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.recent-item:hover .recent-item-arrow {
+  color: var(--primary);
+  transform: translateX(4px);
+}
+
+.recent-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--secondary);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ============================================================
+   MOBILE
+============================================================ */
+@media (max-width: 600px) {
+  header { padding: 0 16px; }
+  footer { padding: 16px; flex-direction: column;
+           gap: 6px; align-items: flex-start; }
+  main { padding-left: 16px; padding-right: 16px; }
+  .hero { padding: 48px 16px 48px; }
+  .rule { margin: 0 16px; }
+  .action-section {
+    padding: 40px 16px;
+    grid-template-columns: 1fr;
+  }
+  .recent-section { padding: 0 16px 48px; }
 }

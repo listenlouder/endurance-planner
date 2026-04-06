@@ -14,7 +14,7 @@
                value="true"
                {% if current_value %}checked{% endif %}
                class="w-5 h-5 rounded"
-               style="accent-color: var(--color-accent1);">
+               style="accent-color: var(--primary);">
         <span class="text-sm">List as recruiting on home page</span>
       </label>
 
@@ -22,7 +22,7 @@
       <textarea name="value"
                 rows="3"
                 class="w-full rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
-                style="border: 1px solid var(--color-accent2);">{{ current_value }}</textarea>
+                style="border: 1px solid var(--secondary);">{{ current_value }}</textarea>
 
     {% elif field_name == 'length_hours' %}
       <div class="flex items-center gap-3"
@@ -36,9 +36,9 @@
                  placeholder="0"
                  autofocus
                  class="w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none"
-                 style="background-color: var(--color-base);
-                        color: var(--color-text);
-                        border-color: var(--color-accent1);">
+                 style="background-color: var(--bg);
+                        color: var(--text);
+                        border-color: var(--primary);">
           <span class="text-xs opacity-60">hrs</span>
         </div>
         <div class="flex items-center gap-1">
@@ -48,9 +48,9 @@
                  min="0" max="59"
                  placeholder="0"
                  class="w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none"
-                 style="background-color: var(--color-base);
-                        color: var(--color-text);
-                        border-color: var(--color-accent1);">
+                 style="background-color: var(--bg);
+                        color: var(--text);
+                        border-color: var(--primary);">
           <span class="text-xs opacity-60">min</span>
         </div>
       </div>
@@ -64,7 +64,7 @@
              title="Enter time as M:SS (e.g. 1:45)"
              autofocus
              class="w-full rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
-             style="border: 1px solid var(--color-accent2);">
+             style="border: 1px solid var(--secondary);">
       <p class="text-xs opacity-50 mt-1">Format: M:SS (e.g. 1:45 for 1 min 45 sec)</p>
 
     {% else %}
@@ -76,7 +76,7 @@
              {% if field_max %}max="{{ field_max }}"{% endif %}
              autofocus
              class="w-full rounded px-2 py-1 text-sm bg-transparent focus:outline-none focus:ring-1"
-             style="border: 1px solid var(--color-accent2);">
+             style="border: 1px solid var(--secondary);">
     {% endif %}
 
     {% if error %}
@@ -86,7 +86,7 @@
     <div class="flex gap-2 mt-2">
       <button type="submit"
               class="px-3 py-1 text-xs rounded font-medium"
-              style="background-color: var(--color-accent2); color: #111;">
+              style="background-color: var(--secondary); color: #111;">
         Save
       </button>
       <button type="button"
@@ -94,7 +94,7 @@
               hx-target="#field-{{ field_name }}-display"
               hx-swap="outerHTML"
               class="px-3 py-1 text-xs rounded"
-              style="border: 1px solid var(--color-accent2); color: var(--color-accent2);">
+              style="border: 1px solid var(--secondary); color: var(--secondary);">
         Cancel
       </button>
     </div>

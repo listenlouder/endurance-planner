@@ -1,16 +1,15 @@
 {% load tz_filters %}
-<tr id="driver-row-{{ driver.id }}"
-    class="border-b border-white/5 hover:bg-white/5 transition-colors">
-  <td class="py-2 pr-4">
+<tr id="driver-row-{{ driver.id }}" class="transition-colors">
+  <td>
     {% include 'partials/driver_name_display.html' with driver=driver event=event only %}
   </td>
-  <td class="py-2 pr-4 opacity-70 hidden lg:table-cell">{{ driver.timezone }}</td>
-  <td class="py-2 pr-4 text-center">{{ driver.stint_count }}</td>
-  <td class="py-2">
+  <td class="opacity-70 hidden lg:table-cell">{{ driver.timezone }}</td>
+  <td class="text-center">{{ driver.stint_count }}</td>
+  <td>
     <div class="flex items-center gap-3">
       <a href="{% url 'signup_edit' event.id driver.id %}?from=admin"
          class="text-xs underline"
-         style="color: var(--color-accent2);">
+         style="color: var(--secondary);">
         Edit Availability
       </a>
       <button hx-delete="{% url 'admin_remove_driver' event.id driver.id %}"

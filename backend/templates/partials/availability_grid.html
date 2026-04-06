@@ -4,14 +4,14 @@
   </div>
 {% else %}
   <div class="max-h-96 overflow-y-auto rounded-lg border"
-       style="border-color: var(--color-accent2);">
+       style="border-color: var(--secondary);">
     <template x-for="(slot, i) in slotTimestamps" :key="i">
       <div>
         <!-- Date divider when day changes -->
         <div x-show="isNewDay(i)"
              x-text="formatDate(slotTimestamps[i])"
              class="px-3 py-1 text-xs font-semibold sticky top-0"
-             style="background-color: var(--color-nav-bg); color: var(--color-accent1); border-bottom: 1px solid var(--color-accent2);">
+             style="background-color: var(--bg-raised); color: var(--primary); border-bottom: 1px solid var(--secondary);">
         </div>
         <!-- Slot row -->
         <label class="flex items-center gap-3 px-4 py-3 min-h-[44px] cursor-pointer transition-colors select-none"
@@ -21,9 +21,9 @@
                  :value="slotTimestamps[i]"
                  x-model="checked[i]"
                  class="w-5 h-5 shrink-0"
-                 style="accent-color: var(--color-accent1);">
+                 style="accent-color: var(--primary);">
           <span x-text="formatTime(slotTimestamps[i])"
-                class="text-sm" style="color: var(--color-text);"></span>
+                class="text-sm" style="color: var(--text);"></span>
         </label>
       </div>
     </template>

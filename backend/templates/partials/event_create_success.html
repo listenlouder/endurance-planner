@@ -5,23 +5,23 @@
     Event created successfully!
   </div>
 
-  <h2 class="text-2xl font-bold text-center" style="color: var(--color-accent1);">
+  <h2 class="text-2xl font-bold text-center" style="color: var(--primary);">
     {{ event.name }}
   </h2>
 
   <!-- Links box -->
   <div class="rounded-xl border p-6 flex flex-col gap-6"
-       style="border-color: var(--color-accent2); background-color: var(--color-nav-bg);">
+       style="border-color: var(--secondary); background-color: var(--bg-raised);">
 
     <!-- Admin link -->
     <div class="flex flex-col gap-2">
-      <p class="text-sm font-semibold" style="color: var(--color-text);">
+      <p class="text-sm font-semibold" style="color: var(--text);">
         Admin page
         <span class="font-normal opacity-60 ml-1">(keep this link private)</span>
       </p>
       <a href="{{ base_url }}{{ event.id }}/admin/{{ event.admin_key }}/"
          class="text-sm break-all hover:underline"
-         style="color: var(--color-accent1);"
+         style="color: var(--primary);"
          target="_blank">
         {{ base_url }}{{ event.id }}/admin/{{ event.admin_key }}/
       </a>
@@ -30,7 +30,7 @@
         readonly
         value="{{ base_url }}{{ event.id }}/admin/{{ event.admin_key }}/"
         class="w-full px-3 py-2 rounded border text-xs font-mono cursor-text select-all focus:outline-none focus:ring-1"
-        style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+        style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
         onclick="this.select()"
       />
       <div class="rounded-lg px-3 py-2 text-xs bg-amber-600 border border-amber-500 text-white">
@@ -38,17 +38,17 @@
       </div>
     </div>
 
-    <hr style="border-color: var(--color-accent2); opacity: 0.3;" />
+    <hr style="border-color: var(--secondary); opacity: 0.3;" />
 
     <!-- Driver signup link -->
     <div class="flex flex-col gap-2">
-      <p class="text-sm font-semibold" style="color: var(--color-text);">
+      <p class="text-sm font-semibold" style="color: var(--text);">
         Driver signup link
         <span class="font-normal opacity-60 ml-1">(share this with your drivers)</span>
       </p>
       <a href="{{ base_url }}{{ event.id }}/signup/"
          class="text-sm break-all hover:underline"
-         style="color: var(--color-accent1);"
+         style="color: var(--primary);"
          target="_blank">
         {{ base_url }}{{ event.id }}/signup/
       </a>
@@ -57,22 +57,22 @@
         readonly
         value="{{ base_url }}{{ event.id }}/signup/"
         class="w-full px-3 py-2 rounded border text-xs font-mono cursor-text select-all focus:outline-none focus:ring-1"
-        style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+        style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
         onclick="this.select()"
       />
     </div>
 
-    <hr style="border-color: var(--color-accent2); opacity: 0.3;" />
+    <hr style="border-color: var(--secondary); opacity: 0.3;" />
 
     <!-- View-only link -->
     <div class="flex flex-col gap-2">
-      <p class="text-sm font-semibold" style="color: var(--color-text);">
+      <p class="text-sm font-semibold" style="color: var(--text);">
         View-only page
         <span class="font-normal opacity-60 ml-1">(safe to share publicly)</span>
       </p>
       <a href="{{ base_url }}{{ event.id }}/view/"
          class="text-sm break-all hover:underline"
-         style="color: var(--color-accent1);"
+         style="color: var(--primary);"
          target="_blank">
         {{ base_url }}{{ event.id }}/view/
       </a>
@@ -81,7 +81,7 @@
         readonly
         value="{{ base_url }}{{ event.id }}/view/"
         class="w-full px-3 py-2 rounded border text-xs font-mono cursor-text select-all focus:outline-none focus:ring-1"
-        style="background-color: var(--color-base); color: var(--color-text); border-color: var(--color-accent2);"
+        style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
         onclick="this.select()"
       />
     </div>
@@ -91,7 +91,7 @@
   <!-- View event button -->
   <a href="{{ base_url }}{{ event.id }}/view/"
      class="block text-center py-2 px-6 rounded-lg font-semibold transition hover:opacity-80 active:scale-95"
-     style="background-color: var(--color-accent1); color: #fff;">
+     style="background-color: var(--primary); color: #fff;">
     View Event
   </a>
 
