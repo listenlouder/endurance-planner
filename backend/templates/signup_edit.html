@@ -1,42 +1,63 @@
 {% extends "base.html" %}
 
-{% block title %}{{ event.name }} Signup — WeAreChecking{% endblock %}
+{% block title %}{{ event.name }} — Edit Availability — WeAreChecking{% endblock %}
 
 {% block content %}
-<div class="max-w-lg mx-auto">
 
-  <a href="{% url 'home' %}"
-     class="inline-flex items-center gap-1 text-sm mb-6 opacity-60 hover:opacity-100 transition"
-     style="color: var(--text);">← Back to Home</a>
+<!-- ============================================================
+     PAGE HEADER
+============================================================ -->
+<section class="page-header fade-up">
+  <div class="page-eyebrow">Edit Availability</div>
+  <h1 class="page-title">{{ event.name }}</h1>
+  <p class="page-sub">
+    Update your available time slots below.
+    All times are shown in your local timezone.
+  </p>
+</section>
 
-  <h1 class="text-3xl font-bold mb-1" style="color: var(--primary);">
-    Update Your Availability
-  </h1>
-  <p class="text-base opacity-70 mb-6">{{ event.name }}</p>
+<!-- ============================================================
+     FORM
+============================================================ -->
+<div style="padding: 40px 32px 0; max-width: 680px;" class="fade-up-delay-1">
+  {% include 'partials/signup_edit_form.html' with from_admin=from_admin %}
+</div>
 
-  {% include "partials/signup_edit_form.html" with from_admin=from_admin %}
-
-  <!-- ── Remove driver section ── -->
-  <div class="mt-10 pt-6 border-t" style="border-color: var(--secondary); opacity: 0.8;">
-    <p class="text-sm font-semibold mb-2" style="color: var(--text);">
-      Remove yourself from this event
-    </p>
-    <p class="text-xs opacity-60 mb-3">
-      This will permanently delete your signup and availability data.
+<!-- ============================================================
+     REMOVE ME
+============================================================ -->
+<div style="padding: 0 32px 48px; max-width: 680px;" class="fade-up-delay-2">
+  <div style="padding: 24px 32px;
+              border: 1px solid var(--border);
+              border-top: 3px solid var(--danger);
+              background: var(--bg-card);">
+    <div style="font-size: 10px;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                color: var(--danger);
+                margin-bottom: 8px;">
+      Remove yourself
+    </div>
+    <p style="font-size: 11px;
+               color: var(--text-mid);
+               letter-spacing: 0.03em;
+               line-height: 1.6;
+               margin-bottom: 16px;">
+      Permanently deletes your signup and availability data. This cannot be undone.
     </p>
     <button
       hx-delete="{% url 'driver_delete' event.id driver.id %}"
-      hx-confirm="Are you sure you want to remove yourself from this event? This cannot be undone."
+      hx-confirm="Remove yourself from {{ event.name }}? This cannot be undone."
       hx-target="body"
       hx-push-url="/"
       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-      class="px-4 py-2 rounded-lg text-sm font-medium border transition hover:opacity-80"
-      style="border-color: #ef4444; color: #ef4444;">
+      class="btn-secondary"
+      style="border-color: var(--danger); color: var(--danger);">
       Remove me from this event
     </button>
   </div>
-
 </div>
+
 {% endblock %}
 
 {% block extra_js %}
@@ -46,17 +67,40 @@
   const detectedTz = '{{ driver.timezone|escapejs }}';
 
   function signupEditData() {
+    const initTz = (window.submittedTimezone && window.submittedTimezone !== '')
+      ? window.submittedTimezone : detectedTz;
     return {
-      timezone: detectedTz,
+      timezone: initTz,
+      tzOverrideOpen: false,
       slotTimestamps: slotTimestamps,
-      checked: slotTimestamps.map(s => existingSlots.includes(s)),
+      checked: slotTimestamps.map(s => (window.existingSlots || []).includes(s)),
+
+      get tzShort() {
+        return new Intl.DateTimeFormat('en', { timeZoneName: 'short', timeZone: this.timezone })
+          .formatToParts(new Date())
+          .find(p => p.type === 'timeZoneName')?.value || '';
+      },
+
+      get flatSlots() {
+        const result = [];
+        let lastDay = '';
+        for (let i = 0; i < this.slotTimestamps.length; i++) {
+          const day = this.formatDate(this.slotTimestamps[i]);
+          if (day !== lastDay) {
+            result.push({ type: 'sep', label: day, index: -1, ts: '' });
+            lastDay = day;
+          }
+          result.push({ type: 'slot', label: '', index: i, ts: this.slotTimestamps[i] });
+        }
+        return result;
+      },
 
       formatTime(utcString) {
         return new Date(utcString).toLocaleTimeString('en-US', {
           timeZone: this.timezone,
           hour: '2-digit',
           minute: '2-digit',
-          hour12: true,
+          hour12: false,
         });
       },
 
@@ -67,14 +111,6 @@
           month: 'short',
           day: 'numeric',
         });
-      },
-
-      isNewDay(i) {
-        if (i === 0) return true;
-        const opts = { timeZone: this.timezone, year: 'numeric', month: 'numeric', day: 'numeric' };
-        const prev = new Date(this.slotTimestamps[i - 1]).toLocaleDateString('en-US', opts);
-        const curr = new Date(this.slotTimestamps[i]).toLocaleDateString('en-US', opts);
-        return prev !== curr;
       },
 
       selectAll() { this.checked = this.checked.map(() => true); },

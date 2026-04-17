@@ -1,22 +1,41 @@
 {% load tz_filters %}
-{% if drivers %}
-  <div class="overflow-x-auto">
-    <table class="wac-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th class="hidden lg:table-cell">Timezone</th>
-          <th class="text-center">Stints</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for driver in drivers %}
-          {% include "partials/driver_row.html" with driver=driver event=event admin_tz=admin_tz csrf_token=csrf_token only %}
-        {% endfor %}
-      </tbody>
-    </table>
+{% for driver in drivers %}
+<div class="driver-row" id="driver-row-{{ driver.id }}">
+  <div class="driver-row-left">
+    {% include 'partials/driver_name_display.html' with driver=driver event=event only %}
+    <span class="driver-meta">
+      signed up {{ driver.signed_up_at|timesince }} ago
+    </span>
   </div>
-{% else %}
-  <p class="text-sm opacity-50">No drivers have signed up yet.</p>
-{% endif %}
+  <div class="driver-row-right">
+    <span class="avail-count">
+      <span>
+        {{ availability_matrix|dict_get:driver.id|length }}
+      </span>
+      / {{ slots|length }} slots available
+    </span>
+    <a href="{% url 'signup_edit' event.id driver.id %}?from=admin"
+       class="copy-btn">
+      Edit avail
+    </a>
+    <button class="btn-remove"
+            hx-delete="{% url 'admin_remove_driver' event.id driver.id %}"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            hx-confirm="Remove {{ driver.name }}? This will delete their availability and any assigned stints."
+            hx-target="#driver-row-{{ driver.id }}"
+            hx-swap="outerHTML">
+      Remove
+    </button>
+  </div>
+</div>
+{% empty %}
+<div style="padding: 20px;
+             border: 1px solid var(--border);
+             background: var(--bg-card);">
+  <p style="font-size: 11px;
+              color: var(--text-dim);
+              letter-spacing: 0.04em;">
+    No drivers have signed up yet. Share the signup link to add drivers.
+  </p>
+</div>
+{% endfor %}

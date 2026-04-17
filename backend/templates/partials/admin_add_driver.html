@@ -1,0 +1,100 @@
+{% load static %}
+<div x-data="{ open: false }" style="margin-top: 16px;">
+  <button @click="open = !open" class="btn-ghost">
+    <span x-text="open ? 'Cancel' : '+ Add Driver'"></span>
+  </button>
+
+  <div x-show="open"
+       x-transition
+       style="margin-top: 12px;
+              padding: 20px;
+              border: 1px solid var(--border);
+              background: var(--bg-card);">
+
+    <form hx-post="{% url 'admin_add_driver' event.id %}"
+          hx-target="#driver-list-container"
+          hx-swap="innerHTML"
+          @htmx:after-request="if ($event.detail.successful) {
+            open = false;
+            $el.reset();
+            $dispatch('driver-form-reset');
+          }">
+      {% csrf_token %}
+
+      <div x-data="{
+        timezone: 'UTC',
+        slotTimestamps: slotTimestamps,
+        checked: Array(slotTimestamps ? slotTimestamps.length : 0).fill(false),
+        formatTime(utcString) {
+          return new Date(utcString).toLocaleTimeString('en-US', {
+            timeZone: this.timezone, hour: '2-digit', minute: '2-digit', hour12: true
+          });
+        },
+        formatDate(utcString) {
+          return new Date(utcString).toLocaleDateString('en-US', {
+            timeZone: this.timezone, weekday: 'short', month: 'short', day: 'numeric'
+          });
+        },
+        isNewDay(i) {
+          if (i === 0) return true;
+          const opts = { timeZone: this.timezone, year: 'numeric', month: 'numeric', day: 'numeric' };
+          const prev = new Date(this.slotTimestamps[i-1]).toLocaleDateString('en-US', opts);
+          const curr = new Date(this.slotTimestamps[i]).toLocaleDateString('en-US', opts);
+          return prev !== curr;
+        },
+        selectAll() { this.checked = this.checked.map(() => true); },
+        clearAll()  { this.checked = this.checked.map(() => false); },
+        reset()     { this.timezone = 'UTC'; this.checked = this.checked.map(() => false); }
+      }"
+      @driver-form-reset.window="reset()"
+      @timezone-selected.window="timezone = $event.detail.value"
+      style="display: flex; flex-direction: column; gap: 16px;">
+
+        <div>
+          <span class="detail-label" style="display: block; margin-bottom: 6px;">Driver Name</span>
+          <input type="text"
+                 name="driver_name"
+                 required
+                 class="detail-input"
+                 style="border-bottom: 1px solid var(--border-mid);
+                        padding-bottom: 4px;">
+        </div>
+
+        <div>
+          <span class="detail-label" style="display: block; margin-bottom: 6px;">Timezone</span>
+          {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
+        </div>
+
+        {% if slots %}
+        <div>
+          <div style="display: flex; align-items: center;
+                       justify-content: space-between;
+                       margin-bottom: 8px;">
+            <span class="detail-label">Availability</span>
+            <div style="display: flex; gap: 8px;">
+              <button type="button"
+                      @click="selectAll()"
+                      class="btn-ghost"
+                      style="padding: 4px 10px; font-size: 10px;">
+                Select All
+              </button>
+              <button type="button"
+                      @click="clearAll()"
+                      class="btn-ghost"
+                      style="padding: 4px 10px; font-size: 10px;">
+                Clear All
+              </button>
+            </div>
+          </div>
+          {% include 'partials/availability_grid.html' %}
+        </div>
+        {% endif %}
+
+        <div>
+          <button type="submit" class="btn-primary">Add Driver</button>
+        </div>
+
+      </div>
+    </form>
+  </div>
+</div>

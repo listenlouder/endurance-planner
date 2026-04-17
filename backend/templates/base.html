@@ -101,6 +101,7 @@
   </div>
 
   <div style="display:flex; align-items:center; gap:16px;">
+    {% block header_right %}{% endblock %}
     <button class="theme-toggle"
             @click="theme = theme === 'dark' ? 'light' : 'dark'"
             :title="theme === 'dark'

@@ -1,146 +1,171 @@
+<style>
+  .length-input::placeholder { color: var(--text-mid); }
+</style>
+
 <div id="create-form-container">
 
-  <h1 class="text-3xl font-bold mb-6" style="color: var(--primary);">
-    Create New Event
-  </h1>
+<form hx-post="{% url 'event_create' %}"
+      hx-target="#create-form-container"
+      hx-swap="outerHTML"
+      method="post">
+  {% csrf_token %}
 
-  <form method="post"
-        hx-post="{% url 'event_create' %}"
-        hx-target="#create-form-container"
-        hx-swap="outerHTML"
-        class="flex flex-col gap-5">
-    {% csrf_token %}
+  <!-- Non-field errors -->
+  {% if form.non_field_errors %}
+  <div style="margin-bottom: 2px;
+               padding: 12px 16px;
+               border: 1px solid var(--danger);
+               background: var(--danger-dim);
+               border-left: 3px solid var(--danger);">
+    <p style="font-size: 10px;
+               color: var(--danger);
+               letter-spacing: 0.08em;">
+      {{ form.non_field_errors|join:" " }}
+    </p>
+  </div>
+  {% endif %}
 
-    <!-- Non-field errors -->
-    {% if form.non_field_errors %}
-    <div class="rounded-lg px-4 py-3 bg-amber-600 border border-amber-500 text-white text-sm">
-      {% for error in form.non_field_errors %}
-        <p>{{ error }}</p>
-      {% endfor %}
-    </div>
-    {% endif %}
+  <!-- ── Card 1: Race Identity ────────────────────────────── -->
+  <div class="form-card">
+    <div class="form-card-title">Event Details</div>
+    <div class="field-group">
 
-    <!-- Event name -->
-    <div class="flex flex-col gap-1">
-      <label for="{{ form.name.id_for_label }}"
-             class="text-sm font-medium"
-             style="color: var(--text);">
-        {{ form.name.label }}
-      </label>
-      <input
-        type="text"
-        name="{{ form.name.html_name }}"
-        id="{{ form.name.id_for_label }}"
-        value="{{ form.name.value|default:'' }}"
-        maxlength="255"
-        placeholder="e.g. Spa 24 Hours 2025"
-        class="w-full"
-        style="background-color: var(--bg); color: var(--text); border-color: {% if form.name.errors %}#ef4444{% else %}var(--secondary){% endif %};"
-      />
-      {% if form.name.errors %}
-        <p class="text-red-500 text-sm mt-1">{{ form.name.errors|join:", " }}</p>
-      {% endif %}
-    </div>
+      <!-- Event name -->
+      <div class="field {% if form.name.errors %}has-error{% endif %}">
+        <label for="{{ form.name.id_for_label }}">
+          Event name <span class="required">*</span>
+        </label>
+        {{ form.name }}
+        {% if form.name.errors %}
+        <span class="field-error">{{ form.name.errors|join:", " }}</span>
+        {% endif %}
+      </div>
 
-    <!-- Race date -->
-    <div class="flex flex-col gap-1">
-      <label for="{{ form.date.id_for_label }}"
-             class="text-sm font-medium"
-             style="color: var(--text);">
-        {{ form.date.label }}
-      </label>
-      <input
-        type="date"
-        name="{{ form.date.html_name }}"
-        id="{{ form.date.id_for_label }}"
-        value="{{ form.date.value|default:'' }}"
-        class="w-full"
-        style="background-color: var(--bg); color: var(--text); border-color: {% if form.date.errors %}#ef4444{% else %}var(--secondary){% endif %};"
-      />
-      {% if form.date.errors %}
-        <p class="text-red-500 text-sm mt-1">{{ form.date.errors|join:", " }}</p>
-      {% endif %}
-      <p class="text-xs opacity-50 mt-1">Select a date using the calendar picker. Must be today or future.</p>
-    </div>
+      <!-- Team name -->
+      <div class="field {% if form.team_name.errors %}has-error{% endif %}">
+        <label for="{{ form.team_name.id_for_label }}">Team name</label>
+        {{ form.team_name }}
+        {% if form.team_name.errors %}
+        <span class="field-error">{{ form.team_name.errors|join:", " }}</span>
+        {% endif %}
+      </div>
 
-    <!-- Start time UTC -->
-    <div class="flex flex-col gap-1">
-      <label for="{{ form.start_time_utc.id_for_label }}"
-             class="text-sm font-medium"
-             style="color: var(--text);">
-        {{ form.start_time_utc.label }}
-      </label>
-      <input
-        type="time"
-        name="{{ form.start_time_utc.html_name }}"
-        id="{{ form.start_time_utc.id_for_label }}"
-        value="{{ form.start_time_utc.value|default:'' }}"
-        class="w-full"
-        style="background-color: var(--bg); color: var(--text); border-color: {% if form.start_time_utc.errors %}#ef4444{% else %}var(--secondary){% endif %};"
-      />
-      {% if form.start_time_utc.errors %}
-        <p class="text-red-500 text-sm mt-1">{{ form.start_time_utc.errors|join:", " }}</p>
-      {% endif %}
-      <p class="text-xs opacity-50 mt-1">Enter the race start time in UTC/GMT. Example: 13:00 for 1:00 PM UTC.</p>
-    </div>
-
-    <!-- Race length: hours + minutes inputs -->
-    <div class="flex flex-col gap-1">
-      <label class="text-sm font-medium" style="color: var(--text);">
-        Race Length
-      </label>
-      <div class="flex items-center gap-3"
-           x-data
-           @input="$event.target.value = $event.target.value.replace(/[^0-9]/g, '')">
-        <div class="flex items-center gap-1">
-          {{ form.length_hours }}
-          <span class="text-sm opacity-60">hrs</span>
+      <!-- Car + Track -->
+      <div class="field-row">
+        <div class="field {% if form.car.errors %}has-error{% endif %}">
+          <label for="{{ form.car.id_for_label }}">Car</label>
+          {{ form.car }}
+          {% if form.car.errors %}
+          <span class="field-error">{{ form.car.errors|join:", " }}</span>
+          {% endif %}
         </div>
-        <div class="flex items-center gap-1">
-          {{ form.length_minutes }}
-          <span class="text-sm opacity-60">min</span>
+        <div class="field {% if form.track.errors %}has-error{% endif %}">
+          <label for="{{ form.track.id_for_label }}">Track</label>
+          {{ form.track }}
+          {% if form.track.errors %}
+          <span class="field-error">{{ form.track.errors|join:", " }}</span>
+          {% endif %}
         </div>
       </div>
-      <p class="text-xs opacity-50 mt-1">Example: 24 hrs 0 min for a 24 hour race.</p>
-      {% if form.length_hours.errors %}
-        <p class="text-red-500 text-xs mt-1">{{ form.length_hours.errors|join:", " }}</p>
-      {% endif %}
-      {% if form.length_minutes.errors %}
-        <p class="text-red-500 text-xs mt-1">{{ form.length_minutes.errors|join:", " }}</p>
-      {% endif %}
-    </div>
 
-    <!-- Recruiting -->
-    <div class="mb-6">
-      <label class="flex items-center gap-3 cursor-pointer group">
-        <input type="checkbox"
-               name="recruiting"
-               id="id_recruiting"
-               {% if form.recruiting.value %}checked{% endif %}
-               class="w-5 h-5 rounded cursor-pointer flex-shrink-0"
-               style="accent-color: var(--primary);">
-        <div>
-          <span class="text-sm font-medium">
-            List this event as recruiting drivers
-          </span>
-          <p class="text-xs opacity-50 mt-0.5">
-            Shows your event on the home page so drivers can
-            find and sign up for it.
-          </p>
+    </div>
+  </div>
+
+  <!-- ── Card 2: Race Schedule ────────────────────────────── -->
+  <div class="form-card">
+    <div class="form-card-title">Event Schedule</div>
+    <div class="field-group">
+
+      <!-- Date + Start time -->
+      <div class="field-row">
+        <div class="field {% if form.date.errors %}has-error{% endif %}">
+          <label for="{{ form.date.id_for_label }}">
+            Date <span class="required">*</span>
+          </label>
+          {{ form.date }}
+          <span class="field-hint">Must be today or future.</span>
+          {% if form.date.errors %}
+          <span class="field-error">{{ form.date.errors|join:", " }}</span>
+          {% endif %}
         </div>
-      </label>
-      {% if form.recruiting.errors %}
-        <p class="text-red-500 text-xs mt-1">
-          {{ form.recruiting.errors|join:", " }}
-        </p>
-      {% endif %}
+        <div class="field {% if form.start_time_utc.errors %}has-error{% endif %}">
+          <label for="{{ form.start_time_utc.id_for_label }}">
+            Start time (UTC) <span class="required">*</span>
+          </label>
+          {{ form.start_time_utc }}
+          <span class="field-hint">e.g. 13:00 = 1:00 PM UTC.</span>
+          {% if form.start_time_utc.errors %}
+          <span class="field-error">{{ form.start_time_utc.errors|join:", " }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Race length -->
+      <div class="field {% if form.length_hours.errors or form.length_minutes.errors %}has-error{% endif %}">
+        <label>Race length <span class="required">*</span></label>
+        <div style="display: flex; align-items: center; gap: 8px;"
+             x-data
+             @input="$event.target.value =
+               $event.target.value.replace(/[^0-9]/g, '')">
+          {{ form.length_hours }}
+          <span style="font-size: 10px;
+                        color: var(--text-dim);
+                        letter-spacing: 0.1em;">hrs</span>
+          {{ form.length_minutes }}
+          <span style="font-size: 10px;
+                        color: var(--text-dim);
+                        letter-spacing: 0.1em;">min</span>
+        </div>
+        <span class="field-hint">e.g. 24 hrs 0 min for a 24 hour race.</span>
+        {% if form.length_hours.errors %}
+        <span class="field-error">{{ form.length_hours.errors|join:", " }}</span>
+        {% endif %}
+        {% if form.length_minutes.errors %}
+        <span class="field-error">{{ form.length_minutes.errors|join:", " }}</span>
+        {% endif %}
+      </div>
+
+      <!-- Recruiting -->
+      <div class="field">
+        <label style="display: flex; align-items: flex-start;
+                      gap: 10px; cursor: pointer; text-transform: none;
+                      letter-spacing: 0;">
+          <input type="checkbox"
+                 name="{{ form.recruiting.html_name }}"
+                 id="{{ form.recruiting.id_for_label }}"
+                 {% if form.recruiting.value %}checked{% endif %}
+                 style="margin-top: 2px; flex-shrink: 0;
+                        accent-color: var(--primary);
+                        width: 14px; height: 14px;">
+          <div>
+            <span style="font-size: 10px;
+                          letter-spacing: 0.18em;
+                          text-transform: uppercase;
+                          color: var(--text-dim);
+                          display: block;
+                          margin-bottom: 4px;">
+              List as recruiting
+            </span>
+            <span class="field-hint">
+              Shows this event on the home page so drivers
+              can find and sign up.
+            </span>
+          </div>
+        </label>
+      </div>
+
     </div>
+  </div>
 
-    <!-- Submit -->
-    <button type="submit" class="btn-primary w-full mt-2">
-      Create Event
+  <!-- Submit -->
+  <div style="margin-top: 24px;">
+    <button type="submit" class="btn-primary"
+            style="width: 100%; justify-content: center;
+                   padding: 14px 24px;">
+      Create Event →
     </button>
+  </div>
 
-  </form>
+</form>
 
 </div>

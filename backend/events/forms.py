@@ -5,6 +5,9 @@ from datetime import datetime, timezone as dt_timezone
 
 class EventCreateForm(forms.Form):
     name = forms.CharField(max_length=255, label='Event name')
+    team_name = forms.CharField(max_length=255, required=False, label='Team name')
+    car = forms.CharField(max_length=255, required=False, label='Car')
+    track = forms.CharField(max_length=255, required=False, label='Track')
     date = forms.DateField(
         widget=forms.DateInput(attrs={'type': 'date'}),
         label='Race date',
@@ -16,13 +19,15 @@ class EventCreateForm(forms.Form):
     length_hours = forms.IntegerField(
         min_value=0,
         max_value=168,
+        initial=0,
         label='Race Length',
         required=True,
         widget=forms.NumberInput(attrs={
             'placeholder': '0',
             'min': '0',
             'max': '168',
-            'class': 'w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none',
+            'style': 'width: 80px;',
+            'class': 'length-input',
         })
     )
     length_minutes = forms.IntegerField(
@@ -34,7 +39,8 @@ class EventCreateForm(forms.Form):
             'placeholder': '0',
             'min': '0',
             'max': '59',
-            'class': 'w-20 px-2 py-1 rounded border-2 text-sm text-center focus:outline-none',
+            'style': 'width: 80px;',
+            'class': 'length-input',
         })
     )
 

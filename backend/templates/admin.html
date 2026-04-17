@@ -1,256 +1,835 @@
-{% extends "base.html" %}
-{% load tz_filters %}
+{% extends 'base.html' %}
+{% load static tz_filters %}
 
 {% block title %}{{ event.name }} Admin — WeAreChecking{% endblock %}
 
+{% block header_right %}
+<span class="admin-badge">Admin</span>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* Mobile warning */
+  .mobile-warning {
+    display: none;
+    background: var(--danger-dim);
+    border-bottom: 1px solid var(--danger);
+    padding: 10px 16px;
+    font-size: 10px;
+    color: var(--danger);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: center;
+  }
+  @media (max-width: 600px) {
+    .mobile-warning { display: block; }
+  }
+
+  /* Details grid responsive */
+  @media (max-width: 900px) {
+    .details-grid { grid-template-columns: 1fr; }
+    .detail-field.full-width { grid-column: 1; }
+  }
+</style>
+
+<!-- Timezone detection cookie set silently -->
+<script>
+  document.cookie = 'admin_timezone=' +
+    Intl.DateTimeFormat().resolvedOptions().timeZone +
+    '; path=/; SameSite=Lax';
+</script>
+
+<!-- Alpine data for stint calculation live preview -->
+<script>
+  function stintCalc(initial) {
+    return {
+      lapTime:      initial.lapTime      || '',
+      inLap:        initial.inLap        || '',
+      outLap:       initial.outLap       || '',
+      targetLaps:   initial.targetLaps   || 0,
+      fuelCapacity: initial.fuelCapacity || 0,
+      fuelBurn:     initial.fuelBurn     || 0,
+      raceSeconds:  initial.raceSeconds  || 0,
+      hasAssignments: initial.hasAssignments || false,
+
+      savedLapTime:      initial.lapTime      || '',
+      savedInLap:        initial.inLap        || '',
+      savedOutLap:       initial.outLap       || '',
+      savedTargetLaps:   initial.targetLaps   || 0,
+      savedFuelCapacity: initial.fuelCapacity || 0,
+      savedFuelBurn:     initial.fuelBurn     || 0,
+
+      get isDirty() {
+        return this.lapTime      !== this.savedLapTime      ||
+               this.inLap        !== this.savedInLap        ||
+               this.outLap       !== this.savedOutLap       ||
+               this.targetLaps   !== this.savedTargetLaps   ||
+               this.fuelCapacity !== this.savedFuelCapacity ||
+               this.fuelBurn     !== this.savedFuelBurn;
+      },
+
+      get showRebuildWarning() {
+        return this.isDirty && this.hasAssignments;
+      },
+
+      reset() {
+        this.lapTime      = this.savedLapTime;
+        this.inLap        = this.savedInLap;
+        this.outLap       = this.savedOutLap;
+        this.targetLaps   = this.savedTargetLaps;
+        this.fuelCapacity = this.savedFuelCapacity;
+        this.fuelBurn     = this.savedFuelBurn;
+      },
+
+      parseMMSS(val) {
+        if (!val || !val.includes(':')) return 0;
+        const parts = val.split(':');
+        if (parts.length !== 2) return 0;
+        const m = parseInt(parts[0]) || 0;
+        const s = parseInt(parts[1]) || 0;
+        return (m * 60) + s;
+      },
+
+      get avgLapSec()  { return this.parseMMSS(this.lapTime); },
+      get inLapSec()   { return this.parseMMSS(this.inLap); },
+      get outLapSec()  { return this.parseMMSS(this.outLap); },
+
+      get stintDurationSec() {
+        if (!this.avgLapSec || !this.targetLaps) return 0;
+        return (this.avgLapSec * this.targetLaps)
+          + this.inLapSec
+          + this.outLapSec
+          - (this.avgLapSec * 2);
+      },
+
+      get stintDurationDisplay() {
+        const s = this.stintDurationSec;
+        if (!s) return '—';
+        const m = Math.floor(s / 60);
+        const sec = s % 60;
+        return sec ? `${m}m ${sec}s` : `${m}m`;
+      },
+
+      get totalStints() {
+        if (!this.stintDurationSec || !this.raceSeconds) return '—';
+        return Math.ceil(this.raceSeconds / this.stintDurationSec);
+      },
+
+      get maxLapsOnFuel() {
+        if (!this.fuelCapacity || !this.fuelBurn) return '—';
+        return Math.floor(this.fuelCapacity / this.fuelBurn);
+      },
+
+      get fuelPerStint() {
+        if (!this.fuelBurn || !this.targetLaps) return '—';
+        return (this.fuelBurn * this.targetLaps).toFixed(1);
+      },
+
+      get fuelOverCapacity() {
+        if (!this.fuelBurn || !this.targetLaps || !this.fuelCapacity) return false;
+        return (this.fuelBurn * this.targetLaps) > this.fuelCapacity;
+      }
+    }
+  }
+</script>
+{% endblock %}
+
 {% block content %}
 
-{# Mobile warning — full-width banner at very top #}
-<div class="block md:hidden -mx-6 -mt-8 mb-6 bg-yellow-400 text-yellow-900 text-center p-4 text-sm font-medium">
-  ⚠️ The admin page is designed for desktop use. Some features may not work correctly on mobile.
+<!-- Mobile warning -->
+<div class="mobile-warning">
+  Admin page is designed for desktop use.
 </div>
 
-{# Django messages #}
-{% if messages %}
-  {% for message in messages %}
-    <div class="px-4 py-2 rounded mb-4 text-white text-sm
-                {% if message.tags == 'error' %}bg-red-500{% else %}bg-green-500{% endif %}">
-      {{ message }}
-    </div>
-  {% endfor %}
-{% endif %}
-
-{# Hidden div: sets the admin_timezone cookie on page load #}
-<div hx-post="{% url 'set_timezone' %}"
-     hx-trigger="load"
-     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-     hx-vals="js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
-     hx-swap="none">
+<!-- Toast notification -->
+<div class="toast"
+     id="adminToast"
+     x-data
+     @show-toast.window="
+       $el.textContent = 'Changes saved.';
+       $el.classList.add('visible');
+       setTimeout(() => $el.classList.remove('visible'), 2500)
+     ">
 </div>
 
-{# ── Page header ──────────────────────────────────────────────── #}
-<div class="mb-6">
-  <div class="text-center mb-4">
-    <h1 class="text-4xl font-bold mb-1" style="color: var(--primary);">
-      {{ event.name }}
-    </h1>
-    <p class="text-sm opacity-50">Times in: <span class="font-mono">{{ admin_tz }}</span></p>
-  </div>
-
-  <div class="flex flex-wrap justify-center gap-3">
-    <a href="{% url 'view_event' event.id %}" target="_blank"
+<!-- ============================================================
+     PAGE HEADER
+============================================================ -->
+<section class="page-header fade-up">
+  <div class="page-eyebrow">Admin</div>
+  <h1 class="page-title">{{ event.name }}</h1>
+  <p class="page-sub">
+    Manage event details, drivers, and stint assignments.
+  </p>
+  <div style="display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap;">
+    <a href="{% url 'view_event' event.id %}"
+       target="_blank"
        class="btn-secondary">
-      View Event ↗
+      View event ↗
     </a>
-    {% if event.has_required_stint_fields %}
-    <a href="{% url 'create_stints' event.id %}"
-       class="btn-primary">
-      Create Stints →
-    </a>
-    {% else %}
-    <span class="btn-ghost opacity-40 cursor-not-allowed"
-          title="Fill in all required timing and fuel fields to enable stint planning">
-      Create Stints (fields required)
+    <span style="font-size: 10px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.08em;
+                  align-self: center;
+                  margin-left: 8px;">
+      Times: {{ admin_tz }}
     </span>
-    {% endif %}
   </div>
-</div>
+</section>
 
-{# ── Row 1: Basic Info + Race Details ─────────────────────────── #}
-<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+<!-- ============================================================
+     SECTION 1 — EVENT DETAILS
+============================================================ -->
+<section class="admin-section fade-up-delay-1">
+  <div class="section-heading">Event Details</div>
 
-  {# Basic Info #}
-  <div class="card">
-    <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--border); color: var(--secondary);">
-      Basic Info
-    </h2>
-    <div class="space-y-1">
-      {% with group=field_groups.0 %}
-        {% for field_name, field_config, current_value, field_min, field_max in group.fields %}
-          {% include "partials/field_display.html" with field_name=field_name field_label=field_config.label field_type=field_config.type current_value=current_value field_min=field_min field_max=field_max event=event required_fields=required_fields missing_required_fields=missing_required_fields sanity_warnings=sanity_warnings only %}
-        {% endfor %}
-      {% endwith %}
-    </div>
-  </div>
+  <div id="admin-details-errors"></div>
 
-  {# Race Details #}
-  <div class="card">
-    <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--border); color: var(--secondary);">
-      Race Details
-    </h2>
-    <div class="space-y-1">
-      {% with group=field_groups.1 %}
-        {% for field_name, field_config, current_value, field_min, field_max in group.fields %}
-          {% include "partials/field_display.html" with field_name=field_name field_label=field_config.label field_type=field_config.type current_value=current_value field_min=field_min field_max=field_max event=event required_fields=required_fields missing_required_fields=missing_required_fields sanity_warnings=sanity_warnings only %}
-        {% endfor %}
-      {% endwith %}
-    </div>
-  </div>
+  <form hx-post="{% url 'admin_save_details' event.id %}"
+        hx-target="#admin-details-errors"
+        hx-swap="innerHTML"
+        hx-on::after-request="
+          if(event.detail.xhr.status === 200)
+            htmx.trigger(window, 'show-toast')
+        ">
+    {% csrf_token %}
 
-</div>
+    <div class="details-grid">
 
-{# ── Row 2: Timing & Fuel + Drivers ───────────────────────────── #}
-<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 md:items-start">
-
-  {# Timing & Fuel #}
-  <div class="card">
-    <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--border); color: var(--secondary);">
-      Timing &amp; Fuel
-    </h2>
-    <div class="space-y-1">
-      {% with group=field_groups.2 %}
-        {% for field_name, field_config, current_value, field_min, field_max in group.fields %}
-          {% include "partials/field_display.html" with field_name=field_name field_label=field_config.label field_type=field_config.type current_value=current_value field_min=field_min field_max=field_max event=event required_fields=required_fields missing_required_fields=missing_required_fields sanity_warnings=sanity_warnings only %}
-        {% endfor %}
-      {% endwith %}
-    </div>
-  </div>
-
-  {# Drivers #}
-  <div class="card">
-    <h2 class="text-base font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--border); color: var(--secondary);">
-      Drivers Signed Up
-      <span class="text-sm font-normal opacity-50">({{ drivers|length }})</span>
-    </h2>
-
-    {# Add Driver collapsible #}
-    <div x-data="{ open: false }" class="mb-4">
-      <button @click="open = !open" class="btn-secondary">
-        <span x-text="open ? 'Cancel' : '+ Add Driver'"></span>
-      </button>
-
-      <div x-show="open" x-transition class="mt-4 p-4 rounded-lg border"
-           style="border-color: var(--border); background-color: var(--bg);">
-
-        <form hx-post="{% url 'admin_add_driver' event.id %}"
-              hx-target="#driver-list-container"
-              hx-swap="innerHTML"
-              @htmx:after-request="if ($event.detail.successful) { open = false; $el.reset(); $dispatch('driver-form-reset'); }">
-          {% csrf_token %}
-
-          <div x-data="{
-            timezone: 'UTC',
-            slotTimestamps: slotTimestamps,
-            checked: Array(slotTimestamps ? slotTimestamps.length : 0).fill(false),
-            formatTime(utcString) {
-              return new Date(utcString).toLocaleTimeString('en-US', {
-                timeZone: this.timezone, hour: '2-digit', minute: '2-digit', hour12: true
-              });
-            },
-            formatDate(utcString) {
-              return new Date(utcString).toLocaleDateString('en-US', {
-                timeZone: this.timezone, weekday: 'short', month: 'short', day: 'numeric'
-              });
-            },
-            isNewDay(i) {
-              if (i === 0) return true;
-              const opts = { timeZone: this.timezone, year: 'numeric', month: 'numeric', day: 'numeric' };
-              const prev = new Date(this.slotTimestamps[i-1]).toLocaleDateString('en-US', opts);
-              const curr = new Date(this.slotTimestamps[i]).toLocaleDateString('en-US', opts);
-              return prev !== curr;
-            },
-            selectAll() { this.checked = this.checked.map(() => true); },
-            clearAll()  { this.checked = this.checked.map(() => false); },
-            reset()     { this.timezone = 'UTC'; this.checked = this.checked.map(() => false); }
-          }"
-          @driver-form-reset.window="reset()"
-          @timezone-selected.window="timezone = $event.detail.value"
-          class="flex flex-col gap-4">
-
-            <div>
-              <label class="text-sm font-medium block mb-1" style="color: var(--text);">Driver Name</label>
-              <input type="text" name="driver_name" required
-                     class="w-full px-3 py-2 rounded border text-sm focus:outline-none focus:ring-1"
-                     style="background-color: var(--bg-raised); color: var(--text); border-color: var(--border);">
-            </div>
-
-            <div>
-              <label class="text-sm font-medium block mb-1" style="color: var(--text);">Timezone</label>
-              {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
-            </div>
-
-            {% if slots %}
-            <div>
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-sm font-medium" style="color: var(--text);">Availability</span>
-                <div class="flex gap-2">
-                  <button type="button" @click="selectAll()"
-                          class="px-2 py-1 rounded text-xs border transition hover:opacity-80"
-                          style="border-color: var(--secondary); color: var(--text);">Select All</button>
-                  <button type="button" @click="clearAll()"
-                          class="px-2 py-1 rounded text-xs border transition hover:opacity-80"
-                          style="border-color: var(--secondary); color: var(--text);">Clear All</button>
-                </div>
-              </div>
-              {% include 'partials/availability_grid.html' %}
-            </div>
-            {% endif %}
-
-            <button type="submit" class="btn-primary">
-              Add Driver
-            </button>
-
-          </div>
-        </form>
+      <!-- Event name (full width) -->
+      <div class="detail-field full-width">
+        <span class="detail-label">Event name</span>
+        <input class="detail-input"
+               type="text"
+               name="name"
+               value="{{ event.name }}">
       </div>
+
+      <!-- Team name (full width) -->
+      <div class="detail-field full-width">
+        <span class="detail-label">Team name</span>
+        <input class="detail-input"
+               type="text"
+               name="team_name"
+               value="{{ event.team_name }}">
+      </div>
+
+      <!-- Date -->
+      <div class="detail-field">
+        <span class="detail-label">Date</span>
+        <input class="detail-input"
+               type="date"
+               name="date"
+               value="{{ event.date|date:'Y-m-d' }}">
+      </div>
+
+      <!-- Start time -->
+      <div class="detail-field">
+        <span class="detail-label">Start time (UTC)</span>
+        <input class="detail-input"
+               type="time"
+               name="start_time_utc"
+               value="{{ event.start_time_utc|time:'H:i' }}">
+      </div>
+
+      <!-- Race length -->
+      <div class="detail-field">
+        <span class="detail-label">Race length</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <input class="detail-input"
+                 type="number"
+                 name="length_hours"
+                 value="{{ length_hours_display }}"
+                 min="0" max="168"
+                 style="width: 80px;">
+          <span style="font-size: 10px; color: var(--text-dim);">hrs</span>
+          <input class="detail-input"
+                 type="number"
+                 name="length_minutes"
+                 value="{{ length_minutes_display }}"
+                 min="0" max="59"
+                 style="width: 80px;">
+          <span style="font-size: 10px; color: var(--text-dim);">min</span>
+        </div>
+      </div>
+
+      <!-- Car -->
+      <div class="detail-field">
+        <span class="detail-label">Car</span>
+        <input class="detail-input"
+               type="text"
+               name="car"
+               value="{{ event.car }}">
+      </div>
+
+      <!-- Track -->
+      <div class="detail-field">
+        <span class="detail-label">Track</span>
+        <input class="detail-input"
+               type="text"
+               name="track"
+               value="{{ event.track }}">
+      </div>
+
+      <!-- Setup -->
+      <div class="detail-field">
+        <span class="detail-label">Setup file</span>
+        <input class="detail-input"
+               type="text"
+               name="setup"
+               value="{{ event.setup }}">
+      </div>
+
+      <!-- Recruiting -->
+      <div class="detail-field full-width">
+        <span class="detail-label">Recruiting</span>
+        <label style="display: flex; align-items: center;
+                       gap: 8px; cursor: pointer; margin-top: 4px;">
+          <input type="checkbox"
+                 name="recruiting"
+                 {% if event.recruiting %}checked{% endif %}
+                 style="accent-color: var(--primary); width: 14px; height: 14px;">
+          <span style="font-size: 11px; color: var(--text-mid); letter-spacing: 0.04em;">
+            List this event on the home page
+          </span>
+        </label>
+      </div>
+
     </div>
 
-    <div id="driver-list-container">
-      {% include "partials/driver_list.html" with drivers=drivers event=event admin_tz=admin_tz csrf_token=csrf_token only %}
+    <div class="details-actions">
+      <button type="submit" class="btn-primary">Save Changes</button>
+      <button type="button"
+              class="btn-ghost"
+              @click="window.location.reload()">
+        Discard
+      </button>
     </div>
+  </form>
+
+</section>
+
+<!-- ============================================================
+     SECTION 2 — STINT CALCULATION
+============================================================ -->
+<section class="admin-section fade-up-delay-1"
+         x-data="stintCalc({
+           lapTime:        '{{ event.avg_lap_seconds|seconds_to_mmss }}',
+           inLap:          '{{ event.in_lap_seconds|seconds_to_mmss }}',
+           outLap:         '{{ event.out_lap_seconds|seconds_to_mmss }}',
+           targetLaps:     {{ event.target_laps|default:0 }},
+           fuelCapacity:   {{ event.fuel_capacity|default:0 }},
+           fuelBurn:       {{ event.fuel_per_lap|default:0 }},
+           raceSeconds:    {{ event.length_seconds|default:0 }},
+           hasAssignments: {{ has_assignments|yesno:'true,false' }},
+         })">
+
+  <div class="section-heading">Stint Calculation</div>
+
+  <div id="admin-calc-errors"></div>
+
+  <form hx-post="{% url 'admin_save_calc' event.id %}"
+        hx-target="#admin-calc-errors"
+        hx-swap="innerHTML">
+    {% csrf_token %}
+
+    <div class="details-grid" style="max-width: 700px; margin-bottom: 2px;">
+
+      <!-- Avg lap time -->
+      <div class="detail-field">
+        <span class="detail-label">Avg lap time (MM:SS)</span>
+        <input class="detail-input"
+               type="text"
+               name="avg_lap"
+               x-model="lapTime"
+               placeholder="e.g. 02:18">
+      </div>
+
+      <!-- Max fuel -->
+      <div class="detail-field">
+        <span class="detail-label">Max fuel (litres)</span>
+        <input class="detail-input"
+               type="number"
+               name="fuel_capacity"
+               x-model.number="fuelCapacity"
+               step="0.1"
+               placeholder="e.g. 120">
+      </div>
+
+      <!-- Fuel burn -->
+      <div class="detail-field">
+        <span class="detail-label">Avg fuel burn (l/lap)</span>
+        <input class="detail-input"
+               type="number"
+               name="fuel_burn"
+               x-model.number="fuelBurn"
+               step="0.01"
+               placeholder="e.g. 3.8">
+      </div>
+
+      <!-- Target laps -->
+      <div class="detail-field">
+        <span class="detail-label">Target laps per stint</span>
+        <input class="detail-input"
+               type="number"
+               name="target_laps"
+               x-model.number="targetLaps"
+               placeholder="e.g. 28">
+      </div>
+
+      <!-- In lap -->
+      <div class="detail-field">
+        <span class="detail-label">In lap time (MM:SS)</span>
+        <input class="detail-input"
+               type="text"
+               name="in_lap"
+               x-model="inLap"
+               placeholder="e.g. 02:45">
+      </div>
+
+      <!-- Out lap -->
+      <div class="detail-field">
+        <span class="detail-label">Out lap time (MM:SS)</span>
+        <input class="detail-input"
+               type="text"
+               name="out_lap"
+               x-model="outLap"
+               placeholder="e.g. 02:55">
+      </div>
+
+    </div>
+
+    <!-- Live calculation output -->
+    <div style="display: grid;
+                 grid-template-columns: repeat(4, 1fr);
+                 gap: 2px;
+                 max-width: 700px;
+                 margin-bottom: 16px;">
+
+      <div class="stat-card">
+        <span class="stat-label">Max laps on fuel</span>
+        <span class="stat-value" x-text="maxLapsOnFuel"></span>
+        <span class="stat-unit">laps</span>
+      </div>
+
+      <div class="stat-card accent">
+        <span class="stat-label">Stint duration</span>
+        <span class="stat-value" x-text="stintDurationDisplay"></span>
+        <span class="stat-unit">inc. in/out laps</span>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">Total stints</span>
+        <span class="stat-value" x-text="totalStints"></span>
+        <span class="stat-unit">
+          for {{ length_hours_display }}h{% if length_minutes_display %} {{ length_minutes_display }}m{% endif %} race
+        </span>
+      </div>
+
+      <div class="stat-card" :class="fuelOverCapacity ? 'danger' : ''">
+        <span class="stat-label">Fuel per stint</span>
+        <span class="stat-value" x-text="fuelPerStint"
+              :class="fuelOverCapacity ? 'danger' : ''"></span>
+        <span class="stat-unit">litres</span>
+        <template x-if="fuelOverCapacity">
+          <span style="font-size: 9px; color: var(--danger); letter-spacing: 0.06em; line-height: 1.4;">
+            ⚠ exceeds max fuel
+          </span>
+        </template>
+      </div>
+
+    </div>
+
+    <!-- Sanity warnings -->
+    {% if sanity_warnings %}
+    <div style="margin-bottom: 16px; max-width: 700px;">
+      {% for warning in sanity_warnings %}
+      <div style="padding: 10px 14px;
+                   border: 1px solid var(--danger);
+                   background: var(--danger-dim);
+                   border-left: 3px solid var(--danger);
+                   margin-bottom: 2px;">
+        <p style="font-size: 10px;
+                   color: var(--danger);
+                   letter-spacing: 0.06em;
+                   line-height: 1.5;">
+          ⚠ {{ warning }}
+        </p>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Rebuild warning -->
+    <template x-if="showRebuildWarning">
+      <div style="margin-bottom: 12px; max-width: 700px; padding: 10px 14px;
+                  border: 1px solid var(--primary); background: var(--bg-card);
+                  border-left: 3px solid var(--primary);">
+        <p style="font-size: 10px; color: var(--text-mid); letter-spacing: 0.06em; line-height: 1.5;">
+          ⚠ Inputs changed — hit Recalculate to apply to the stint table. Existing assignments will be preserved where possible.
+        </p>
+      </div>
+    </template>
+
+    <div class="details-actions">
+      <button type="submit"
+              class="btn-primary"
+              :style="showRebuildWarning ? 'outline: 1px solid var(--primary); outline-offset: 2px;' : ''">
+        Recalculate
+      </button>
+      <button type="button" class="btn-ghost" @click="reset()">Reset</button>
+    </div>
+
+  </form>
+
+</section>
+
+<!-- ============================================================
+     SECTION 3 — DRIVERS
+============================================================ -->
+<section class="admin-section fade-up-delay-2">
+  <div class="section-heading">Drivers Signed Up</div>
+
+  <!-- Driver list -->
+  <div id="driver-list-container" style="margin-bottom: 16px;">
+    {% include 'partials/driver_list.html' %}
   </div>
 
-</div>
-
-{# ── Row 3: Stint Calculation ─────────────────────────────────── #}
-<div class="rounded-xl p-6 mb-6"
-     style="border: 1px solid var(--border);
-            background-color: var(--bg-raised);">
-  <h2 class="text-base font-bold mb-4 pb-2 border-b"
-      style="border-color: var(--border); color: var(--secondary);">
-    Stint Calculation
-  </h2>
-
-  <div id="required-fields-status" class="mb-4">
-    {% include 'partials/required_fields_status.html' %}
+  <!-- Signup link share row -->
+  <div style="display: flex;
+               align-items: center;
+               gap: 8px;
+               max-width: 700px;
+               padding: 10px 14px;
+               background: var(--bg-card);
+               border: 1px solid var(--border);"
+       x-data="{ copied: false }">
+    <span style="flex: 1;
+                  font-size: 11px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.03em;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;">
+      {{ signup_url }}
+    </span>
+    <button class="copy-btn"
+            :class="copied ? 'copied' : ''"
+            @click="
+              navigator.clipboard.writeText('{{ signup_url }}');
+              copied = true;
+              setTimeout(() => copied = false, 2000)
+            "
+            x-text="copied ? 'Copied ✓' : 'Copy signup link'">
+    </button>
   </div>
 
-  <div id="stint-sanity-warnings">
-    {% include 'partials/sanity_warnings.html' %}
-  </div>
-</div>
+  <!-- Add driver form (collapsible) -->
+  {% include 'partials/admin_add_driver.html' %}
 
-{# ── Row 4: Availability Overview ─────────────────────────────── #}
-<div class="rounded-xl p-6 mb-6"
-     style="border: 1px solid var(--border);
-            background-color: var(--bg-raised);">
-  <h2 class="text-base font-bold mb-4 pb-2 border-b"
-      style="border-color: var(--border); color: var(--secondary);">
-    Availability Overview
-  </h2>
-  <div id="availability-table-container">
-    {% include "partials/availability_table.html" %}
-  </div>
-</div>
+</section>
 
-<div class="mt-4">
-  <a href="{% url 'home' %}"
-     class="text-sm opacity-50 hover:opacity-100 transition-opacity"
-     style="color: var(--text);">
-    ← Home
-  </a>
-</div>
+<!-- ============================================================
+     SECTION 4 — STINT ASSIGNMENT
+============================================================ -->
+<section class="admin-section fade-up-delay-2"
+         {% if has_required_stint_fields and stint_windows and drivers %}
+         x-data="stintPlanner('{{ admin_tz }}')"
+         x-init="init()"
+         {% endif %}>
+
+  <div class="section-heading">Stint Assignment</div>
+
+  {% if not has_required_stint_fields %}
+  <p style="font-size: 11px; color: var(--text-dim); letter-spacing: 0.04em; padding: 8px 0;">
+    Fill in all timing and fuel fields above to enable stint assignment.
+  </p>
+
+  {% elif not stint_windows %}
+  <div style="padding: 10px 14px; border: 1px solid var(--danger); background: var(--danger-dim);">
+    <p style="font-size: 10px; color: var(--danger); letter-spacing: 0.06em;">
+      ⚠ No stints could be calculated. Check the timing fields in Stint Calculation.
+    </p>
+  </div>
+
+  {% elif not drivers %}
+  <div style="padding: 10px 14px; border: 1px solid var(--border); background: var(--bg-card);">
+    <p style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.04em;">
+      No drivers signed up yet. Add drivers above before assigning stints.
+    </p>
+  </div>
+
+  {% else %}
+
+  <p style="font-size: 11px; color: var(--text-dim); letter-spacing: 0.04em; margin-bottom: 20px; line-height: 1.6;">
+    Use the dropdown on each stint row to assign a driver. The availability matrix shows who's free for each window.
+  </p>
+
+  <form hx-post="{% url 'admin_save_assignments' event.id %}"
+        hx-target="#stint-assignment-errors"
+        hx-swap="innerHTML"
+        @htmx:before-request="onSaveStart()"
+        @htmx:after-on-load="onSaveSuccess()"
+        @htmx:response-error="onSaveError()">
+    {% csrf_token %}
+    {% for sw in stint_windows %}
+    <input type="hidden" name="stint_{{ sw.stint_number }}" :value="assignments[{{ sw.stint_number }}] || ''">
+    {% endfor %}
+
+    <div class="table-wrapper" style="overflow-x: auto; max-height: 70vh; overflow-y: auto;">
+      <table class="unified-table" id="unifiedTable">
+        <thead>
+          <tr>
+            <th colspan="4" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
+            <th class="avail-divider"></th>
+            <th colspan="{{ drivers|length }}" class="avail-group-header">Availability</th>
+          </tr>
+          <tr class="avail-driver-header-row">
+            <th>#</th>
+            <th>Start</th>
+            <th>Dur.</th>
+            <th>Driver</th>
+            <th class="avail-divider"></th>
+            {% for driver in drivers %}
+            <th class="avail-driver-th">
+              <span style="display: block;">{{ driver.name }}</span>
+              <span x-text="driverStintCount('{{ driver.id }}') + ' stint' + (driverStintCount('{{ driver.id }}') !== 1 ? 's' : '')"
+                    style="display: block; font-size: 9px; letter-spacing: 0.08em; color: var(--text-dim); font-weight: 400; margin-top: 1px;"></span>
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for sw in stint_windows %}
+
+          <template x-if="isNewDay({{ forloop.counter0 }})">
+            <tr>
+              <td colspan="{{ drivers|length|add:5 }}"
+                  style="text-align: center; font-weight: 700; padding: 3px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; background: var(--primary); color: #111;">
+                <span x-text="formatStintDate('{{ sw.start_utc|to_utc_z }}')"></span>
+              </td>
+            </tr>
+          </template>
+
+          <tr :class="rowClass({{ sw.stint_number }})"
+              data-stint="{{ sw.stint_number }}">
+            <td class="s-num">#{{ sw.stint_number }}</td>
+            <td class="s-time">{{ sw.start_local }}</td>
+            <td class="s-dur">{{ stint_duration_display }}</td>
+            <td class="s-driver">
+              <div class="driver-select-wrap">
+                <select class="driver-select"
+                        :class="selectClass({{ sw.stint_number }})"
+                        x-model="assignments[{{ sw.stint_number }}]"
+                        @change="isDirty = true">
+                  <option value="">— unassigned —</option>
+                  {% for driver in drivers %}
+                  <option value="{{ driver.id }}"
+                          :style="availStyle({{ sw.stint_number }}, '{{ driver.id }}')">
+                    {{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} (partial){% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} (unavailable){% endif %}
+                  </option>
+                  {% endfor %}
+                </select>
+              </div>
+            </td>
+            <td class="avail-divider"></td>
+            {% for driver in drivers %}
+            <td class="avail-td">
+              {% with status=stint_availability|dict_get:driver.id|dict_get:sw.stint_number %}
+              <div x-data
+                   :class="availCellClass({{ sw.stint_number }}, '{{ driver.id }}', '{{ status }}')"
+                   class="avail-cell"
+                   x-text="availCellSymbol({{ sw.stint_number }}, '{{ driver.id }}', '{{ status }}')">
+              </div>
+              {% endwith %}
+            </td>
+            {% endfor %}
+          </tr>
+
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4" style="padding: 0; border: none; background: transparent;"></td>
+            <td class="avail-divider" style="border: none; background: transparent;"></td>
+            <td colspan="{{ drivers|length }}" style="padding: 10px 4px 4px; border: none; background: transparent;">
+              <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
+                  <span style="color: var(--avail-text);">✓</span> Available
+                </span>
+                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
+                  <span style="color: #cc8c14;">~</span> Partial
+                </span>
+                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
+                  <span style="color: var(--text-dim);">—</span> Unavailable
+                </span>
+                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
+                  <span style="color: var(--assigned-text);">★</span> Assigned
+                </span>
+              </div>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div id="stint-assignment-errors"></div>
+
+    <div style="margin-top: 20px; display: flex; gap: 8px; align-items: center;">
+      <button type="submit"
+              :disabled="saveState === 'saving'"
+              class="btn-primary">
+        <span x-text="saveButtonLabel">Save Assignments</span>
+      </button>
+      <span x-show="isDirty && saveState === 'idle'"
+            x-transition
+            style="font-size: 10px; color: #f59e0b; letter-spacing: 0.04em;">
+        Unsaved changes
+      </span>
+      <span x-show="showSavedBadge"
+            x-transition
+            style="font-size: 10px; color: #22c55e; letter-spacing: 0.04em;">
+        Saved ✓
+      </span>
+    </div>
+  </form>
+
+  {% endif %}
+
+</section>
 
 {% endblock %}
 
 {% block extra_js %}
 <script>
-  const timezoneList = {{ timezone_list_json|safe }};
-  const slotTimestamps = {{ slot_timestamps_json|safe }};
-  const detectedTz = 'UTC';
+  const timezoneList    = {{ timezone_list_json|safe }};
+  const slotTimestamps  = {{ slot_timestamps_json|safe }};
+  const stintWindows      = {{ stint_windows_json|safe }};
+  const availabilityData  = {{ availability_json|safe }};
+  const stintAvailability = {{ stint_availability_json|safe }};
+  const existingAssignments = {{ existing_assignments_json|safe }};
+  const driversData       = {{ drivers_json|safe }};
+
+  function stintPlanner(adminTz) {
+    return {
+      assignments: {},
+      isDirty: false,
+      saveState: 'idle',
+      showSavedBadge: false,
+
+      init() {
+        stintWindows.forEach(sw => {
+          const n = sw.stint_number;
+          this.assignments[n] = existingAssignments[String(n)] || '';
+        });
+        this.isDirty = false;
+      },
+
+      onSaveStart() { this.saveState = 'saving'; },
+
+      onSaveSuccess() {
+        this.saveState = 'idle';
+        this.isDirty = false;
+        this.showSavedBadge = true;
+        setTimeout(() => { this.showSavedBadge = false; }, 2500);
+      },
+
+      onSaveError() { this.saveState = 'idle'; },
+
+      get saveButtonLabel() {
+        return this.saveState === 'saving' ? 'Saving…' : 'Save Assignments';
+      },
+
+      driverStintCount(driverId) {
+        return Object.values(this.assignments).filter(id => id === driverId).length;
+      },
+
+      // Returns true if driver has a conflict (missing avail slot) for this stint
+      hasConflict(stintNumber, driverId) {
+        if (!driverId) return false;
+        const driverAvail = new Set(availabilityData[driverId] || []);
+        const sw = stintWindows.find(w => w.stint_number === stintNumber);
+        if (!sw || !stintWindows.length) return false;
+        const slotMs = 30 * 60 * 1000;
+        const gridAnchorMs = new Date(stintWindows[0].start_utc).getTime();
+        const startMs = new Date(sw.start_utc).getTime();
+        const endMs   = new Date(sw.end_utc).getTime();
+        const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
+        let currentMs = gridAnchorMs + offsetSlots * slotMs;
+        while (currentMs < endMs) {
+          const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+          if (!driverAvail.has(isoStr)) return true;
+          currentMs += slotMs;
+        }
+        return false;
+      },
+
+      rowClass(stintNumber) {
+        const driverId = this.assignments[stintNumber];
+        if (!driverId) return 'row-unassigned';
+        const status = (stintAvailability[driverId] || {})[String(stintNumber)];
+        return status === 'none' ? 'row-unassigned' : 'row-assigned';
+      },
+
+      // CSS class for the driver-select element
+      selectClass(stintNumber) {
+        const driverId = this.assignments[stintNumber];
+        if (!driverId) return '';
+        const status = (stintAvailability[driverId] || {})[String(stintNumber)];
+        return status === 'none' ? 'is-conflict' : 'is-assigned';
+      },
+
+      // Dim unavailable drivers in the option list
+      availStyle(stintNumber, driverId) {
+        const driverAvail = availabilityData[driverId];
+        if (!driverAvail) return 'opacity: 0.4';
+        // Check if any slot in this stint is covered
+        const sw = stintWindows.find(w => w.stint_number === stintNumber);
+        if (!sw) return '';
+        const driverAvailSet = new Set(driverAvail);
+        const slotMs = 30 * 60 * 1000;
+        const gridAnchorMs = stintWindows.length ? new Date(stintWindows[0].start_utc).getTime() : 0;
+        const startMs = new Date(sw.start_utc).getTime();
+        const endMs   = new Date(sw.end_utc).getTime();
+        const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
+        let currentMs = gridAnchorMs + offsetSlots * slotMs;
+        let hasMissing = false;
+        while (currentMs < endMs) {
+          const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+          if (!driverAvailSet.has(isoStr)) { hasMissing = true; break; }
+          currentMs += slotMs;
+        }
+        return hasMissing ? 'opacity: 0.45' : '';
+      },
+
+      // Avail cell class — color always follows actual availability status
+      availCellClass(stintNumber, driverId, serverStatus) {
+        if (serverStatus === 'full')    return 'yes';
+        if (serverStatus === 'partial') return 'partial';
+        if (serverStatus === 'none')    return 'no';
+        return '';
+      },
+
+      availCellSymbol(stintNumber, driverId, serverStatus) {
+        if (this.assignments[stintNumber] === driverId) return '★';
+        if (serverStatus === 'full')    return '✓';
+        if (serverStatus === 'partial') return '~';
+        return '—';
+      },
+
+      formatStintDate(utcString) {
+        return new Date(utcString).toLocaleDateString('en-GB', {
+          timeZone: adminTz, month: 'short', day: 'numeric',
+        });
+      },
+
+      isNewDay(index) {
+        if (index === 0) return false;
+        const prev = stintWindows[index - 1];
+        const curr = stintWindows[index];
+        return this.formatStintDate(prev.start_utc) !== this.formatStintDate(curr.start_utc);
+      },
+    };
+  }
 </script>
 {% endblock %}

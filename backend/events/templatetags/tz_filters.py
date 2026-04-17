@@ -124,3 +124,14 @@ def time_in_tz(dt, timezone_str):
         return local_dt.strftime('%H:%M')
     except Exception:
         return dt.strftime('%H:%M')
+
+
+@register.filter
+def seconds_to_mmss(seconds):
+    """Convert seconds (int or float) to MM:SS string."""
+    if seconds is None:
+        return ''
+    total = int(round(seconds))
+    m = total // 60
+    s = total % 60
+    return f"{m:02d}:{s:02d}"

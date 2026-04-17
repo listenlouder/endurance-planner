@@ -34,7 +34,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from .forms import EventCreateForm
-from .models import Availability, Driver, Event, Feedback
+from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .templatetags.tz_filters import (
     datetime_in_tz,
     dict_get,
@@ -2584,3 +2584,906 @@ class DriverListTemplateClassTests(TestCase):
         response = self.client.get(self.admin_url)
 
         self.assertContains(response, 'No drivers have signed up yet')
+
+
+# ---------------------------------------------------------------------------
+# AdminSaveDetailsTests
+# ---------------------------------------------------------------------------
+
+class AdminSaveDetailsTests(TestCase):
+    """Tests for views.admin_save_details() — batch-save event detail fields."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse('admin_save_details', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def _valid_post(self, **overrides):
+        data = {
+            'name': 'Updated Race',
+            'date': '2027-06-01',
+            'start_time_utc': '14:00',
+            'length_hours': '2',
+            'length_minutes': '0',
+        }
+        data.update(overrides)
+        return data
+
+    def test_without_session_returns_403(self):
+        response = self.client.post(self.url, self._valid_post())
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_valid_post_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._valid_post())
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_valid_post_returns_hx_trigger_show_toast(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._valid_post())
+
+        self.assertEqual(response['HX-Trigger'], 'show-toast')
+
+    def test_valid_post_saves_name(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(name='Brand New Name'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.name, 'Brand New Name')
+
+    def test_valid_post_saves_date(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(date='2028-03-15'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.date, dt.date(2028, 3, 15))
+
+    def test_valid_post_saves_start_time(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(start_time_utc='09:30'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.start_time_utc, dt.time(9, 30))
+
+    def test_length_hours_and_minutes_converted_to_seconds(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(length_hours='2', length_minutes='30'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.length_seconds, 9000)
+
+    def test_length_hours_only_no_minutes_converts_correctly(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(length_hours='6', length_minutes='0'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.length_seconds, 21600)
+
+    def test_empty_name_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._valid_post(name=''))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn('HX-Trigger', response)
+
+    def test_empty_name_response_contains_error_content(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._valid_post(name=''))
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_details_errors.html', template_names)
+
+    def test_invalid_date_format_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._valid_post(date='not-a-date'))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn('HX-Trigger', response)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_details_errors.html', template_names)
+
+    def test_invalid_start_time_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._valid_post(start_time_utc='25:99'))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn('HX-Trigger', response)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_details_errors.html', template_names)
+
+    def test_zero_length_race_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(
+            self.url,
+            self._valid_post(length_hours='0', length_minutes='0'),
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn('HX-Trigger', response)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_details_errors.html', template_names)
+
+    def test_zero_length_race_does_not_update_event(self):
+        self._set_admin_session()
+        original_seconds = self.event.length_seconds
+
+        self.client.post(
+            self.url,
+            self._valid_post(length_hours='0', length_minutes='0'),
+        )
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.length_seconds, original_seconds)
+
+    def test_recruiting_on_sets_recruiting_true(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(recruiting='on'))
+
+        self.event.refresh_from_db()
+        self.assertTrue(self.event.recruiting)
+
+    def test_omitting_recruiting_sets_recruiting_false(self):
+        self._set_admin_session()
+        self.event.recruiting = True
+        self.event.save()
+
+        self.client.post(self.url, self._valid_post())
+
+        self.event.refresh_from_db()
+        self.assertFalse(self.event.recruiting)
+
+    def test_team_name_is_saved(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(team_name='Apex Racing'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.team_name, 'Apex Racing')
+
+    def test_valid_post_saves_car(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(car='Ferrari 488'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.car, 'Ferrari 488')
+
+    def test_valid_post_saves_track(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(track='Nurburgring'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.track, 'Nurburgring')
+
+    def test_error_response_does_not_save_name(self):
+        self._set_admin_session()
+        original_name = self.event.name
+
+        self.client.post(self.url, self._valid_post(name='', date='not-a-date'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.name, original_name)
+
+
+# ---------------------------------------------------------------------------
+# AdminSaveCalcTests
+# ---------------------------------------------------------------------------
+
+class AdminSaveCalcTests(TestCase):
+    """Tests for views.admin_save_calc() — batch-save stint calculation fields."""
+
+    def setUp(self):
+        # Start with an event that lacks all stint calc fields so we can
+        # observe partial-save behaviour without triggering HX-Refresh
+        self.event = save_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.url = reverse('admin_save_calc', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def _all_calc_fields(self, **overrides):
+        """POST data that satisfies all required stint-calc fields."""
+        data = {
+            'avg_lap': '2:00',
+            'in_lap': '2:10',
+            'out_lap': '2:05',
+            'fuel_capacity': '80',
+            'fuel_burn': '2.5',
+            'target_laps': '30',
+        }
+        data.update(overrides)
+        return data
+
+    def test_without_session_returns_403(self):
+        response = self.client.post(self.url, self._all_calc_fields())
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_valid_post_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, self._all_calc_fields())
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_valid_post_without_all_fields_returns_show_toast(self):
+        self._set_admin_session()
+        # Post only some fields so event still lacks required stint fields
+        response = self.client.post(self.url, {'avg_lap': '2:00'})
+
+        self.assertEqual(response['HX-Trigger'], 'show-toast')
+        self.assertNotIn('HX-Refresh', response)
+
+    def test_mmss_value_correctly_converted_to_seconds(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'avg_lap': '2:18'})
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.avg_lap_seconds, 138)
+
+    def test_in_lap_mmss_correctly_converted(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'in_lap': '1:30'})
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.in_lap_seconds, 90)
+
+    def test_out_lap_mmss_correctly_converted(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'out_lap': '3:00'})
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.out_lap_seconds, 180)
+
+    def test_invalid_mmss_format_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'avg_lap': 'not-a-time'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('HX-Trigger', response)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_calc_errors.html', template_names)
+
+    def test_mmss_with_seconds_gte_60_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'avg_lap': '2:60'})
+
+        self.assertEqual(response.status_code, 200)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_calc_errors.html', template_names)
+
+    def test_fuel_capacity_saved(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'fuel_capacity': '75.5'})
+
+        self.event.refresh_from_db()
+        self.assertAlmostEqual(self.event.fuel_capacity, 75.5)
+
+    def test_fuel_burn_saved_as_fuel_per_lap(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'fuel_burn': '2.2'})
+
+        self.event.refresh_from_db()
+        self.assertAlmostEqual(self.event.fuel_per_lap, 2.2)
+
+    def test_target_laps_saved(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'target_laps': '25'})
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.target_laps, 25)
+
+    def test_when_all_required_fields_complete_returns_hx_refresh(self):
+        self._set_admin_session()
+        # Post all fields so event.has_required_stint_fields becomes True after save
+        response = self.client.post(self.url, self._all_calc_fields())
+
+        self.assertEqual(response['HX-Refresh'], 'true')
+        self.assertNotIn('HX-Trigger', response)
+
+    def test_partial_post_leaves_unprovided_fields_unchanged(self):
+        self._set_admin_session()
+        # Pre-set avg_lap_seconds so we can check it is not wiped by a partial POST
+        self.event.avg_lap_seconds = 120.0
+        self.event.save()
+
+        self.client.post(self.url, {'fuel_capacity': '60'})
+
+        self.event.refresh_from_db()
+        self.assertAlmostEqual(self.event.avg_lap_seconds, 120.0)
+
+    def test_partial_post_only_updates_provided_field(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'fuel_capacity': '99'})
+
+        self.event.refresh_from_db()
+        self.assertAlmostEqual(self.event.fuel_capacity, 99.0)
+        # Other fields remain None since nothing else was POSTed
+        self.assertIsNone(self.event.avg_lap_seconds)
+
+    def test_invalid_numeric_field_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'fuel_capacity': 'abc'})
+
+        self.assertEqual(response.status_code, 200)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_calc_errors.html', template_names)
+
+
+# ---------------------------------------------------------------------------
+# AdminSaveAssignmentsTests
+# ---------------------------------------------------------------------------
+
+class AdminSaveAssignmentsTests(TestCase):
+    """Tests for views.admin_save_assignments() — bulk-save stint driver assignments."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse('admin_save_assignments', kwargs={'event_id': self.event.id})
+        self.driver_a = Driver.objects.create(
+            event=self.event, name='Alice', timezone='UTC'
+        )
+        self.driver_b = Driver.objects.create(
+            event=self.event, name='Bob', timezone='UTC'
+        )
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_without_session_returns_403(self):
+        response = self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_returns_400_when_event_lacks_required_stint_fields(self):
+        self._set_admin_session()
+        event_no_fields = save_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        url = reverse('admin_save_assignments', kwargs={'event_id': event_no_fields.id})
+        session = self.client.session
+        session[f'admin_{event_no_fields.id}'] = True
+        session.save()
+
+        response = self.client.post(url, {'stint_1': str(self.driver_a.id)})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_valid_post_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_valid_post_returns_hx_trigger_show_toast(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+
+        self.assertEqual(response['HX-Trigger'], 'show-toast')
+
+    def test_valid_post_creates_stint_assignment_row(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+
+        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
+        self.assertEqual(assignment.driver, self.driver_a)
+
+    def test_omitting_stint_param_leaves_that_stint_unassigned(self):
+        self._set_admin_session()
+        # Only assign stint 1; remaining stints get no POST param → driver=None
+        self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+
+        unassigned = StintAssignment.objects.filter(
+            event=self.event, driver=None
+        )
+        self.assertGreater(unassigned.count(), 0)
+
+    def test_reposting_clears_existing_assignments_before_saving(self):
+        self._set_admin_session()
+        # First save — assign driver_a to stint 1
+        self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+        # Second save — assign driver_b to stint 1 instead
+        self.client.post(self.url, {'stint_1': str(self.driver_b.id)})
+
+        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
+        self.assertEqual(assignment.driver, self.driver_b)
+
+    def test_reposting_does_not_leave_duplicate_assignment_rows(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
+        self.client.post(self.url, {'stint_1': str(self.driver_b.id)})
+
+        count = StintAssignment.objects.filter(
+            event=self.event, stint_number=1
+        ).count()
+        self.assertEqual(count, 1)
+
+    def test_invalid_driver_id_results_in_unassigned_stint(self):
+        self._set_admin_session()
+        bogus_id = uuid.uuid4()
+
+        self.client.post(self.url, {'stint_1': str(bogus_id)})
+
+        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
+        self.assertIsNone(assignment.driver)
+
+    def test_driver_from_different_event_results_in_unassigned_stint(self):
+        self._set_admin_session()
+        other_event = save_event()
+        foreign_driver = Driver.objects.create(
+            event=other_event, name='Carol', timezone='UTC'
+        )
+
+        self.client.post(self.url, {'stint_1': str(foreign_driver.id)})
+
+        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
+        self.assertIsNone(assignment.driver)
+
+    def test_multiple_stints_assigned_in_one_post(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {
+            'stint_1': str(self.driver_a.id),
+            'stint_2': str(self.driver_b.id),
+        })
+
+        a1 = StintAssignment.objects.get(event=self.event, stint_number=1)
+        a2 = StintAssignment.objects.get(event=self.event, stint_number=2)
+        self.assertEqual(a1.driver, self.driver_a)
+        self.assertEqual(a2.driver, self.driver_b)
+
+
+# ---------------------------------------------------------------------------
+# AdminAddDriverTests
+# ---------------------------------------------------------------------------
+
+class AdminAddDriverTests(TestCase):
+    """Tests for views.admin_add_driver() — POST-only driver creation."""
+
+    def setUp(self):
+        self.event = save_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.url = reverse('admin_add_driver', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_without_session_returns_403(self):
+        response = self.client.post(
+            self.url,
+            {'driver_name': 'Alice', 'timezone': 'UTC'},
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_returns_405(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_valid_post_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.post(
+            self.url,
+            {'driver_name': 'Alice', 'timezone': 'America/New_York'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_valid_post_creates_driver_in_database(self):
+        self._set_admin_session()
+
+        self.client.post(
+            self.url,
+            {'driver_name': 'Alice', 'timezone': 'America/New_York'},
+        )
+
+        self.assertTrue(
+            Driver.objects.filter(event=self.event, name='Alice').exists()
+        )
+
+    def test_valid_post_response_contains_driver_list_html(self):
+        self._set_admin_session()
+
+        response = self.client.post(
+            self.url,
+            {'driver_name': 'Alice', 'timezone': 'UTC'},
+        )
+
+        self.assertIn(b'Alice', response.content)
+
+    def test_missing_driver_name_returns_error_html(self):
+        self._set_admin_session()
+
+        response = self.client.post(
+            self.url,
+            {'driver_name': '', 'timezone': 'UTC'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Driver name is required', response.content)
+
+    def test_missing_driver_name_does_not_create_driver(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'driver_name': '', 'timezone': 'UTC'})
+
+        self.assertEqual(Driver.objects.filter(event=self.event).count(), 0)
+
+    def test_invalid_timezone_returns_error_html(self):
+        self._set_admin_session()
+
+        response = self.client.post(
+            self.url,
+            {'driver_name': 'Bob', 'timezone': 'Not/A/Real/Zone'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'valid timezone', response.content)
+
+    def test_invalid_timezone_does_not_create_driver(self):
+        self._set_admin_session()
+
+        self.client.post(
+            self.url,
+            {'driver_name': 'Bob', 'timezone': 'Not/A/Real/Zone'},
+        )
+
+        self.assertEqual(Driver.objects.filter(event=self.event).count(), 0)
+
+    def test_when_event_has_required_stint_fields_returns_hx_refresh(self):
+        # Re-configure event to have all required stint fields
+        self.event.avg_lap_seconds = 120.0
+        self.event.in_lap_seconds = 130.0
+        self.event.out_lap_seconds = 125.0
+        self.event.target_laps = 30
+        self.event.fuel_capacity = 80.0
+        self.event.fuel_per_lap = 2.5
+        self.event.save()
+        self._set_admin_session()
+
+        response = self.client.post(
+            self.url,
+            {'driver_name': 'Carol', 'timezone': 'UTC'},
+        )
+
+        self.assertEqual(response['HX-Refresh'], 'true')
+
+    def test_when_event_has_required_stint_fields_driver_is_still_created(self):
+        self.event.avg_lap_seconds = 120.0
+        self.event.in_lap_seconds = 130.0
+        self.event.out_lap_seconds = 125.0
+        self.event.target_laps = 30
+        self.event.fuel_capacity = 80.0
+        self.event.fuel_per_lap = 2.5
+        self.event.save()
+        self._set_admin_session()
+
+        self.client.post(
+            self.url,
+            {'driver_name': 'Carol', 'timezone': 'UTC'},
+        )
+
+        self.assertTrue(
+            Driver.objects.filter(event=self.event, name='Carol').exists()
+        )
+
+    def test_valid_availability_slots_create_availability_records(self):
+        self._set_admin_session()
+        # Get a valid slot for this event (the event starts 2026-06-01 12:00 UTC)
+        from .utils import get_availability_slots
+        slots = get_availability_slots(self.event)
+        # Use the first valid slot
+        slot_str = (
+            slots[0].isoformat().replace('+00:00', 'Z')
+            if slots[0].tzinfo else slots[0].isoformat() + 'Z'
+        )
+
+        self.client.post(self.url, {
+            'driver_name': 'Dave',
+            'timezone': 'UTC',
+            'slots': slot_str,
+        })
+
+        driver = Driver.objects.get(event=self.event, name='Dave')
+        self.assertEqual(driver.availability.count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# AdminRemoveDriverTests
+# ---------------------------------------------------------------------------
+
+class AdminRemoveDriverTests(TestCase):
+    """Tests for views.admin_remove_driver() — DELETE-only driver removal."""
+
+    def setUp(self):
+        # Start without stint fields so the default removal path uses HX-Reswap
+        self.event = save_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.driver = Driver.objects.create(
+            event=self.event, name='Alice', timezone='UTC'
+        )
+        self.url = reverse(
+            'admin_remove_driver',
+            kwargs={'event_id': self.event.id, 'driver_id': self.driver.id},
+        )
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_without_session_returns_403(self):
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_returns_405(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_get_returns_405(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_valid_delete_removes_driver_from_database(self):
+        self._set_admin_session()
+
+        self.client.delete(self.url)
+
+        self.assertFalse(Driver.objects.filter(id=self.driver.id).exists())
+
+    def test_valid_delete_without_stint_fields_returns_hx_reswap_delete(self):
+        self._set_admin_session()
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response['HX-Reswap'], 'delete')
+
+    def test_valid_delete_without_stint_fields_does_not_return_hx_refresh(self):
+        self._set_admin_session()
+
+        response = self.client.delete(self.url)
+
+        self.assertNotIn('HX-Refresh', response)
+
+    def test_valid_delete_with_stint_fields_returns_hx_refresh(self):
+        # Configure event to have all required stint fields
+        self.event.avg_lap_seconds = 120.0
+        self.event.in_lap_seconds = 130.0
+        self.event.out_lap_seconds = 125.0
+        self.event.target_laps = 30
+        self.event.fuel_capacity = 80.0
+        self.event.fuel_per_lap = 2.5
+        self.event.save()
+        self._set_admin_session()
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response['HX-Refresh'], 'true')
+
+    def test_valid_delete_with_stint_fields_does_not_return_hx_reswap(self):
+        self.event.avg_lap_seconds = 120.0
+        self.event.in_lap_seconds = 130.0
+        self.event.out_lap_seconds = 125.0
+        self.event.target_laps = 30
+        self.event.fuel_capacity = 80.0
+        self.event.fuel_per_lap = 2.5
+        self.event.save()
+        self._set_admin_session()
+
+        response = self.client.delete(self.url)
+
+        self.assertNotIn('HX-Reswap', response)
+
+    def test_valid_delete_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# AdminEditDriverNameTests
+# ---------------------------------------------------------------------------
+
+class AdminEditDriverNameTests(TestCase):
+    """Tests for views.admin_edit_driver_name() — inline driver name editing."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.driver = Driver.objects.create(
+            event=self.event, name='Alice', timezone='UTC'
+        )
+        self.url = reverse(
+            'admin_edit_driver_name',
+            kwargs={'event_id': self.event.id, 'driver_id': self.driver.id},
+        )
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_without_session_get_returns_403(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_without_session_post_returns_403(self):
+        response = self.client.post(self.url, {'name': 'Bob'})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_renders_edit_form_partial(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/driver_name_edit_form.html', template_names)
+
+    def test_get_with_cancel_returns_display_partial(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url + '?cancel=1')
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/driver_name_display.html', template_names)
+
+    def test_get_with_cancel_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url + '?cancel=1')
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_post_with_valid_name_saves_driver_name(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'name': 'Bob'})
+
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.name, 'Bob')
+
+    def test_post_with_valid_name_returns_display_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': 'Bob'})
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/driver_name_display.html', template_names)
+
+    def test_post_with_valid_name_returns_200(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': 'Bob'})
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_post_with_empty_name_returns_edit_form_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': ''})
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/driver_name_edit_form.html', template_names)
+
+    def test_post_with_empty_name_response_contains_error_message(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': ''})
+
+        self.assertIn(b'cannot be empty', response.content)
+
+    def test_post_with_empty_name_does_not_update_driver(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'name': ''})
+
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.name, 'Alice')
+
+    def test_post_with_whitespace_only_name_does_not_update_driver(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'name': '   '})
+
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.name, 'Alice')
+
+    def test_driver_from_different_event_returns_404(self):
+        other_event = save_event()
+        other_driver = Driver.objects.create(
+            event=other_event, name='Carol', timezone='UTC'
+        )
+        url = reverse(
+            'admin_edit_driver_name',
+            kwargs={'event_id': self.event.id, 'driver_id': other_driver.id},
+        )
+        self._set_admin_session()
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 404)

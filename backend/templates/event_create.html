@@ -1,35 +1,136 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}
-  Create Event — WeAreChecking
-{% endblock %}
+{% block title %}Create Event — WeAreChecking{% endblock %}
 
 {% block content %}
-<div class="max-w-lg mx-auto">
 
-  <!-- Back link -->
-  {% if not success %}
-  <a href="{% url 'home' %}"
-     class="inline-flex items-center gap-1 text-sm mb-6 opacity-60 hover:opacity-100 transition"
-     style="color: var(--text);">
-    ← Back to Home
+<!-- ============================================================
+     PAGE HEADER
+============================================================ -->
+<section class="page-header fade-up">
+  <div class="page-eyebrow">New Event</div>
+  <h1 class="page-title">Create Event</h1>
+  <p class="page-sub">
+    Set up your race. You'll get three links — admin,
+    signup, and view — to share with your team.
+  </p>
+</section>
+
+{% if success %}
+
+<!-- ============================================================
+     SUCCESS STATE
+============================================================ -->
+<div style="padding: 40px 32px; max-width: 640px;" class="fade-up">
+
+  <!-- Success header -->
+  <div style="display: flex; align-items: center;
+              gap: 12px; margin-bottom: 32px;">
+    <div class="success-icon">✓</div>
+    <div>
+      <div class="success-title">Event Created</div>
+      <div class="success-subtitle">
+        Save your links before leaving this page.
+      </div>
+    </div>
+  </div>
+
+  <!-- Event name display -->
+  <div class="event-created-name">{{ event.name }}</div>
+
+  <!-- Three link cards -->
+  <div style="margin-bottom: 24px;" x-data="{ copied: null }">
+
+    <!-- Admin link -->
+    <div class="link-card">
+      <div class="link-card-left">
+        <span class="link-card-label admin-label">Admin — keep private</span>
+        <span class="link-card-url">{{ admin_url }}</span>
+        <span class="link-card-desc">Full event management. Do not share.</span>
+      </div>
+      <button class="copy-btn"
+              :class="copied === 'admin' ? 'copied' : ''"
+              @click="navigator.clipboard.writeText('{{ admin_url }}');
+                      copied = 'admin';
+                      setTimeout(() => copied = null, 2000)"
+              x-text="copied === 'admin' ? 'Copied ✓' : 'Copy'">
+      </button>
+    </div>
+
+    <!-- Signup link -->
+    <div class="link-card">
+      <div class="link-card-left">
+        <span class="link-card-label signup-label">Signup — share with drivers</span>
+        <span class="link-card-url">{{ signup_url }}</span>
+        <span class="link-card-desc">Drivers use this to add their availability.</span>
+      </div>
+      <button class="copy-btn"
+              :class="copied === 'signup' ? 'copied' : ''"
+              @click="navigator.clipboard.writeText('{{ signup_url }}');
+                      copied = 'signup';
+                      setTimeout(() => copied = null, 2000)"
+              x-text="copied === 'signup' ? 'Copied ✓' : 'Copy'">
+      </button>
+    </div>
+
+    <!-- View link -->
+    <div class="link-card">
+      <div class="link-card-left">
+        <span class="link-card-label view-label">View — safe to share publicly</span>
+        <span class="link-card-url">{{ view_url }}</span>
+        <span class="link-card-desc">Read-only event and stint schedule.</span>
+      </div>
+      <button class="copy-btn"
+              :class="copied === 'view' ? 'copied' : ''"
+              @click="navigator.clipboard.writeText('{{ view_url }}');
+                      copied = 'view';
+                      setTimeout(() => copied = null, 2000)"
+              x-text="copied === 'view' ? 'Copied ✓' : 'Copy'">
+      </button>
+    </div>
+
+  </div>
+
+  <!-- Admin key warning -->
+  <div style="padding: 14px 16px;
+              background: var(--primary-dim);
+              border: 1px solid var(--primary);
+              margin-bottom: 24px;">
+    <strong style="color: var(--primary);
+                   font-size: 10px;
+                   letter-spacing: 0.12em;
+                   text-transform: uppercase;
+                   display: block;
+                   margin-bottom: 4px;">
+      ⚠ Save your admin link
+    </strong>
+    <p style="font-size: 11px;
+               color: var(--text-mid);
+               line-height: 1.6;
+               letter-spacing: 0.03em;">
+      The admin key is part of the URL above and cannot be
+      recovered if lost. Save it somewhere safe.
+    </p>
+  </div>
+
+  <!-- View event button -->
+  <a href="{% url 'view_event' event.id %}" class="btn-secondary">
+    View event →
   </a>
-  {% endif %}
 
-  {% if success %}
-  <!-- ============================================================ -->
-  <!-- SUCCESS STATE                                                 -->
-  <!-- ============================================================ -->
-
-  {% include "partials/event_create_success.html" %}
-
-  {% else %}
-  <!-- ============================================================ -->
-  <!-- FORM STATE                                                    -->
-  <!-- ============================================================ -->
-
-  {% include "partials/event_create_form.html" %}
-
-  {% endif %}
 </div>
+
+{% else %}
+
+<!-- ============================================================
+     FORM STATE
+============================================================ -->
+<div style="padding: 40px 32px 48px; max-width: 640px;"
+     class="fade-up-delay-1">
+  {% include 'partials/event_create_form.html' %}
+</div>
+
+{% endif %}
+
 {% endblock %}

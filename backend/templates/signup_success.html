@@ -1,69 +1,93 @@
 {% extends "base.html" %}
 
 {% block title %}
-  {% if updated %}Availability Updated{% else %}Signed Up{% endif %} — {{ event.name }}
+  {% if updated %}Availability Updated{% else %}You're In{% endif %} — {{ event.name }} — WeAreChecking
 {% endblock %}
 
 {% block content %}
-<div class="max-w-lg mx-auto">
-  <div class="flex flex-col gap-6 mt-4">
 
-    <div class="rounded-lg px-4 py-3 bg-green-600 border border-green-500 text-white font-semibold text-center">
-      {% if updated %}
-        Your availability has been updated, {{ driver.name }}!
-      {% else %}
-        You're signed up, {{ driver.name }}!
-      {% endif %}
-    </div>
+<!-- ============================================================
+     PAGE HEADER
+============================================================ -->
+<section class="page-header fade-up">
+  <div class="page-eyebrow">
+    {% if updated %}Availability Updated{% else %}Driver Signup{% endif %}
+  </div>
+  <h1 class="page-title">{{ event.name }}</h1>
+  <p class="page-sub">
+    {% if updated %}
+      Your availability has been updated, {{ driver.name }}.
+    {% else %}
+      You're signed up, {{ driver.name }}.
+    {% endif %}
+  </p>
+</section>
 
-    <p class="text-sm text-center opacity-60">
-      {% if updated %}Saved in{% else %}Your availability was saved in{% endif %} timezone:
-      <strong>{{ driver.timezone }}</strong>
-    </p>
+<!-- ============================================================
+     SUCCESS STATE
+============================================================ -->
+<div style="padding: 40px 32px 48px; max-width: 640px;" class="fade-up-delay-1">
 
-    <div class="rounded-xl border p-6 flex flex-col gap-6"
-         style="border-color: var(--secondary); background-color: var(--bg-raised);">
-
-      <div class="flex flex-col gap-2">
-        <p class="text-sm font-semibold" style="color: var(--text);">
-          View the event schedule
-        </p>
-        <a href="{{ base_url }}{{ event.id }}/view/"
-           class="text-sm break-all hover:underline"
-           style="color: var(--primary);"
-           target="_blank">
-          {{ base_url }}{{ event.id }}/view/
-        </a>
-        <input type="text" readonly
-               value="{{ base_url }}{{ event.id }}/view/"
-               class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
-               style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
-               onclick="this.select()" />
+  <!-- Success header -->
+  <div style="display: flex; align-items: center;
+              gap: 12px; margin-bottom: 32px;">
+    <div class="success-icon">✓</div>
+    <div>
+      <div class="success-title">
+        {% if updated %}Availability Updated{% else %}You're In{% endif %}
       </div>
-
-      <hr style="border-color: var(--secondary); opacity: 0.3;" />
-
-      <div class="flex flex-col gap-2">
-        <p class="text-sm font-semibold" style="color: var(--text);">
-          Update your availability
-        </p>
-        <a href="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
-           class="text-sm break-all hover:underline"
-           style="color: var(--primary);"
-           target="_blank">
-          {{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/
-        </a>
-        <input type="text" readonly
-               value="{{ base_url }}{{ event.id }}/signup/{{ driver.id }}/edit/"
-               class="w-full px-3 py-2 rounded border text-xs font-mono focus:outline-none focus:ring-1"
-               style="background-color: var(--bg); color: var(--text); border-color: var(--secondary);"
-               onclick="this.select()" />
-        <p class="text-xs opacity-60">
-          Keep this link private — anyone with it can edit your availability.
-        </p>
+      <div class="success-subtitle">
+        Save your links before leaving this page.
       </div>
-
     </div>
   </div>
+
+  <!-- Link cards -->
+  <div style="display: flex; flex-direction: column; gap: 2px; margin-bottom: 24px;"
+       x-data="{ copied: null }">
+
+    <!-- View link -->
+    <div class="link-card">
+      <div class="link-card-left">
+        <span class="link-card-label view-label">View event</span>
+        <span class="link-card-url">{{ view_url }}</span>
+        <span class="link-card-desc">See the full schedule and stint assignments.</span>
+      </div>
+      <button class="copy-btn"
+              :class="copied === 'view' ? 'copied' : ''"
+              @click="navigator.clipboard.writeText('{{ view_url }}');
+                      copied = 'view';
+                      setTimeout(() => copied = null, 2000)"
+              x-text="copied === 'view' ? 'Copied ✓' : 'Copy'">
+      </button>
+    </div>
+
+    <!-- Edit link -->
+    <div class="link-card">
+      <div class="link-card-left">
+        <span class="link-card-label" style="color: var(--secondary);">Edit your availability</span>
+        <span class="link-card-url">{{ edit_url }}</span>
+        <span class="link-card-desc">
+          Come back here to update your availability or remove yourself.
+          Keep this link private.
+        </span>
+      </div>
+      <button class="copy-btn"
+              :class="copied === 'edit' ? 'copied' : ''"
+              @click="navigator.clipboard.writeText('{{ edit_url }}');
+                      copied = 'edit';
+                      setTimeout(() => copied = null, 2000)"
+              x-text="copied === 'edit' ? 'Copied ✓' : 'Copy'">
+      </button>
+    </div>
+
+  </div>
+
+  <!-- View event button -->
+  <a href="{% url 'view_event' event.id %}" class="btn-secondary">
+    View event →
+  </a>
+
 </div>
+
 {% endblock %}

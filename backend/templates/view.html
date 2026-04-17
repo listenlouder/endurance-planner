@@ -1,205 +1,362 @@
 {% extends "base.html" %}
-{% load tz_filters %}
+{% load static tz_filters %}
 
 {% block title %}{{ event.name }} — WeAreChecking{% endblock %}
 
+{% block extra_head %}
+<style>
+  .event-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .schedule-section {
+    animation: fadeUp 0.6s 0.15s var(--ease) both;
+  }
+  .tz-note {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    margin-bottom: 20px;
+  }
+  .tz-note span {
+    color: var(--secondary);
+  }
+  /* Signup banner — view page: fully highlighted, secondary colour, floats above footer */
+  .signup-banner {
+    margin: 0 32px 40px;
+    background: var(--secondary-dim);
+    border: 1px solid var(--secondary);
+    border-left: 1px solid var(--secondary);
+    max-width: 640px;
+    animation: fadeUp 0.6s 0.3s var(--ease) both;
+  }
+  .signup-banner-text strong {
+    color: var(--secondary);
+  }
+
+  /* Stint table rows */
+  .stint-table tbody tr {
+    background: var(--bg-card);
+    transition: background 0.15s;
+  }
+  .stint-table tbody tr:hover {
+    background: var(--bg-raised);
+  }
+  @media (max-width: 600px) {
+    .signup-banner {
+      margin: 0 16px 28px;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .schedule-section {
+      padding: 28px 16px 0 !important;
+    }
+    .summary-row {
+      flex-direction: column;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 
-{# ── Centered header ──────────────────────────────────────────── #}
-<div class="text-center mb-8">
-  <h1 class="text-4xl font-bold mb-2"
-      style="color: var(--primary);">
-    {{ event.name }}
-  </h1>
-  <p class="text-sm opacity-50"
-     x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
-    Times shown in your local timezone:
-    <span x-text="tz" class="font-mono"></span>
-  </p>
-</div>
+<!-- ============================================================
+     EVENT HEADER
+============================================================ -->
+<section class="page-header">
+  <div class="page-eyebrow">View Event</div>
+  <h1 class="page-title">{{ event.name }}</h1>
+  <!-- Meta pills row -->
+  <div class="event-meta-row" style="margin-top: 24px;">
 
-{# ── Two-column body ──────────────────────────────────────────── #}
-<div class="grid grid-cols-1 md:grid-cols-2 md:gap-8 lg:gap-12">
-
-  {# ── Left column: Event Info ───────────────────────────────── #}
-  <div class="mb-8 md:mb-0">
-
-    <h2 class="text-lg font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--border);
-               color: var(--secondary);">
-      Event Info
-    </h2>
-
-    <dl class="space-y-3">
-
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Date</dt>
-        <dd class="text-sm mt-0.5">{{ event.date|date:"l, F j, Y" }}</dd>
-      </div>
-
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Start Time</dt>
-        <dd class="text-sm mt-0.5 font-mono"
-            x-data
-            x-text="new Date('{{ event.start_datetime_utc|to_utc_z }}').toLocaleTimeString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour: '2-digit', minute: '2-digit', hour12: true })">
-        </dd>
-      </div>
-
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Race Length</dt>
-        <dd class="text-sm mt-0.5">{{ length_display }}</dd>
-      </div>
-
-      {% if event.car %}
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Car</dt>
-        <dd class="text-sm mt-0.5">{{ event.car }}</dd>
-      </div>
-      {% endif %}
-
-      {% if event.track %}
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Track</dt>
-        <dd class="text-sm mt-0.5">{{ event.track }}</dd>
-      </div>
-      {% endif %}
-
-      {% if event.team_name %}
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Team</dt>
-        <dd class="text-sm mt-0.5">{{ event.team_name }}</dd>
-      </div>
-      {% endif %}
-
-      {% if event.setup %}
-      <div class="flex flex-col">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">Setup</dt>
-        <dd class="text-sm mt-0.5 whitespace-pre-wrap font-mono leading-relaxed opacity-80">{{ event.setup }}</dd>
-      </div>
-      {% endif %}
-
-      {% if show_signup_link %}
-      <div class="flex flex-col pt-3 mt-3 border-t"
-           style="border-color: var(--border);">
-        <dt style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-dim);">
-          Interested in driving?
-        </dt>
-        <dd class="text-sm mt-1">
-          <a href="{% url 'signup' event.id %}"
-             class="font-medium hover:opacity-80 transition-opacity underline"
-             style="color: var(--primary);">
-            Sign up for this event →
-          </a>
-        </dd>
-      </div>
-      {% endif %}
-
-    </dl>
-
-    <div class="mt-6">
-      <a href="{% url 'home' %}"
-         class="text-sm opacity-50 hover:opacity-100 transition-opacity"
-         style="color: var(--text);">
-        ← Home
-      </a>
-    </div>
-
-  </div>
-
-  {# ── Right column: Stint Schedule ─────────────────────────── #}
-  <div class="md:border-l md:pl-8 lg:pl-12"
-       style="border-color: var(--border);">
-
-    <h2 class="text-lg font-bold mb-4 pb-2 border-b"
-        style="border-color: var(--border);
-               color: var(--secondary);">
-      Stint Schedule
-    </h2>
-
-    {% if has_unassigned %}
-    <div class="mb-4 px-3 py-2 rounded text-xs"
-         style="border: 1px solid #f59e0b; color: #f59e0b;">
-      ⚠ Some stints do not have a driver assigned yet.
+    {% if event.team_name %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Team</span>
+      <span class="meta-pill-value">{{ event.team_name }}</span>
     </div>
     {% endif %}
 
-    {% if not stints_ready %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Date</span>
+      <span class="meta-pill-value">
+        {{ event.date|date:"j M Y" }}
+      </span>
+    </div>
 
-      <div class="px-3 py-2 rounded text-sm"
-           style="border: 1px solid #f59e0b; color: #f59e0b;">
-        ⚠ Stint schedule not yet available — the event admin has not configured all required timing fields.
-      </div>
+    <!-- Start time — Alpine renders in local tz -->
+    <div class="meta-pill"
+         x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+      <span class="meta-pill-label">Start time</span>
+      <span class="meta-pill-value accent"
+            x-text="new Date('{{ event.start_datetime_utc|to_utc_z }}')
+              .toLocaleTimeString('en-US', {
+                timeZone: tz,
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+              }) + ' ' +
+              new Intl.DateTimeFormat('en', {
+                timeZoneName: 'short', timeZone: tz
+              }).formatToParts(
+                new Date('{{ event.start_datetime_utc|to_utc_z }}')
+              ).find(p => p.type === 'timeZoneName')?.value">
+        {{ event.start_time_utc|time:"H:i" }} UTC
+      </span>
+    </div>
 
-    {% elif not has_stints %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Duration</span>
+      <span class="meta-pill-value">{{ length_display }}</span>
+    </div>
 
-      <div class="px-3 py-2 rounded text-sm opacity-50"
-           style="border: 1px solid var(--border);">
-        Stint assignments have not been created yet. Check back later.
-      </div>
+    {% if event.car %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Car</span>
+      <span class="meta-pill-value">{{ event.car }}</span>
+    </div>
+    {% endif %}
 
-    {% else %}
+    {% if event.track %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Track</span>
+      <span class="meta-pill-value">{{ event.track }}</span>
+    </div>
+    {% endif %}
 
-      <script>
-        const stintRows = {{ stint_rows_json|safe }};
-      </script>
+    {% if event.setup %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Setup</span>
+      <span class="meta-pill-value">{{ event.setup }}</span>
+    </div>
+    {% endif %}
 
-      <div x-data="stintTable()" x-init="init()">
-        <div class="overflow-x-auto overflow-y-auto max-h-[70vh]">
-          <table class="wac-table">
-            <thead>
-              <tr>
-                <th class="sticky top-0 left-0 z-20 text-left"
-                    style="background-color: var(--bg-raised);">
-                  Stint
-                </th>
-                <th class="sticky top-0 z-10 text-left"
-                    style="background-color: var(--bg-raised);">
-                  Start Time
-                </th>
-                <th class="sticky top-0 z-10 text-left"
-                    style="background-color: var(--bg-raised);">
-                  Driver
-                </th>
-              </tr>
-            </thead>
-            <template x-for="(row, index) in stintRows" :key="row.stint_number">
-              <tbody>
-                <template x-if="isNewDay(index)">
-                  <tr>
-                    <td colspan="3"
-                        class="text-center text-xs font-semibold py-1 px-3 tracking-wider"
-                        style="background-color: var(--secondary); color: #111; opacity: 0.9;">
-                      <span x-text="formatDate(row.start_utc, tz)"></span>
-                    </td>
-                  </tr>
-                </template>
-                <tr :class="!row.driver_name ? 'opacity-40' : ''">
-                  <td class="sticky left-0 px-3 py-2 border-b font-mono font-bold text-center text-xs"
-                      style="background-color: var(--bg); border-color: var(--border);">
-                    <span x-text="row.stint_number"></span>
-                  </td>
-                  <td class="px-3 py-2 border-b font-mono whitespace-nowrap text-sm"
-                      style="border-color: var(--border);">
-                    <span x-text="formatTime(row.start_utc, tz)"></span>
-                  </td>
-                  <td class="px-3 py-2 border-b text-sm"
-                      style="border-color: var(--border);">
-                    <span x-text="row.driver_name || 'TBD'"
-                          :class="!row.driver_name ? 'italic opacity-40' : ''">
-                    </span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SCHEDULE SECTION
+============================================================ -->
+<section class="schedule-section"
+         style="padding: 40px 32px 0; flex: 1;">
+
+  {% if not stints_ready %}
+
+  <div style="padding: 20px;
+              border: 1px solid var(--border);
+              background: var(--bg-card);
+              border-left: 3px solid var(--border-mid);
+              max-width: 480px;">
+    <p style="font-size: 11px;
+               color: var(--text-dim);
+               letter-spacing: 0.04em;
+               line-height: 1.6;">
+      Stint schedule not yet available. The event admin has
+      not configured all required timing fields.
+    </p>
+  </div>
+
+  {% elif not has_stints %}
+
+  <div style="padding: 20px;
+              border: 1px solid var(--border);
+              background: var(--bg-card);
+              border-left: 3px solid var(--border-mid);
+              max-width: 480px;">
+    <p style="font-size: 11px;
+               color: var(--text-dim);
+               letter-spacing: 0.04em;
+               line-height: 1.6;">
+      Stint assignments have not been created yet.
+      Check back later.
+    </p>
+  </div>
+
+  {% else %}
+
+  <!-- Unassigned warning -->
+  {% if has_unassigned %}
+  <div style="margin-bottom: 16px;
+              padding: 10px 16px;
+              border: 1px solid var(--danger);
+              background: var(--danger-dim);
+              border-left: 3px solid var(--danger);
+              max-width: 640px;">
+    <p style="font-size: 10px;
+               color: var(--danger);
+               letter-spacing: 0.08em;
+               text-transform: uppercase;">
+      Some stints do not have a driver assigned yet.
+    </p>
+  </div>
+  {% endif %}
+
+  <!-- Stint table heading -->
+  <div class="section-heading">Stint Schedule</div>
+
+  <!-- Timezone note — Alpine detected -->
+  <div class="tz-note"
+       x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+    Times shown in your local timezone:
+    <span x-text="tz"></span>
+  </div>
+
+  <!-- Stint table -->
+  <script>
+    const stintRows = {{ stint_rows_json|safe }};
+  </script>
+
+  <div class="table-wrapper"
+       style="overflow-x: auto;
+              margin-bottom: 40px;
+              max-width: 640px;">
+
+    <div x-data="stintTable()" x-init="init()">
+      <table class="stint-table"
+             style="width: 100%;
+                    border-collapse: separate;
+                    border-spacing: 0 2px;
+                    min-width: 400px;
+                    table-layout: fixed;">
+        <thead>
+          <tr>
+            <th style="padding: 8px 16px;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--text-dim);
+                        font-weight: 500;
+                        text-align: left;
+                        background: var(--bg-raised);">
+              #
+            </th>
+            <th style="padding: 8px 16px;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--text-dim);
+                        font-weight: 500;
+                        text-align: left;
+                        background: var(--bg-raised);">
+              Start time
+            </th>
+            <th style="padding: 8px 16px;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--text-dim);
+                        font-weight: 500;
+                        text-align: left;
+                        background: var(--bg-raised);">
+              Duration
+            </th>
+            <th style="padding: 8px 16px;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--secondary);
+                        font-weight: 500;
+                        text-align: left;
+                        background: var(--bg-raised);">
+              Driver
+            </th>
+          </tr>
+        </thead>
+          <template x-for="(row, index) in stintRows"
+                    :key="row.stint_number">
+            <tbody>
+              <!-- Date separator — only when day changes -->
+              <template x-if="isNewDay(index)">
+                <tr>
+                  <td colspan="4"
+                      style="padding: 8px 16px;
+                             font-size: 9px;
+                             letter-spacing: 0.2em;
+                             text-transform: uppercase;
+                             color: var(--text-dim);
+                             background: var(--bg-raised);
+                             border-bottom: 1px solid var(--border);">
+                    <span x-text="formatDate(row.start_utc, tz)"></span>
                   </td>
                 </tr>
-              </tbody>
-            </template>
-          </table>
-        </div>
-      </div>
-
-    {% endif %}
+              </template>
+              <!-- Stint row -->
+              <tr>
+                <td style="padding: 10px 16px;
+                           font-size: 10px;
+                           color: var(--text-dim);
+                           width: 8%;
+                           letter-spacing: 0.1em;"
+                    x-text="'#' + row.stint_number">
+                </td>
+                <td style="padding: 10px 16px;
+                           font-size: 12px;
+                           color: var(--text);
+                           width: 30%;
+                           white-space: nowrap;">
+                  <span x-text="formatTime(row.start_utc, tz)"></span>
+                  <span style="font-size: 10px; color: var(--text-dim);"
+                        x-text="' ' + tzShort"></span>
+                </td>
+                <td style="padding: 10px 16px;
+                           font-size: 10px;
+                           color: var(--text-dim);
+                           width: 22%;">
+                  {{ stint_duration_display|default:"—" }}
+                </td>
+                <td style="padding: 10px 16px;
+                           font-size: 12px;
+                           font-weight: 500;
+                           letter-spacing: 0.06em;">
+                  <span x-text="row.driver_name || 'open'"
+                        :style="!row.driver_name
+                          ? 'color:var(--unassigned-text);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;'
+                          : 'color:var(--assigned-text);'">
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </template>
+      </table>
+    </div>
 
   </div>
 
+  <!-- Driver stint summary -->
+  {% if driver_counts %}
+  <div class="section-heading">Stints per driver</div>
+  <div class="summary-row" style="margin-bottom: 48px; max-width: 640px;">
+    {% for name, count in driver_counts.items %}
+    <div class="summary-pill">
+      <span class="summary-pill-name">{{ name }}</span>
+      <span class="summary-pill-count">{{ count }}</span>
+      <span class="summary-pill-label">
+        stint{{ count|pluralize }}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% endif %}
+
+</section>
+
+<!-- ============================================================
+     SIGNUP BANNER (recruiting flow only) — bottom of page
+============================================================ -->
+{% if show_signup_link %}
+<div class="signup-banner fade-up-delay-2">
+  <div class="signup-banner-text">
+    Not signed up yet?
+    <strong>Add your availability</strong>
+    so the admin can assign you to a stint.
+  </div>
+  <a href="{% url 'signup' event.id %}" class="btn-secondary">
+    Sign up →
+  </a>
 </div>
+{% endif %}
 
 {% endblock %}
 
@@ -210,16 +367,16 @@
       timeZone: tz,
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true,
+      hour12: false
     });
   }
 
   function formatDate(utcString, tz) {
-    return new Date(utcString).toLocaleDateString('en-GB', {
+    return new Date(utcString).toLocaleDateString('en-US', {
       timeZone: tz,
       weekday: 'short',
       month: 'short',
-      day: 'numeric',
+      day: 'numeric'
     });
   }
 
@@ -230,10 +387,24 @@
   function stintTable() {
     return {
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      tzShort: '',
       stintRows: [],
 
       init() {
-        this.stintRows = typeof stintRows !== 'undefined' ? stintRows : [];
+        this.stintRows = typeof stintRows !== 'undefined'
+          ? stintRows : [];
+
+        // Get short timezone name
+        const eventDate = this.stintRows.length
+          ? new Date(this.stintRows[0].start_utc)
+          : new Date();
+
+        this.tzShort = new Intl.DateTimeFormat('en', {
+          timeZoneName: 'short',
+          timeZone: this.tz
+        }).formatToParts(eventDate)
+          .find(p => p.type === 'timeZoneName')?.value
+          || this.tz;
       },
 
       isNewDay(index) {
@@ -241,8 +412,8 @@
         const prev = this.stintRows[index - 1];
         const curr = this.stintRows[index];
         return !isSameDay(prev.start_utc, curr.start_utc, this.tz);
-      },
-    };
+      }
+    }
   }
 </script>
 {% endblock %}

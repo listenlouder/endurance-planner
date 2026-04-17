@@ -1,89 +1,149 @@
 {{ submitted_slot_timestamps|json_script:"submitted-slots-data" }}
 <script>
-  if (document.getElementById('submitted-slots-data')) {
-    window.submittedSlots = JSON.parse(document.getElementById('submitted-slots-data').textContent);
-  }
+  window.submittedSlots = JSON.parse(
+    document.getElementById('submitted-slots-data').textContent
+  );
+  window.submittedTimezone = '{{ submitted_timezone|escapejs }}';
 </script>
+
 <div id="signup-form-container">
-  <form method="post"
-        hx-post="{% url 'signup' event.id %}"
-        hx-target="#signup-form-container"
-        hx-swap="outerHTML"
-        x-data="signupFormData()"
-        @timezone-selected.window="timezone = $event.detail.value">
-    {% csrf_token %}
-    <div class="flex flex-col gap-6">
+<form method="post"
+      hx-post="{% url 'signup' event.id %}"
+      hx-target="#signup-form-container"
+      hx-swap="outerHTML"
+      x-data="signupFormData()"
+      @timezone-selected.window="timezone = $event.detail.value; tzOverrideOpen = true;">
+  {% csrf_token %}
 
-      <!-- ── Timezone picker ── -->
-      <div class="flex flex-col gap-1">
-        <label class="text-sm font-medium" style="color: var(--text);">Your Timezone</label>
-        <p x-data="{ show: typeof detectedTz !== 'undefined' && detectedTz === 'UTC' && typeof browserTz !== 'undefined' && browserTz !== 'UTC' }"
-           x-show="show"
-           class="text-xs mb-1"
-           style="color: #f59e0b;">
-          Your detected timezone wasn't in our list. Please select the closest match below.
-        </p>
-        {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
-        {% if errors.timezone %}
-          <p class="text-red-500 text-xs mt-1">{{ errors.timezone }}</p>
-        {% endif %}
-      </div>
+  {% if errors.slots %}
+  <div style="margin-bottom: 2px;
+               padding: 12px 16px;
+               border: 1px solid var(--danger);
+               background: var(--danger-dim);
+               border-left: 3px solid var(--danger);">
+    <p style="font-size: 10px; color: var(--danger); letter-spacing: 0.08em;">
+      {{ errors.slots }}
+    </p>
+  </div>
+  {% endif %}
 
-      <!-- ── Driver name ── -->
-      <div class="flex flex-col gap-1">
-        <label class="text-sm font-medium" style="color: var(--text);">
-          Your name
+  <div style="display: flex; flex-direction: column; gap: 2px;">
+
+    <!-- ── Card 1: Driver Details ──────────────────────────── -->
+    <div class="form-card">
+      <div class="form-card-title">Driver Details</div>
+
+      <!-- Name -->
+      <div class="field {% if errors.driver_name %}has-error{% endif %}">
+        <label for="id_driver_name">
+          Your name <span class="required">*</span>
         </label>
         <input type="text"
+               id="id_driver_name"
                name="driver_name"
                value="{{ submitted_name|default:'' }}"
-               placeholder="e.g. Alex Smith"
-               autocomplete="name"
-               class="w-full"
-               style="{% if errors.driver_name %}border-color:#ef4444;{% endif %}" />
+               placeholder="e.g. Will"
+               autocomplete="off">
         {% if errors.driver_name %}
-          <p class="text-red-500 text-sm mt-1">{{ errors.driver_name }}</p>
+        <span class="field-error">{{ errors.driver_name }}</span>
         {% endif %}
       </div>
 
-      <!-- ── Availability grid ── -->
-      <div class="flex flex-col gap-2">
-        <div class="flex items-center justify-between flex-wrap gap-2">
-          <span class="text-sm font-medium" style="color: var(--text);">
-            Your availability
-          </span>
-          {% if slots %}
-          <div class="flex gap-2">
-            <button type="button"
-                    @click="selectAll()"
-                    class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
-                    style="border-color: var(--secondary); color: var(--text);">
-              Select All
-            </button>
-            <button type="button"
-                    @click="clearAll()"
-                    class="px-3 py-1 rounded text-xs font-medium border transition hover:opacity-80"
-                    style="border-color: var(--secondary); color: var(--text);">
-              Clear All
-            </button>
+      <!-- Timezone -->
+      <div class="field {% if errors.timezone %}has-error{% endif %}"
+           style="margin-bottom: 0;">
+        <label>Your timezone <span class="required">*</span></label>
+
+        <!-- Banner: detected tz -->
+        <template x-if="!tzOverrideOpen">
+          <div>
+            <div class="tz-banner">
+              <div>
+                <div class="tz-banner-label">Detected timezone</div>
+                <div class="tz-banner-value" x-text="timezone + ' (' + tzShort + ')'"></div>
+                <div class="tz-banner-question">Is this correct?</div>
+              </div>
+              <div class="tz-banner-actions">
+                <button type="button" class="btn-tz-confirm">Looks right</button>
+                <button type="button" class="btn-tz-change"
+                        @click="tzOverrideOpen = true">Change</button>
+              </div>
+            </div>
+            <input type="hidden" name="timezone" :value="timezone">
           </div>
-          {% endif %}
-        </div>
+        </template>
 
-        {% if errors.slots %}
-          <p class="text-red-500 text-sm">{{ errors.slots }}</p>
+        <!-- Override picker -->
+        <template x-if="tzOverrideOpen">
+          <div style="margin-top: 4px;">
+            {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
+          </div>
+        </template>
+
+        {% if errors.timezone %}
+        <span class="field-error" style="display: block;">{{ errors.timezone }}</span>
         {% endif %}
+      </div>
+    </div>
 
-        {% include 'partials/availability_grid.html' %}
+    <!-- ── Card 2: Availability ────────────────────────────── -->
+    <div class="form-card">
+      <div class="form-card-title">Your Availability</div>
+
+      <p class="avail-intro">
+        Select every slot you're available to drive.
+        Slots shown in your local timezone. Tap a slot to toggle it.
+      </p>
+
+      <div class="avail-controls">
+        <button type="button" class="btn-ghost" @click="selectAll()">Select all</button>
+        <button type="button" class="btn-ghost" @click="clearAll()">Clear all</button>
       </div>
 
-      <!-- ── Submit ── -->
-      <button type="submit"
-              {% if not slots %}disabled{% endif %}
-              class="btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed">
-        Sign Up
-      </button>
-
+      {% if slots %}
+      <div class="avail-grid">
+        <template x-for="(item, fi) in flatSlots" :key="fi">
+          <div style="display: contents;">
+            <div x-show="item.type === 'sep'"
+                 class="avail-day-label"
+                 x-text="item.label"></div>
+            <div x-show="item.type === 'slot'"
+                 class="avail-slot">
+              <input type="checkbox"
+                     :id="'slot-' + item.index"
+                     name="slots"
+                     :value="item.ts"
+                     x-model="checked[item.index]">
+              <label :for="'slot-' + item.index">
+                <span x-text="formatTime(item.ts)"></span>
+                <span class="slot-check">✓</span>
+              </label>
+            </div>
+          </div>
+        </template>
+      </div>
+      {% else %}
+      <div style="padding: 12px 16px;
+                  border: 1px solid var(--border-mid);
+                  background: var(--bg-raised);
+                  font-size: 11px;
+                  color: var(--text-mid);">
+        This event has no availability slots. Contact the event admin.
+      </div>
+      {% endif %}
     </div>
-  </form>
+
+  </div>
+
+  <!-- Submit -->
+  <div class="form-actions" style="padding-bottom: 40px;">
+    <button type="submit"
+            class="btn-primary"
+            style="width: 100%; justify-content: center; padding: 14px 24px;"
+            {% if not slots %}disabled{% endif %}>
+      Sign Up →
+    </button>
+  </div>
+
+</form>
 </div>

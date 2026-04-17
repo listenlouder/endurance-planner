@@ -2,6 +2,7 @@ import hmac
 import json
 import time
 import logging
+from collections import Counter
 from datetime import date, datetime, time as time_type, timezone as dt_utc
 from zoneinfo import ZoneInfo
 
@@ -454,16 +455,23 @@ def event_create(request):
         if form.is_valid():
             event = Event(
                 name=form.cleaned_data['name'],
+                team_name=form.cleaned_data.get('team_name', ''),
+                car=form.cleaned_data.get('car', ''),
+                track=form.cleaned_data.get('track', ''),
                 date=form.cleaned_data['date'],
                 start_time_utc=form.cleaned_data['start_time_utc'],
                 length_seconds=form.cleaned_data['length_seconds'],
                 recruiting=form.cleaned_data.get('recruiting', False),
             )
             event.save()
+            base = request.build_absolute_uri('/').rstrip('/')
             success_ctx = {
                 'success': True,
                 'event': event,
                 'base_url': request.build_absolute_uri('/'),
+                'admin_url': f"{base}/{event.id}/admin/{event.admin_key}/",
+                'signup_url': f"{base}/{event.id}/signup/",
+                'view_url': f"{base}/{event.id}/view/",
             }
             if request.htmx:
                 return render(request, 'partials/event_create_success.html', success_ctx)
@@ -561,6 +569,25 @@ def view_event(request, event_id):
 
     has_unassigned = StintAssignment.objects.filter(event=event, driver=None).exists()
 
+    # Stint duration display
+    if event.has_required_stint_fields:
+        sl = stint_length_seconds(event)
+        sl_mins = int(sl // 60)
+        sl_secs = int(sl % 60)
+        stint_duration_display = (
+            f"{sl_mins}m {sl_secs}s" if sl_secs
+            else f"{sl_mins}m"
+        )
+    else:
+        stint_duration_display = None
+
+    # Driver stint counts for summary pills
+    driver_counts = Counter()
+    for row in stint_rows:
+        if row['driver']:
+            driver_counts[row['driver'].name] += 1
+    driver_counts = dict(driver_counts)
+
     return render(request, 'view.html', {
         'event': event,
         'stint_rows': stint_rows,
@@ -571,6 +598,8 @@ def view_event(request, event_id):
         'length_display': length_display,
         'has_unassigned': has_unassigned,
         'show_signup_link': request.GET.get('from') == 'recruiting',
+        'stint_duration_display': stint_duration_display,
+        'driver_counts': driver_counts,
     })
 
 
@@ -608,6 +637,7 @@ def signup(request, event_id):
             'errors': errors,
             'submitted_name': cleaned['driver_name'],
             'submitted_slot_timestamps': cleaned['slots_raw'],
+            'submitted_timezone': cleaned['timezone'],
         })
         if request.htmx:
             return render(request, 'partials/signup_form.html', ctx)
@@ -663,6 +693,7 @@ def signup_edit(request, event_id, driver_id):
             'errors': errors,
             'submitted_name': cleaned['driver_name'],
             'existing_slot_timestamps': cleaned['slots_raw'],
+            'submitted_timezone': cleaned['timezone'],
             'from_admin': from_admin,
         })
         if request.htmx:
@@ -683,11 +714,13 @@ def signup_edit(request, event_id, driver_id):
 def signup_success(request, event_id, driver_id):
     event = get_object_or_404(Event, id=event_id)
     driver = get_object_or_404(Driver, id=driver_id, event=event)
+    base = request.build_absolute_uri('/').rstrip('/')
     return render(request, 'signup_success.html', {
         'event': event,
         'driver': driver,
         'updated': request.GET.get('updated') == '1',
-        'base_url': request.build_absolute_uri('/'),
+        'view_url': f"{base}/{event.id}/view/",
+        'edit_url': f"{base}/{event.id}/signup/{driver.id}/edit/",
     })
 
 
@@ -782,6 +815,42 @@ def _build_admin_context(request, event):
         for s in slots
     ])
 
+    total_seconds = event.length_seconds or 0
+
+    base = request.build_absolute_uri('/').rstrip('/')
+    signup_url = f"{base}/{event.id}/signup/"
+
+    # Stint assignment context for Section 4
+    has_required_stint_fields = event.has_required_stint_fields
+    stint_windows = []
+    existing_assignments = {}
+    stint_availability_matrix = {}
+    availability_json = {}
+
+    if has_required_stint_fields:
+        stint_windows = get_stint_windows(event)
+        admin_tz_zone = ZoneInfo(admin_tz)
+        for sw in stint_windows:
+            sw['start_local'] = sw['start_utc'].astimezone(admin_tz_zone).strftime('%H:%M')
+        existing_assignments = {
+            sa.stint_number: str(sa.driver_id)
+            for sa in StintAssignment.objects.filter(event=event)
+            if sa.driver_id
+        }
+        stint_availability_matrix = build_stint_availability_matrix(drivers, stint_windows)
+        availability_json = {
+            str(driver.id): [normalize_iso(a.slot_utc) for a in driver.availability.all()]
+            for driver in drivers
+        }
+
+    if has_required_stint_fields:
+        sl = stint_length_seconds(event)
+        sl_mins = int(sl // 60)
+        sl_secs = int(sl % 60)
+        stint_duration_display = f"{sl_mins}m {sl_secs}s" if sl_secs else f"{sl_mins}m"
+    else:
+        stint_duration_display = None
+
     return {
         'event': event,
         'admin_tz': admin_tz,
@@ -789,11 +858,32 @@ def _build_admin_context(request, event):
         'field_groups': field_groups,
         'required_fields': _REQUIRED_FOR_STINTS,
         'missing_required_fields': missing_required_fields,
+        'availability_matrix': availability_matrix,
         'table_data': table_data,
         'sanity_warnings': validate_stint_sanity(event),
         'timezone_list_json': _TIMEZONE_LIST_JSON,
         'slot_timestamps_json': slot_timestamps_json,
         'slots': slots,
+        'signup_url': signup_url,
+        'length_hours_display': total_seconds // 3600,
+        'length_minutes_display': (total_seconds % 3600) // 60,
+        'has_required_stint_fields': has_required_stint_fields,
+        'stint_windows': stint_windows,
+        'stint_availability': stint_availability_matrix,
+        'stint_duration_display': stint_duration_display,
+        'stint_windows_json': json.dumps([{
+            'stint_number': sw['stint_number'],
+            'start_utc': normalize_iso(sw['start_utc']),
+            'end_utc': normalize_iso(sw['end_utc']),
+        } for sw in stint_windows]),
+        'existing_assignments_json': json.dumps({str(k): str(v) for k, v in existing_assignments.items()}),
+        'drivers_json': json.dumps([{'id': str(d.id), 'name': d.name} for d in drivers]),
+        'availability_json': json.dumps(availability_json),
+        'has_assignments': StintAssignment.objects.filter(event=event).exists(),
+        'stint_availability_json': json.dumps({
+            str(driver_id): {str(stint_num): status for stint_num, status in stints.items()}
+            for driver_id, stints in stint_availability_matrix.items()
+        }),
     }
 
 
@@ -807,64 +897,14 @@ def admin_page(request, event_id, admin_key):
     request.session.cycle_key()
     request.session[f'admin_{event_id}'] = True
 
-    return render(request, 'admin.html', _build_admin_context(request, event))
+    ctx = _build_admin_context(request, event)
+    return render(request, 'admin.html', ctx)
 
 
 def admin_dashboard(request, event_id):
     """Session-authenticated admin page — no key in the URL."""
     event = require_admin_session(request, event_id)
     return render(request, 'admin.html', _build_admin_context(request, event))
-
-
-def admin_edit_field(request, event_id):
-    event = require_admin_session(request, event_id)
-
-    if request.method == 'GET':
-        field_name = request.GET.get('field', '')
-        if field_name not in EDITABLE_FIELDS:
-            return HttpResponse(status=400)
-        ctx = _make_field_ctx(event, field_name)
-        if request.GET.get('cancel'):
-            return render(request, 'partials/field_display.html', ctx)
-        return render(request, 'partials/field_edit_form.html', ctx)
-
-    if request.method == 'POST':
-        field_name = request.POST.get('field', '')
-        if field_name not in EDITABLE_FIELDS:
-            return HttpResponse(status=400)
-
-        # Special handling for length_hours: also reads length_minutes
-        if field_name == 'length_hours':
-            try:
-                hours = int(request.POST.get('length_hours', 0) or 0)
-                minutes = int(request.POST.get('length_minutes', 0) or 0)
-                if hours < 0 or hours > 168:
-                    raise ValueError
-                if minutes < 0 or minutes > 59:
-                    raise ValueError
-                if hours == 0 and minutes == 0:
-                    raise ValueError
-            except (ValueError, TypeError):
-                ctx = _make_field_ctx(event, field_name)
-                ctx['error'] = (
-                    'Enter valid hours (0–168) and minutes (0–59). '
-                    'Total length must be greater than zero.'
-                )
-                return render(request, 'partials/field_edit_form.html', ctx)
-            event.length_seconds = (hours * 3600) + (minutes * 60)
-            event.save(update_fields=['length_seconds'])
-            ctx = _make_field_ctx(event, field_name)
-            return render(request, 'partials/field_display.html', ctx)
-
-        value_str = request.POST.get('value', '')
-        error = _validate_and_save_field(event, field_name, value_str)
-        ctx = _make_field_ctx(event, field_name)
-        if error:
-            ctx['error'] = error
-            return render(request, 'partials/field_edit_form.html', ctx)
-        return render(request, 'partials/field_display.html', ctx)
-
-    return HttpResponse(status=405)
 
 
 def admin_edit_driver_name(request, event_id, driver_id):
@@ -908,28 +948,11 @@ def admin_remove_driver(request, event_id, driver_id):
         return HttpResponse(status=405)
     event = require_admin_session(request, event_id)
     Driver.objects.filter(id=driver_id, event=event).delete()
-
-    drivers = (
-        Driver.objects.filter(event=event)
-        .prefetch_related('availability')
-        .annotate(stint_count=Count('stint_assignments'))
-        .order_by('signed_up_at')
-    )
-    slots = get_availability_slots(event)
-    availability_matrix, uncovered_slots = _build_availability_matrix(drivers, slots)
-    admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
-    if admin_tz not in VALID_TIMEZONES:
-        admin_tz = 'UTC'
-    table_data = _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz)
-
-    table_html = render_to_string(
-        'partials/availability_table.html',
-        {'table_data': table_data, 'drivers': drivers, 'admin_tz': admin_tz},
-        request=request,
-    )
-    response = HttpResponse(
-        f'<div hx-swap-oob="innerHTML:#availability-table-container">{table_html}</div>'
-    )
+    if event.has_required_stint_fields:
+        response = HttpResponse(status=200)
+        response['HX-Refresh'] = 'true'
+        return response
+    response = HttpResponse()
     response['HX-Reswap'] = 'delete'
     return response
 
@@ -963,9 +986,17 @@ def admin_add_driver(request, event_id):
 
     if errors:
         error_msg = ' '.join(errors.values())
+        err_slots = get_availability_slots(event)
+        err_matrix, _ = _build_availability_matrix(drivers_qs, err_slots)
         driver_list_html = render_to_string(
             'partials/driver_list.html',
-            {'drivers': drivers_qs, 'event': event, 'admin_tz': admin_tz},
+            {
+                'drivers': drivers_qs,
+                'event': event,
+                'admin_tz': admin_tz,
+                'availability_matrix': err_matrix,
+                'slots': err_slots,
+            },
             request=request,
         )
         error_html = f'<div class="text-red-400 text-sm mb-3 px-2">⚠ {error_msg}</div>'
@@ -975,7 +1006,12 @@ def admin_add_driver(request, event_id):
     if slots_raw:
         _save_availability(driver, slots_raw, event)
 
-    # Refresh driver list after creation
+    if event.has_required_stint_fields:
+        response = HttpResponse(status=200)
+        response['HX-Refresh'] = 'true'
+        return response
+
+    # Refresh driver list after creation (stints not yet configured)
     drivers_qs = (
         Driver.objects.filter(event=event)
         .prefetch_related('availability')
@@ -983,119 +1019,189 @@ def admin_add_driver(request, event_id):
         .order_by('signed_up_at')
     )
     slots = get_availability_slots(event)
-    availability_matrix, uncovered_slots = _build_availability_matrix(drivers_qs, slots)
-    table_data = _build_table_data(slots, uncovered_slots, availability_matrix, drivers_qs, admin_tz)
+    availability_matrix, _ = _build_availability_matrix(drivers_qs, slots)
 
     driver_list_html = render_to_string(
         'partials/driver_list.html',
-        {'drivers': drivers_qs, 'event': event, 'admin_tz': admin_tz},
+        {
+            'drivers': drivers_qs,
+            'event': event,
+            'admin_tz': admin_tz,
+            'availability_matrix': availability_matrix,
+            'slots': slots,
+        },
         request=request,
     )
-    table_html = render_to_string(
-        'partials/availability_table.html',
-        {'table_data': table_data, 'drivers': drivers_qs, 'admin_tz': admin_tz},
-        request=request,
-    )
-    return HttpResponse(
-        driver_list_html
-        + f'<div hx-swap-oob="innerHTML:#availability-table-container">{table_html}</div>'
-    )
+    return HttpResponse(driver_list_html)
 
 
-def create_stints(request, event_id):
-    """
-    GET: render the create stints page with stint table and availability table.
-    POST: save stint assignments, re-render with updated state.
-    """
+def admin_save_details(request, event_id):
+    """POST. Saves all event detail fields at once."""
     event = require_admin_session(request, event_id)
+    if request.method != 'POST':
+        return HttpResponseBadRequest()
+
+    errors = {}
+
+    name = request.POST.get('name', '').strip()
+    if not name:
+        errors['name'] = 'Event name is required.'
+
+    date_str = request.POST.get('date', '').strip()
+    try:
+        parsed_date = date.fromisoformat(date_str)
+    except ValueError:
+        errors['date'] = 'Invalid date.'
+        parsed_date = None
+
+    start_time_str = request.POST.get('start_time_utc', '').strip()
+    try:
+        parsed_time = time_type.fromisoformat(start_time_str)
+    except ValueError:
+        errors['start_time_utc'] = 'Invalid time.'
+        parsed_time = None
+
+    try:
+        length_hours = int(request.POST.get('length_hours', 0) or 0)
+        length_minutes = int(request.POST.get('length_minutes', 0) or 0)
+        if length_hours == 0 and length_minutes == 0:
+            errors['length'] = 'Race length must be greater than zero.'
+        length_seconds = (length_hours * 3600) + (length_minutes * 60)
+    except (ValueError, TypeError):
+        errors['length'] = 'Invalid race length.'
+        length_seconds = None
+
+    if errors:
+        return render(request, 'partials/admin_details_errors.html', {'errors': errors}, status=422)
+
+    event.name = name
+    if parsed_date:
+        event.date = parsed_date
+    if parsed_time:
+        event.start_time_utc = parsed_time
+    if length_seconds:
+        event.length_seconds = length_seconds
+    event.team_name = request.POST.get('team_name', '').strip()
+    event.car = request.POST.get('car', '').strip()
+    event.track = request.POST.get('track', '').strip()
+    event.setup = request.POST.get('setup', '').strip()
+    event.recruiting = (request.POST.get('recruiting') == 'on')
+    event.save()
+
+    response = HttpResponse(status=200)
+    response['HX-Trigger'] = 'show-toast'
+    return response
+
+
+def admin_save_calc(request, event_id):
+    """POST. Saves stint calculation fields."""
+    event = require_admin_session(request, event_id)
+    if request.method != 'POST':
+        return HttpResponseBadRequest()
+
+    errors = {}
+
+    LAP_FIELDS = ['avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds']
+    POST_NAMES = {
+        'avg_lap_seconds': 'avg_lap',
+        'in_lap_seconds': 'in_lap',
+        'out_lap_seconds': 'out_lap',
+    }
+
+    def parse_mmss(val):
+        parts = val.strip().split(':')
+        if len(parts) != 2:
+            raise ValueError
+        m, s = int(parts[0]), int(parts[1])
+        if not (0 <= s < 60):
+            raise ValueError
+        return (m * 60) + s
+
+    for field in LAP_FIELDS:
+        raw = request.POST.get(POST_NAMES[field], '').strip()
+        if raw:
+            try:
+                setattr(event, field, parse_mmss(raw))
+            except (ValueError, IndexError):
+                errors[field] = 'Use MM:SS format (e.g. 2:18)'
+
+    numeric_fields = {
+        'fuel_capacity': 'fuel_capacity',
+        'fuel_per_lap': 'fuel_burn',
+    }
+    for model_field, post_name in numeric_fields.items():
+        raw = request.POST.get(post_name, '').strip()
+        if raw:
+            try:
+                setattr(event, model_field, float(raw))
+            except ValueError:
+                errors[model_field] = 'Invalid number.'
+
+    raw_laps = request.POST.get('target_laps', '').strip()
+    if raw_laps:
+        try:
+            laps_val = float(raw_laps)
+            if laps_val != int(laps_val):
+                errors['target_laps'] = 'Target laps must be a whole number.'
+            else:
+                event.target_laps = int(laps_val)
+        except ValueError:
+            errors['target_laps'] = 'Invalid number.'
+
+    if errors:
+        return render(request, 'partials/admin_calc_errors.html', {'errors': errors})
+
+    event.save()
+    if event.has_required_stint_fields:
+        response = HttpResponse(status=200)
+        response['HX-Refresh'] = 'true'
+        return response
+    response = HttpResponse(status=200)
+    response['HX-Trigger'] = 'show-toast'
+    return response
+
+
+def create_stints_redirect(request, event_id):
+    """Stub — stint assignment is now on the admin dashboard."""
+    event = require_admin_session(request, event_id)
+    return redirect('admin_dashboard', event_id=event_id)
+
+
+def admin_save_assignments(request, event_id):
+    """POST. Saves all stint driver assignments at once."""
+    event = require_admin_session(request, event_id)
+    if request.method != 'POST':
+        return HttpResponseBadRequest()
 
     if not event.has_required_stint_fields:
-        messages.error(
-            request,
-            "All required timing and fuel fields must be set before creating stints.",
-        )
-        return redirect('admin_dashboard', event_id=event_id)
+        return HttpResponseBadRequest()
 
     stint_windows = get_stint_windows(event)
 
-    drivers = Driver.objects.filter(event=event).prefetch_related('availability')
+    assignments_to_create = []
+    for sw in stint_windows:
+        n = sw['stint_number']
+        driver_id = request.POST.get(f'stint_{n}', '').strip()
+        driver = None
+        if driver_id:
+            try:
+                driver = Driver.objects.get(id=driver_id, event=event)
+            except (Driver.DoesNotExist, ValueError):
+                logger.warning(
+                    "admin_save_assignments: driver_id %r not found for event %s — stint %d unassigned",
+                    driver_id, event_id, n,
+                )
+        assignments_to_create.append(
+            StintAssignment(event=event, stint_number=n, driver=driver)
+        )
 
-    if request.method == 'POST':
+    with transaction.atomic():
         StintAssignment.objects.filter(event=event).delete()
-
-        assignments_to_create = []
-        for sw in stint_windows:
-            n = sw['stint_number']
-            driver_id = request.POST.get(f'stint_{n}', '').strip()
-            driver = None
-            if driver_id:
-                try:
-                    driver = Driver.objects.get(id=driver_id, event=event)
-                except Driver.DoesNotExist:
-                    logger.warning(
-                        "create_stints: driver_id %r not found for event %s — stint %d unassigned",
-                        driver_id, event_id, n,
-                    )
-            assignments_to_create.append(
-                StintAssignment(event=event, stint_number=n, driver=driver)
-            )
         StintAssignment.objects.bulk_create(assignments_to_create)
 
-        if request.htmx:
-            return HttpResponse(status=204)
-
-        messages.success(request, "Stint assignments saved.")
-        return redirect('create_stints', event_id=event_id)
-
-    assignments = {
-        sa.stint_number: sa.driver_id
-        for sa in StintAssignment.objects.filter(event=event)
-    }
-
-    availability_data = {
-        str(driver.id): [normalize_iso(a.slot_utc) for a in driver.availability.all()]
-        for driver in drivers
-    }
-
-    admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
-    if admin_tz not in VALID_TIMEZONES:
-        admin_tz = 'UTC'
-    admin_tz_zone = ZoneInfo(admin_tz)
-    for sw in stint_windows:
-        sw['start_local'] = sw['start_utc'].astimezone(admin_tz_zone).strftime('%H:%M')
-
-    stint_availability = build_stint_availability_matrix(drivers, stint_windows)
-
-    sl = stint_length_seconds(event)
-    stint_length_display = f"{int(sl // 60)}m {int(sl % 60)}s"
-
-    context = {
-        'event': event,
-        'stint_windows': stint_windows,
-        'drivers': drivers,
-        'admin_tz': admin_tz,
-        'stint_length_display': stint_length_display,
-        'total_stints_count': len(stint_windows),
-        'stint_availability': stint_availability,
-        'stint_windows_json': json.dumps([
-            {
-                'stint_number': sw['stint_number'],
-                'start_utc': normalize_iso(sw['start_utc']),
-                'end_utc': normalize_iso(sw['end_utc']),
-            }
-            for sw in stint_windows
-        ]),
-        'availability_json': json.dumps(availability_data),
-        'existing_assignments_json': json.dumps({
-            str(k): str(v) for k, v in assignments.items() if v
-        }),
-        'drivers_json': json.dumps([
-            {'id': str(d.id), 'name': d.name}
-            for d in drivers
-        ]),
-    }
-
-    return render(request, 'create_stints.html', context)
+    response = HttpResponse(status=200)
+    response['HX-Trigger'] = 'show-toast'
+    return response
 
 
 # ---------------------------------------------------------------------------

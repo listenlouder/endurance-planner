@@ -8,6 +8,10 @@
 ============================================================ */
 :root {
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Availability partial state — amber, same in both modes */
+  --partial-bg:      rgba(204, 140, 20, 0.12);
+  --partial-text:    #cc8c14;
 }
 
 /* ============================================================
@@ -28,6 +32,24 @@
   --secondary-dim: rgba(70, 206, 207, 0.1);
   --danger:      #c44444;
   --rule:        rgba(221, 99, 11, 0.3);
+
+  /* Stint status */
+  --assigned-bg:     rgba(221, 99, 11, 0.13);
+  --assigned-text:   #dd630b;
+  --unassigned-bg:   rgba(196, 68, 68, 0.12);
+  --unassigned-text: #c44444;
+
+  /* Availability matrix */
+  --avail-bg:        rgba(70, 206, 207, 0.12);
+  --avail-text:      #46cecf;
+  --unavail-bg:      #1c1c1c;
+  --unavail-text:    #2a2a2a;
+
+  /* Depth */
+  --bg-deep:         #141414;
+
+  /* Danger dim */
+  --danger-dim:      rgba(196, 68, 68, 0.08);
 }
 
 /* ============================================================
@@ -48,6 +70,24 @@
   --secondary-dim: rgba(129, 77, 255, 0.08);
   --danger:      #c44444;
   --rule:        rgba(255, 20, 147, 0.25);
+
+  /* Stint status */
+  --assigned-bg:     rgba(255, 20, 147, 0.09);
+  --assigned-text:   #ff1493;
+  --unassigned-bg:   rgba(196, 68, 68, 0.08);
+  --unassigned-text: #c44444;
+
+  /* Availability matrix */
+  --avail-bg:        rgba(185, 255, 34, 0.25);
+  --avail-text:      #4a7000;
+  --unavail-bg:      #f5f5f5;
+  --unavail-text:    #e0e0e0;
+
+  /* Depth */
+  --bg-deep:         #ebebeb;
+
+  /* Danger dim */
+  --danger-dim:      rgba(196, 68, 68, 0.06);
 }
 
 /* ============================================================
@@ -709,4 +749,869 @@ main {
     grid-template-columns: 1fr;
   }
   .recent-section { padding: 0 16px 48px; }
+}
+
+/* ============================================================
+   SECTION HEADING
+   Used on admin, view event, signup pages.
+   Full-width label with trailing rule line.
+============================================================ */
+.section-heading {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.section-heading::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ============================================================
+   META PILL
+   Used on view event page for date, start time, car etc.
+============================================================ */
+.meta-pill {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 7px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.meta-pill-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+}
+.meta-pill-value {
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+}
+.meta-pill-value.accent { color: var(--primary); }
+
+/* ============================================================
+   FORM CARD
+   Used on create event and signup pages.
+============================================================ */
+.form-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 32px;
+  margin-bottom: 2px;
+}
+.form-card-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.form-card-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ============================================================
+   FIELD
+   Used on create event, signup, and admin pages.
+============================================================ */
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+}
+.field label .required {
+  color: var(--primary);
+  margin-left: 2px;
+}
+.field-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  font-family: 'DM Mono', monospace;
+}
+.field-error {
+  font-size: 10px;
+  color: var(--danger);
+  letter-spacing: 0.06em;
+  font-family: 'DM Mono', monospace;
+  display: none;
+}
+.field.has-error input,
+.field.has-error select,
+.field.has-error textarea {
+  border-color: var(--danger);
+  background: var(--danger-dim);
+}
+.field.has-error .field-error {
+  display: block;
+}
+
+/* ============================================================
+   COPY BUTTON
+   Used on create event success state, admin page.
+============================================================ */
+.copy-btn {
+  background: transparent;
+  border: 1px solid var(--border-mid);
+  color: var(--text-mid);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.copy-btn:hover {
+  border-color: var(--secondary);
+  color: var(--secondary);
+  background: var(--secondary-dim);
+}
+.copy-btn.copied {
+  border-color: var(--secondary);
+  color: var(--secondary);
+  background: var(--secondary-dim);
+}
+
+/* ============================================================
+   LINK CARD
+   Used on create event success, signup success.
+============================================================ */
+.link-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  transition: border-color 0.15s;
+  margin-bottom: 2px;
+}
+.link-card:last-child { margin-bottom: 0; }
+.link-card:hover { border-color: var(--border-mid); }
+.link-card-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.link-card-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-family: 'DM Mono', monospace;
+}
+.link-card-label.admin-label  { color: var(--primary); }
+.link-card-label.signup-label { color: var(--secondary); }
+.link-card-label.view-label   { color: var(--text-mid); }
+.link-card-url {
+  font-size: 11px;
+  color: var(--text-mid);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'DM Mono', monospace;
+}
+.link-card-desc {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+  font-family: 'DM Mono', monospace;
+}
+
+/* ============================================================
+   SUCCESS STATE
+   Shared pattern for create event and signup success.
+============================================================ */
+.success-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--primary-dim);
+  border: 1px solid var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--primary);
+  font-size: 16px;
+}
+.success-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.success-subtitle {
+  font-size: 11px;
+  color: var(--text-mid);
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+  font-family: 'DM Mono', monospace;
+}
+.event-created-name {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.03em;
+  margin-bottom: 24px;
+  padding: 14px 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+}
+
+/* ============================================================
+   ADMIN SECTION
+   Used on admin page sections.
+============================================================ */
+.admin-section {
+  padding: 32px;
+  border-bottom: 1px solid var(--border);
+  max-width: 900px;
+}
+
+/* ============================================================
+   DETAIL FIELD
+   Used in admin event details and stint calculation grids.
+============================================================ */
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+}
+.detail-field.full-width {
+  grid-column: 1 / -1;
+}
+.detail-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+}
+.detail-input {
+  background: var(--bg);
+  border: 1px solid var(--border-mid);
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.2s var(--ease);
+  width: 100%;
+  border-radius: 0;
+}
+.detail-input:focus { border-color: var(--secondary); }
+.detail-input::placeholder { color: var(--text-dim); }
+.details-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ============================================================
+   STAT CARD
+   Used in stint calculation output panel.
+============================================================ */
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-mid);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stat-card.accent {
+  border-left-color: var(--primary);
+}
+.stat-card.danger {
+  border-color: var(--danger);
+  border-left-color: var(--danger);
+}
+.stat-value.danger {
+  color: var(--danger);
+}
+.stat-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+}
+.stat-value {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+.stat-card.accent .stat-value { color: var(--primary); }
+.stat-unit {
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  font-family: 'DM Mono', monospace;
+}
+
+/* ============================================================
+   DRIVER ROW
+   Used in admin drivers section.
+============================================================ */
+.driver-row {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 2px;
+}
+.driver-row:last-child { margin-bottom: 0; }
+.driver-row-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.driver-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.driver-meta-name {
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  font-family: 'DM Mono', monospace;
+}
+.driver-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  font-family: 'DM Mono', monospace;
+}
+.avail-count {
+  font-size: 10px;
+  color: var(--text-mid);
+  letter-spacing: 0.06em;
+  font-family: 'DM Mono', monospace;
+}
+.avail-count span { color: var(--secondary); }
+.btn-remove {
+  background: transparent;
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-remove:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ============================================================
+   TOAST
+   Save confirmation notification.
+============================================================ */
+.toast {
+  position: fixed;
+  bottom: 88px;
+  right: 24px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-mid);
+  border-left: 3px solid var(--primary);
+  padding: 12px 20px;
+  font-size: 11px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-mid);
+  letter-spacing: 0.04em;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
+  pointer-events: none;
+  z-index: 200;
+}
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ============================================================
+   AVAILABILITY GRID
+   Used on signup page.
+============================================================ */
+.avail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+}
+.avail-slot {
+  position: relative;
+}
+.avail-slot input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.avail-slot label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-mid);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  user-select: none;
+  font-family: 'DM Mono', monospace;
+}
+.avail-slot label:hover {
+  border-color: var(--border-mid);
+  color: var(--text);
+}
+.avail-slot input[type="checkbox"]:checked + label {
+  background: var(--primary-dim);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.slot-check {
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.avail-slot input[type="checkbox"]:checked + label .slot-check {
+  opacity: 1;
+}
+.avail-day-label {
+  grid-column: 1 / -1;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 12px 0 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+  font-family: 'DM Mono', monospace;
+}
+.avail-day-label:first-child { padding-top: 0; }
+
+/* ============================================================
+   UNIFIED STINT TABLE
+   Used on admin page stint assignment section.
+============================================================ */
+.unified-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 2px;
+  min-width: 600px;
+}
+.unified-table thead th {
+  padding: 8px 12px;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  background: var(--bg-raised);
+  font-family: 'DM Mono', monospace;
+}
+th.avail-divider, td.avail-divider {
+  width: 16px;
+  background: var(--bg) !important;
+  border: none !important;
+  padding: 0 !important;
+}
+th.avail-group-header {
+  color: var(--secondary) !important;
+  text-align: center;
+}
+.avail-driver-th {
+  color: var(--secondary) !important;
+  text-align: center;
+}
+th.col-divider, td.col-divider {
+  width: 16px;
+  background: var(--bg) !important;
+  border: none !important;
+  padding: 0 !important;
+}
+.unified-table tbody tr { background: var(--bg-card); }
+.unified-table tbody td {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-mid);
+  white-space: nowrap;
+  font-family: 'DM Mono', monospace;
+}
+tr.row-assigned   { background: var(--assigned-bg); }
+tr.row-unassigned { background: var(--unassigned-bg); }
+td.s-num  { color: var(--text-dim); font-size: 10px; width: 36px; }
+td.s-time { color: var(--text); font-size: 12px; width: 100px; }
+td.s-dur  { color: var(--text-dim); font-size: 10px; width: 60px; }
+td.s-driver { width: 160px; }
+td.avail-td {
+  text-align: center;
+  width: 44px;
+  padding: 0 4px;
+}
+.avail-cell {
+  width: 32px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+}
+.avail-cell.yes {
+  background: var(--avail-bg);
+  color: var(--avail-text);
+}
+.avail-cell.no {
+  background: var(--unavail-bg);
+  color: var(--unavail-text);
+}
+.avail-cell.partial {
+  background: var(--partial-bg);
+  color: var(--partial-text);
+}
+
+/* ============================================================
+   DRIVER SELECT (inside unified table)
+============================================================ */
+.driver-select-wrap {
+  position: relative;
+}
+.driver-select-wrap::after {
+  content: '↓';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.driver-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border-mid);
+  color: var(--text-mid);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 6px 24px 6px 10px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  border-radius: 0;
+}
+.driver-select:focus { border-color: var(--secondary); }
+.driver-select.is-assigned {
+  color: var(--assigned-text);
+  border-color: var(--primary);
+  background: var(--assigned-bg);
+}
+.driver-select.is-conflict {
+  color: var(--unassigned-text);
+  border-color: var(--danger);
+  background: var(--unassigned-bg);
+}
+tr.row-unassigned td.s-num,
+tr.row-unassigned td.s-time,
+tr.row-unassigned td.s-dur {
+  color: var(--unassigned-text);
+}
+
+/* ============================================================
+   SUMMARY PILLS
+   Used on view event page stints per driver section.
+============================================================ */
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 8px;
+}
+.summary-pill {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.summary-pill-name {
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  font-family: 'DM Mono', monospace;
+}
+.summary-pill-count {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1;
+}
+.summary-pill-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  font-family: 'DM Mono', monospace;
+}
+
+/* ============================================================
+   SIGNUP BANNER (view event page)
+============================================================ */
+.signup-banner {
+  margin: 32px 32px 0;
+  padding: 16px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 900px;
+}
+.signup-banner-text {
+  font-size: 11px;
+  color: var(--text-mid);
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+  font-family: 'DM Mono', monospace;
+}
+.signup-banner-text strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ============================================================
+   ADMIN BADGE (header)
+============================================================ */
+.admin-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  padding: 3px 8px;
+}
+
+/* ============================================================
+   PAGE HEADER (admin, view event)
+============================================================ */
+.page-header {
+  padding: 48px 32px 36px;
+  border-bottom: 1px solid var(--border);
+  animation: fadeUp 0.6s var(--ease) both;
+}
+.page-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'DM Mono', monospace;
+}
+.page-eyebrow::before {
+  content: '';
+  display: block;
+  width: 24px;
+  height: 1px;
+  background: var(--secondary);
+}
+.page-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: clamp(26px, 4vw, 44px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 8px;
+}
+.page-sub {
+  font-size: 11px;
+  color: var(--text-mid);
+  letter-spacing: 0.04em;
+  font-family: 'DM Mono', monospace;
+}
+
+/* ============================================================
+   TZ BANNER (signup page)
+============================================================ */
+.tz-banner {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-mid);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.tz-banner-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+}
+.tz-banner-value {
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  font-family: 'DM Mono', monospace;
+}
+.tz-banner-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.btn-tz-confirm {
+  padding: 6px 14px;
+  background: var(--secondary);
+  color: var(--bg);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  border-radius: 0;
+}
+.btn-tz-confirm:hover { opacity: 0.85; }
+.btn-tz-change {
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--text-mid);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-mid);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  border-radius: 0;
+}
+.btn-tz-change:hover {
+  border-color: var(--text-mid);
+  color: var(--text);
+}
+.tz-banner-question {
+  font-size: 10px;
+  color: var(--text-mid);
+  letter-spacing: 0.04em;
+  font-family: 'DM Mono', monospace;
+}
+
+/* ============================================================
+   AVAILABILITY GRID (signup page)
+============================================================ */
+.avail-intro {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+.avail-intro span { color: var(--secondary); }
+
+.avail-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* ============================================================
+   FORM ACTIONS (signup submit row)
+============================================================ */
+.form-actions {
+  padding: 0 32px;
+  max-width: 680px;
+  margin-top: 2px;
+}
+@media (max-width: 600px) {
+  .form-actions { padding: 0 16px; }
+  .avail-grid   { grid-template-columns: repeat(2, 1fr); }
 }
