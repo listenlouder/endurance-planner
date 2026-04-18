@@ -6,9 +6,11 @@
     <div class="success-icon">✓</div>
     <div>
       <div class="success-title">Event Created</div>
+      {% if not discord_user %}
       <div class="success-subtitle">
         Save your links before leaving this page.
       </div>
+      {% endif %}
     </div>
   </div>
 
@@ -68,7 +70,8 @@
 
   </div>
 
-  <!-- Admin key warning -->
+  <!-- Admin key warning — only for users without Discord auth -->
+  {% if not discord_user %}
   <div style="padding: 14px 16px;
               background: var(--primary-dim);
               border: 1px solid var(--primary);
@@ -89,6 +92,7 @@
       recovered if lost. Save it somewhere safe.
     </p>
   </div>
+  {% endif %}
 
   <!-- View event button -->
   <a href="{% url 'view_event' event.id %}" class="btn-secondary">

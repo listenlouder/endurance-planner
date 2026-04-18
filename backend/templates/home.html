@@ -5,7 +5,8 @@
 
 {% block content %}
 
-<section class="hero fade-up">
+<!-- HERO -->
+<section class="hero fade-up" style="padding: 12px 32px 32px; max-width: 640px;">
   <div class="hero-eyebrow">Endurance Race Planner</div>
   <h1 class="hero-title">Plan the stint.<br><span>Drive the stint.</span></h1>
   <p class="hero-sub">Create an event, share a signup link, and build your driving schedule — all in one place.</p>
@@ -14,67 +15,173 @@
 
 <div class="rule"></div>
 
-<section class="action-section fade-up-delay-1">
+<!-- CONTENT GRID -->
+<div class="content-grid">
 
-  <!-- Create event -->
-  <div class="action-card primary-card">
-    <div class="card-number">01 — New event</div>
-    <div class="card-title">Create Event</div>
-    <p class="card-desc">Set up a new race event. Generate signup and admin links to share with your team.</p>
-    <a href="{% url 'event_create' %}" class="btn-primary">
-      New Event
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </a>
+  <!-- ============================================================
+       LEFT COLUMN
+  ============================================================ -->
+  <div class="left-col">
+
+    <!-- Action cards -->
+    <div class="action-cards">
+
+      <!-- Create Event -->
+      <div class="action-card primary-card">
+        <div class="card-number">01 — New event</div>
+        <div class="card-title">Create Event</div>
+        <p class="card-desc">Set up a new race event. Generate signup and admin links to share with your team.</p>
+        <a href="{% url 'event_create' %}" class="btn-primary">
+          New Event
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+      </div>
+
+      <!-- Find Event -->
+      <div class="action-card secondary-card"
+           x-data="{ open: false }"
+           @click.outside="open = false">
+        <div class="card-number">02 — Existing event</div>
+        <div class="card-title">Find Event</div>
+        <p class="card-desc">Search by event name, track, or car to jump to an existing event.</p>
+        <div class="find-form">
+          <label for="event-search">Event name, track, or car</label>
+          <div class="input-row">
+            <input class="find-input"
+                   id="event-search"
+                   type="text"
+                   name="q"
+                   placeholder="Search events…"
+                   autocomplete="off"
+                   spellcheck="false"
+                   @focus="open = true"
+                   hx-get="{% url 'event_search' %}"
+                   hx-trigger="input changed delay:300ms"
+                   hx-target="#search-results"
+                   hx-swap="innerHTML">
+            <button class="find-btn" type="button">Go →</button>
+          </div>
+          <div id="search-results" x-show="open" class="relative" style="z-index: 50;"></div>
+          <p class="find-hint">Your event can also be found via the link shared by your team admin.</p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Recruiting -->
+    {% if recruiting_events %}
+    <div>
+      <div class="sub-section-label">Recruiting — looking for drivers</div>
+      <div class="event-list">
+        {% for event in recruiting_events %}
+        <a class="event-item" href="{% url 'view_event' event.id %}?from=recruiting">
+          <div class="event-item-left">
+            <span class="event-item-name">{{ event.name }}</span>
+            <span class="event-item-meta">
+              <span class="event-dot"></span>
+              {{ event.date|date:"d M Y"|upper }}
+              · {{ event.driver_count }} driver{{ event.driver_count|pluralize }} signed up
+              · {{ event.length_seconds|seconds_to_hours_display }}
+              {% if event.track %} · {{ event.track }}{% endif %}
+              {% if event.car %} · {{ event.car }}{% endif %}
+            </span>
+          </div>
+          <span class="event-item-arrow">→</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
   </div>
 
-  <!-- Find event -->
-  <div class="action-card secondary-card">
-    <div class="card-number">02 — Existing event</div>
-    <div class="card-title">Find Event</div>
-    <p class="card-desc">Search by event name, track, or car to jump to an existing event.</p>
-    <div x-data="{ open: false }" @click.outside="open = false" class="find-form">
-      <label for="event-search">Event name, track, or car</label>
-      <input type="text"
-             id="event-search"
-             name="q"
-             placeholder="Search events…"
-             autocomplete="off"
-             @focus="open = true"
-             hx-get="{% url 'event_search' %}"
-             hx-trigger="input changed delay:300ms"
-             hx-target="#search-results"
-             hx-swap="innerHTML">
-      <div id="search-results"
-           x-show="open"
-           @click.self="open = false"
-           class="relative z-50">
+  <!-- ============================================================
+       RIGHT COLUMN — MY EVENTS
+  ============================================================ -->
+  <div class="right-col">
+    <div class="my-events-card">
+
+      <div class="my-events-header">
+        <span class="my-events-title">My Events</span>
+        {% if discord_user %}
+        <span class="my-events-user">{{ discord_user.username }}</span>
+        {% endif %}
       </div>
-      <p class="find-hint">Search live to find events you can join as a driver.</p>
+
+      {% if discord_user %}
+
+        {% if admin_events or driver_events %}
+
+          {% if admin_events %}
+          <div class="my-events-group">
+            <div class="group-label">Organising</div>
+            {% for event in admin_events %}
+            <a class="my-event-item" href="{% url 'admin_dashboard' event.id %}">
+              <div class="my-event-left">
+                <span class="my-event-name">{{ event.name }}</span>
+                <span class="my-event-meta">{{ event.date|date:"d M Y"|upper }}</span>
+              </div>
+              <span class="my-event-role admin">Admin</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if driver_events %}
+          <div class="my-events-group">
+            <div class="group-label">Racing</div>
+            {% for event in driver_events %}
+            <a class="my-event-item" href="{% url 'view_event' event.id %}">
+              <div class="my-event-left">
+                <span class="my-event-name">{{ event.name }}</span>
+                <span class="my-event-meta">
+                  {{ event.date|date:"d M Y"|upper }}{% if event.my_driver_name %} · {{ event.my_driver_name }}{% endif %}
+                </span>
+              </div>
+              <span class="my-event-role driver">Driver</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+        {% else %}
+
+          <p style="font-size: 11px; color: var(--text-dim); letter-spacing: 0.04em; line-height: 1.7;">
+            No events yet.
+          </p>
+          <p style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.04em; line-height: 1.7; margin-top: 6px;">
+            Create an event or sign up for a recruiting race to see it here.
+          </p>
+
+        {% endif %}
+
+      {% else %}
+
+        <p style="font-size: 11px; color: var(--text-mid); letter-spacing: 0.04em; line-height: 1.7; margin-bottom: 16px;">
+          Log in with Discord to track your events and access your admin pages without saving links.
+        </p>
+        <a href="{% url 'discord_login' %}"
+           style="display: inline-flex; align-items: center; gap: 8px;
+                  font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500;
+                  letter-spacing: 0.1em; text-transform: uppercase;
+                  color: var(--text-mid); text-decoration: none;
+                  border: 1px solid var(--border-mid); padding: 8px 14px;
+                  transition: border-color 0.15s, color 0.15s, background 0.15s;"
+           onmouseenter="this.style.borderColor='var(--secondary)';this.style.color='var(--secondary)';this.style.background='var(--secondary-dim)'"
+           onmouseleave="this.style.borderColor='var(--border-mid)';this.style.color='var(--text-mid)';this.style.background='transparent'">
+          <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor">
+            <path d="M11.86 1.021A11.6 11.6 0 0 0 9.004 0a.044.044 0 0 0-.046.022c-.124.222-.262.511-.358.738a10.72 10.72 0 0 0-3.2 0 7.467 7.467 0 0 0-.363-.738.045.045 0 0 0-.046-.022 11.564 11.564 0 0 0-2.856 1.021.041.041 0 0 0-.019.016C.328 3.794-.196 6.494.061 9.161a.048.048 0 0 0 .018.033 11.653 11.653 0 0 0 3.508 1.772.046.046 0 0 0 .05-.016c.27-.369.511-.758.718-1.167a.044.044 0 0 0-.024-.062 7.673 7.673 0 0 1-1.097-.523.045.045 0 0 1-.004-.074c.074-.055.147-.113.217-.171a.043.043 0 0 1 .045-.006c2.302 1.051 4.795 1.051 7.07 0a.043.043 0 0 1 .046.005c.07.059.143.117.217.172a.045.045 0 0 1-.004.074 7.201 7.201 0 0 1-1.097.522.045.045 0 0 0-.024.063c.211.409.452.797.717 1.166a.045.045 0 0 0 .05.017 11.618 11.618 0 0 0 3.514-1.772.046.046 0 0 0 .018-.032c.292-3.026-.49-5.703-2.073-8.054a.036.036 0 0 0-.019-.017zM4.677 7.522c-.69 0-1.258-.634-1.258-1.41 0-.777.557-1.411 1.258-1.411.707 0 1.269.639 1.258 1.41 0 .777-.557 1.411-1.258 1.411zm4.652 0c-.69 0-1.258-.634-1.258-1.41 0-.777.557-1.411 1.258-1.411.707 0 1.269.639 1.258 1.41 0 .777-.551 1.411-1.258 1.411z"/>
+          </svg>
+          Log in with Discord
+        </a>
+
+      {% endif %}
+
     </div>
   </div>
 
-</section>
-
-{% if recruiting_events %}
-<section class="recent-section fade-up-delay-2">
-  <div class="recent-label">Recruiting — looking for drivers</div>
-  <div class="recent-list" style="max-width: 900px;">
-    {% for event in recruiting_events %}
-    <a class="recent-item" href="{% url 'view_event' event.id %}?from=recruiting">
-      <div class="recent-item-left">
-        <span class="recent-item-name">{{ event.name }}</span>
-        <span class="recent-item-meta">
-          <span class="recent-dot"></span>
-          {{ event.date|date:"d M Y"|upper }} · {{ event.driver_count }} driver{{ event.driver_count|pluralize }} signed up · {{ event.length_seconds|seconds_to_hours_display }}{% if event.track %} · {{ event.track }}{% endif %}{% if event.car %} · {{ event.car }}{% endif %}
-        </span>
-      </div>
-      <span class="recent-item-arrow">→</span>
-    </a>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
+</div>
 
 {% endblock %}

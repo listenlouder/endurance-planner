@@ -7,5 +7,6 @@ handler500 = 'events.views.server_error_view'
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('accounts/', include('allauth.urls')),
     path('', include('events.urls')),
 ]

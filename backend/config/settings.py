@@ -22,12 +22,25 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'django_htmx',
     'events',
+    'django.contrib.sites',
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.discord',
+]
+
+SITE_ID = 1
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'allauth.account.middleware.AccountMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -58,6 +71,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'events.context_processors.auth_context',
             ],
         },
     },
@@ -101,8 +115,33 @@ SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SECURE = not DEBUG
-SESSION_COOKIE_AGE = 28800  # 8 hours — server-side session record expiry
-SESSION_EXPIRE_AT_BROWSER_CLOSE = True  # no Max-Age on cookie; browser discards on close (overrides age from client side)
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 FEEDBACK_PASSWORD = os.environ.get('FEEDBACK_PASSWORD', '')
+
+AUTH_USER_MODEL = 'events.User'
+
+# Allauth — Discord OAuth
+SOCIALACCOUNT_PROVIDERS = {
+    'discord': {
+        'SCOPE': ['identify'],
+        'AUTH_PARAMS': {'prompt': 'none'},
+        'VERIFIED_EMAIL': False,
+    }
+}
+
+SOCIALACCOUNT_ONLY = True
+ACCOUNT_EMAIL_VERIFICATION = 'none'
+SOCIALACCOUNT_AUTO_SIGNUP = True
+
+SOCIALACCOUNT_ADAPTER = 'events.adapters.DiscordAccountAdapter'
+
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30
+
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/'
+
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http' if DEBUG else 'https'
+
+DISCORD_CLIENT_ID = os.environ.get('DISCORD_CLIENT_ID', '')
+DISCORD_CLIENT_SECRET = os.environ.get('DISCORD_CLIENT_SECRET', '')

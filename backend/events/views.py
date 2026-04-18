@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Subquery, OuterRef
 
 logger = logging.getLogger(__name__)
 from django.http import HttpResponse, HttpResponseBadRequest
@@ -443,7 +443,27 @@ def home(request):
         if len(upcoming) == 8:
             break
 
-    return render(request, 'home.html', {'recruiting_events': upcoming})
+    context = {'recruiting_events': upcoming}
+
+    if request.user.is_authenticated:
+        driver_entries = Driver.objects.filter(
+            event=OuterRef('pk'), user=request.user
+        ).values('name')[:1]
+
+        context['admin_events'] = Event.objects.filter(
+            created_by=request.user
+        ).order_by('-date')[:10]
+
+        # Exclude events the user created — those already appear in admin_events
+        context['driver_events'] = Event.objects.filter(
+            drivers__user=request.user
+        ).exclude(
+            created_by=request.user
+        ).annotate(
+            my_driver_name=Subquery(driver_entries)
+        ).order_by('-date')[:10]
+
+    return render(request, 'home.html', context)
 
 
 def event_create(request):
@@ -463,6 +483,8 @@ def event_create(request):
                 length_seconds=form.cleaned_data['length_seconds'],
                 recruiting=form.cleaned_data.get('recruiting', False),
             )
+            if request.user.is_authenticated:
+                event.created_by = request.user
             event.save()
             base = request.build_absolute_uri('/').rstrip('/')
             success_ctx = {
@@ -567,6 +589,13 @@ def view_event(request, event_id):
     minutes = (total_seconds % 3600) // 60
     length_display = f"{hours}h {minutes}m" if minutes else f"{hours}h"
 
+    user_driver = None
+    if request.user.is_authenticated:
+        try:
+            user_driver = Driver.objects.get(event=event, user=request.user)
+        except Driver.DoesNotExist:
+            pass
+
     has_unassigned = StintAssignment.objects.filter(event=event, driver=None).exists()
 
     # Stint duration display
@@ -597,6 +626,7 @@ def view_event(request, event_id):
         'length_hours_display': lh_display,
         'length_display': length_display,
         'has_unassigned': has_unassigned,
+        'user_driver': user_driver,
         'show_signup_link': request.GET.get('from') == 'recruiting',
         'stint_duration_display': stint_duration_display,
         'driver_counts': driver_counts,
@@ -623,6 +653,9 @@ def signup(request, event_id):
                 name=cleaned['driver_name'],
                 timezone=cleaned['timezone'],
             )
+            if request.user.is_authenticated:
+                driver.user = request.user
+                driver.save(update_fields=['user'])
             _save_availability(driver, cleaned['slots_raw'], event)
             success_url = reverse('signup_success', kwargs={'event_id': event_id, 'driver_id': driver.id})
             if request.htmx:
@@ -644,7 +677,10 @@ def signup(request, event_id):
         return render(request, 'signup.html', ctx)
 
     ctx = get_signup_context(event)
-    ctx.update({'event': event, 'submitted_slot_timestamps': []})
+    prefill_name = ''
+    if request.user.is_authenticated:
+        prefill_name = request.user.discord_username or request.user.username
+    ctx.update({'event': event, 'submitted_slot_timestamps': [], 'prefill_name': prefill_name})
     return render(request, 'signup.html', ctx)
 
 
@@ -902,9 +938,40 @@ def admin_page(request, event_id, admin_key):
 
 
 def admin_dashboard(request, event_id):
-    """Session-authenticated admin page — no key in the URL."""
-    event = require_admin_session(request, event_id)
+    """Admin page — Discord owner bypass or session-authenticated."""
+    if request.user.is_authenticated:
+        event = get_object_or_404(Event, id=event_id)
+        if event.created_by == request.user:
+            request.session.cycle_key()
+            request.session[f'admin_{event_id}'] = True
+            return render(request, 'admin.html', _build_admin_context(request, event))
+        # Authenticated as non-owner — fall back to session
+        if request.session.get(f'admin_{event_id}'):
+            return render(request, 'admin.html', _build_admin_context(request, event))
+        return render(request, 'admin_error.html',
+                      {'error': 'You do not have admin access to this event.'})
+
+    # Not authenticated — require session or redirect to Discord login
+    if not request.session.get(f'admin_{event_id}'):
+        next_url = reverse('admin_dashboard', kwargs={'event_id': event_id})
+        return redirect(f"{reverse('discord_login')}?next={next_url}")
+    event = get_object_or_404(Event, id=event_id)
     return render(request, 'admin.html', _build_admin_context(request, event))
+
+
+def my_availability(request, event_id):
+    """Driver edit page for Discord-authenticated users — no edit URL needed."""
+    if not request.user.is_authenticated:
+        next_url = reverse('my_availability', kwargs={'event_id': event_id})
+        return redirect(f"{reverse('discord_login')}?next={next_url}")
+
+    event = get_object_or_404(Event, id=event_id)
+
+    driver = Driver.objects.filter(event=event, user=request.user).first()
+    if driver is None:
+        return redirect('signup', event_id=event_id)
+
+    return signup_edit(request, event_id, driver.id)
 
 
 def admin_edit_driver_name(request, event_id, driver_id):

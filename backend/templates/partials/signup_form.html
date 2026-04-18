@@ -41,7 +41,7 @@
         <input type="text"
                id="id_driver_name"
                name="driver_name"
-               value="{{ submitted_name|default:'' }}"
+               value="{{ submitted_name|default:prefill_name }}"
                placeholder="e.g. Will"
                autocomplete="off">
         {% if errors.driver_name %}

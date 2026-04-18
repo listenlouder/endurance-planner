@@ -21,6 +21,7 @@ urlpatterns = [
     path('<uuid:event_id>/admin/save-calc/', views.admin_save_calc, name='admin_save_calc'),
     path('<uuid:event_id>/admin/save-assignments/', views.admin_save_assignments, name='admin_save_assignments'),
     path('<uuid:event_id>/admin/', views.admin_dashboard, name='admin_dashboard'),
+    path('<uuid:event_id>/my-availability/', views.my_availability, name='my_availability'),
     path('<uuid:event_id>/admin/<str:admin_key>/', views.admin_page, name='admin_page'),
     path('feedback/submit/', views.feedback_submit, name='feedback_submit'),
     path('feedback/view/', views.feedback_view, name='feedback_view'),

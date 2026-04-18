@@ -2,6 +2,22 @@ import uuid
 from datetime import datetime, timedelta, timezone as dt_utc
 from django.db import models
 from django.utils.crypto import get_random_string
+from django.contrib.auth.models import AbstractUser
+
+
+class User(AbstractUser):
+    discord_id = models.CharField(
+        max_length=32, unique=True, null=True, blank=True
+    )
+    discord_username = models.CharField(
+        max_length=100, blank=True
+    )
+    discord_avatar = models.CharField(
+        max_length=200, blank=True
+    )
+
+    def __str__(self):
+        return self.discord_username or self.username
 
 
 class Event(models.Model):
@@ -24,6 +40,12 @@ class Event(models.Model):
     team_name = models.CharField(max_length=255, blank=True, default='')
     recruiting = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='admin_events'
+    )
 
     def save(self, *args, **kwargs):
         if not self.admin_key:
@@ -61,6 +83,12 @@ class Driver(models.Model):
     name = models.CharField(max_length=255)
     timezone = models.CharField(max_length=100, default='UTC')
     signed_up_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='driver_signups',
+    )
 
     def __str__(self):
         return f"{self.name} ({self.event.name})"

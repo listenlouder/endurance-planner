@@ -1231,18 +1231,22 @@ class AdminDashboardTests(TestCase):
         session[f'admin_{event_id}'] = True
         session.save()
 
-    def test_without_session_returns_403(self):
+    def test_without_session_redirects_to_discord_login(self):
+        # New behaviour: unauthenticated + no session → redirect to Discord OAuth
         response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/discord/login/', response['Location'])
 
-    def test_with_wrong_event_session_returns_403(self):
+    def test_with_wrong_event_session_redirects_to_discord_login(self):
+        # Session for a different event does not grant access → redirect
         other_id = uuid.uuid4()
         self._set_admin_session(other_id)
 
         response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/discord/login/', response['Location'])
 
     def test_with_valid_session_returns_200(self):
         self._set_admin_session(self.event.id)
@@ -3487,3 +3491,804 @@ class AdminEditDriverNameTests(TestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, 404)
+
+
+# ---------------------------------------------------------------------------
+# Discord OAuth adapter tests
+# ---------------------------------------------------------------------------
+
+class DiscordAdapterUpdateFieldsTests(TestCase):
+    """Unit tests for DiscordAccountAdapter._update_discord_fields.
+
+    The sociallogin object is mocked so no real OAuth flow is triggered —
+    only our custom field-setting logic is exercised.
+    """
+
+    def _make_adapter(self):
+        from events.adapters import DiscordAccountAdapter
+        return DiscordAccountAdapter()
+
+    def _make_sociallogin(self, extra_data, is_existing=False):
+        """Build a minimal mock sociallogin object."""
+        from unittest.mock import MagicMock
+        sociallogin = MagicMock()
+        sociallogin.account.extra_data = extra_data
+        sociallogin.account.provider = 'discord'
+        sociallogin.is_existing = is_existing
+        return sociallogin
+
+    def _make_user(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        # Use a unique username to avoid collisions across tests
+        return User.objects.create_user(username=f'tmp_{uuid.uuid4().hex[:8]}', password='x')
+
+    def test_global_name_used_as_discord_username_when_present(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '111222333',
+            'global_name': 'GlobalName',
+            'username': 'raw_username',
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_username, 'GlobalName')
+
+    def test_username_used_as_discord_username_when_global_name_absent(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '111222333',
+            'username': 'raw_username',
+            # global_name intentionally omitted
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_username, 'raw_username')
+
+    def test_username_used_when_global_name_is_none(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '111222333',
+            'global_name': None,
+            'username': 'raw_username',
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_username, 'raw_username')
+
+    def test_avatar_url_built_from_discord_id_and_hash(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '987654321',
+            'username': 'someuser',
+            'avatar': 'abc123def456',
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        expected = 'https://cdn.discordapp.com/avatars/987654321/abc123def456.png?size=128'
+        self.assertEqual(user.discord_avatar, expected)
+
+    def test_default_avatar_url_used_when_no_avatar_hash(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '987654321',
+            'username': 'someuser',
+            # avatar intentionally omitted
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_avatar, 'https://cdn.discordapp.com/embed/avatars/0.png')
+
+    def test_default_avatar_url_used_when_avatar_is_none(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '987654321',
+            'username': 'someuser',
+            'avatar': None,
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_avatar, 'https://cdn.discordapp.com/embed/avatars/0.png')
+
+    def test_user_username_set_to_discord_id(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        discord_id = '444555666'
+        sociallogin = self._make_sociallogin({
+            'id': discord_id,
+            'username': 'someuser',
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.username, discord_id)
+
+    def test_discord_id_stored_on_user(self):
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '777888999',
+            'username': 'someuser',
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_id, '777888999')
+
+    def test_pre_social_login_updates_existing_user(self):
+        """pre_social_login calls _update_discord_fields when is_existing=True."""
+        from django.contrib.auth import get_user_model
+        from unittest.mock import patch, MagicMock
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin(
+            extra_data={'id': '123456789', 'username': 'updated_name', 'global_name': 'UpdatedGlobal'},
+            is_existing=True,
+        )
+        sociallogin.user = user
+
+        with patch.object(adapter.__class__.__bases__[0], 'pre_social_login'):
+            adapter.pre_social_login(None, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_username, 'UpdatedGlobal')
+        self.assertEqual(user.username, '123456789')
+
+    def test_pre_social_login_does_not_update_non_existing_user(self):
+        """pre_social_login skips _update_discord_fields when is_existing=False."""
+        from unittest.mock import patch
+        adapter = self._make_adapter()
+        user = self._make_user()
+        original_username = user.username
+        sociallogin = self._make_sociallogin(
+            extra_data={'id': '999000111', 'username': 'new_discord_name'},
+            is_existing=False,
+        )
+        sociallogin.user = user
+
+        with patch.object(adapter.__class__.__bases__[0], 'pre_social_login'):
+            adapter.pre_social_login(None, sociallogin)
+
+        user.refresh_from_db()
+        # Non-existing flow should not have modified the user
+        self.assertEqual(user.username, original_username)
+
+    def test_non_alphanumeric_avatar_hash_falls_back_to_default(self):
+        """avatar_hash containing non-alphanumeric chars (e.g. path traversal) must
+        not be interpolated into the CDN URL."""
+        adapter = self._make_adapter()
+        user = self._make_user()
+        sociallogin = self._make_sociallogin({
+            'id': '123456789',
+            'username': 'someuser',
+            'avatar': '../../etc/passwd',
+        })
+
+        adapter._update_discord_fields(user, sociallogin)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_avatar, 'https://cdn.discordapp.com/embed/avatars/0.png')
+
+    def test_no_db_write_when_fields_unchanged(self):
+        """_update_discord_fields must skip save() when all values are already current."""
+        from unittest.mock import patch
+        adapter = self._make_adapter()
+        user = self._make_user()
+
+        sociallogin = self._make_sociallogin({
+            'id': '555666777',
+            'username': 'stableuser',
+            'avatar': 'abc123',
+        })
+        # Prime the user with the same values the adapter would set
+        adapter._update_discord_fields(user, sociallogin)
+        user.refresh_from_db()
+
+        with patch.object(user.__class__, 'save') as mock_save:
+            adapter._update_discord_fields(user, sociallogin)
+
+        mock_save.assert_not_called()
+
+    def test_db_write_occurs_when_discord_username_changes(self):
+        """_update_discord_fields must save when display name changes."""
+        from unittest.mock import patch
+        adapter = self._make_adapter()
+        user = self._make_user()
+
+        first_login = self._make_sociallogin({
+            'id': '111222333',
+            'global_name': 'OldName',
+        })
+        adapter._update_discord_fields(user, first_login)
+        user.refresh_from_db()
+
+        second_login = self._make_sociallogin({
+            'id': '111222333',
+            'global_name': 'NewName',
+        })
+        adapter._update_discord_fields(user, second_login)
+
+        user.refresh_from_db()
+        self.assertEqual(user.discord_username, 'NewName')
+
+
+# ---------------------------------------------------------------------------
+# my_availability view tests
+# ---------------------------------------------------------------------------
+
+class MyAvailabilityViewTests(TestCase):
+    """Tests for views.my_availability() — Discord-authenticated driver edit shortcut."""
+
+    def setUp(self):
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        self.url = reverse('my_availability', kwargs={'event_id': self.event.id})
+        self.user = _make_auth_user()
+
+    def test_unauthenticated_redirects(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_unauthenticated_redirect_target_includes_discord_login(self):
+        response = self.client.get(self.url)
+
+        self.assertIn('/accounts/discord/login/', response['Location'])
+
+    def test_unauthenticated_redirect_includes_next_param(self):
+        response = self.client.get(self.url)
+
+        self.assertIn('next=', response['Location'])
+
+    def test_authenticated_user_with_no_driver_record_redirects_to_signup(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertRedirects(
+            response,
+            reverse('signup', kwargs={'event_id': self.event.id}),
+            fetch_redirect_response=False,
+        )
+
+    def test_authenticated_user_with_driver_record_gets_200(self):
+        Driver.objects.create(event=self.event, name='Me', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_authenticated_user_with_multiple_driver_records_does_not_raise(self):
+        """When duplicate Driver rows exist for a user+event, .filter().first() must
+        not raise MultipleObjectsReturned."""
+        Driver.objects.create(event=self.event, name='Me1', timezone='UTC', user=self.user)
+        Driver.objects.create(event=self.event, name='Me2', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        try:
+            self.client.get(self.url)
+        except Exception as exc:
+            self.fail(f'my_availability raised an unexpected exception: {exc}')
+
+
+# ---------------------------------------------------------------------------
+# Context processor tests
+# ---------------------------------------------------------------------------
+
+class AuthContextProcessorTests(TestCase):
+    """Tests for events.context_processors.auth_context.
+
+    The processor is called on every request and injects discord_user
+    into the template context when the user is authenticated.
+    """
+
+    def _make_discord_user(self, discord_username='', username='fallback'):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.create_user(
+            username=username,
+            password='testpass',
+        )
+        user.discord_username = discord_username
+        user.discord_id = '123'
+        user.discord_avatar = 'https://example.com/avatar.png'
+        user.save(update_fields=['discord_username', 'discord_id', 'discord_avatar'])
+        return user
+
+    def test_unauthenticated_request_gives_none(self):
+        from events.context_processors import auth_context
+        from unittest.mock import MagicMock
+        request = MagicMock()
+        request.user.is_authenticated = False
+
+        result = auth_context(request)
+
+        self.assertIsNone(result['discord_user'])
+
+    def test_authenticated_user_gives_discord_user_dict(self):
+        from events.context_processors import auth_context
+        from unittest.mock import MagicMock
+        request = MagicMock()
+        request.user.is_authenticated = True
+        request.user.discord_username = 'DiscordName'
+        request.user.discord_avatar = 'https://cdn.example.com/avatar.png'
+        request.user.discord_id = '42'
+        request.user.username = 'fallback'
+
+        result = auth_context(request)
+
+        self.assertIsNotNone(result['discord_user'])
+        self.assertEqual(result['discord_user']['username'], 'DiscordName')
+        self.assertEqual(result['discord_user']['avatar'], 'https://cdn.example.com/avatar.png')
+        self.assertEqual(result['discord_user']['id'], '42')
+
+    def test_discord_username_falls_back_to_username_when_blank(self):
+        from events.context_processors import auth_context
+        from unittest.mock import MagicMock
+        request = MagicMock()
+        request.user.is_authenticated = True
+        request.user.discord_username = ''
+        request.user.discord_avatar = ''
+        request.user.discord_id = None
+        request.user.username = 'plain_username'
+
+        result = auth_context(request)
+
+        self.assertEqual(result['discord_user']['username'], 'plain_username')
+
+    def test_discord_id_none_becomes_empty_string(self):
+        from events.context_processors import auth_context
+        from unittest.mock import MagicMock
+        request = MagicMock()
+        request.user.is_authenticated = True
+        request.user.discord_username = 'someone'
+        request.user.discord_avatar = ''
+        request.user.discord_id = None
+        request.user.username = 'someone'
+
+        result = auth_context(request)
+
+        self.assertEqual(result['discord_user']['id'], '')
+
+
+# ---------------------------------------------------------------------------
+# Home view — authenticated user context tests
+# ---------------------------------------------------------------------------
+
+def _make_auth_user(username=None):
+    """Create and return a saved User for use in authenticated view tests."""
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    uname = username or f'user_{uuid.uuid4().hex[:8]}'
+    return User.objects.create_user(username=uname, password='testpass')
+
+
+class HomeViewAuthenticatedTests(TestCase):
+    """Tests for the home view's admin_events and driver_events context variables.
+
+    These context entries are only present when the user is authenticated.
+    """
+
+    def setUp(self):
+        self.url = reverse('home')
+        self.user = _make_auth_user()
+        self.future_date = dt.date(2030, 6, 1)
+        self.future_time = dt.time(12, 0, 0)
+
+    def _future_event(self, name='Race', **overrides):
+        return save_event(
+            name=name,
+            date=overrides.pop('date', self.future_date),
+            start_time_utc=overrides.pop('start_time_utc', self.future_time),
+            **overrides,
+        )
+
+    def test_unauthenticated_user_has_no_admin_events_key(self):
+        response = self.client.get(self.url)
+
+        self.assertNotIn('admin_events', response.context)
+
+    def test_unauthenticated_user_has_no_driver_events_key(self):
+        response = self.client.get(self.url)
+
+        self.assertNotIn('driver_events', response.context)
+
+    def test_authenticated_user_with_no_events_has_empty_admin_events(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(len(list(response.context['admin_events'])), 0)
+
+    def test_authenticated_user_with_no_events_has_empty_driver_events(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(len(list(response.context['driver_events'])), 0)
+
+    def test_event_created_by_user_appears_in_admin_events(self):
+        event = self._future_event(name='My Admin Event', created_by=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertIn(event.id, admin_ids)
+
+    def test_event_not_created_by_user_absent_from_admin_events(self):
+        other_user = _make_auth_user()
+        self._future_event(name='Other Event', created_by=other_user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(len(list(response.context['admin_events'])), 0)
+
+    def test_signed_up_event_appears_in_driver_events(self):
+        other_user = _make_auth_user()
+        event = self._future_event(name='Signup Event', created_by=other_user)
+        Driver.objects.create(event=event, name='Me', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        driver_ids = [e.id for e in response.context['driver_events']]
+        self.assertIn(event.id, driver_ids)
+
+    def test_event_created_by_user_excluded_from_driver_events_even_if_signed_up(self):
+        # User is both admin and driver → should be in admin_events only
+        event = self._future_event(name='Own Event', created_by=self.user)
+        Driver.objects.create(event=event, name='Me', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        driver_ids = [e.id for e in response.context['driver_events']]
+        self.assertNotIn(event.id, driver_ids)
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertIn(event.id, admin_ids)
+
+    def test_my_driver_name_annotation_is_correct(self):
+        other_user = _make_auth_user()
+        event = self._future_event(name='Annotated Race', created_by=other_user)
+        Driver.objects.create(event=event, name='SpeedRacer', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        driver_event = next(e for e in response.context['driver_events'] if e.id == event.id)
+        self.assertEqual(driver_event.my_driver_name, 'SpeedRacer')
+
+    def test_admin_events_ordered_newest_date_first(self):
+        event_old = self._future_event(name='Old Race', created_by=self.user, date=dt.date(2028, 1, 1))
+        event_new = self._future_event(name='New Race', created_by=self.user, date=dt.date(2030, 6, 1))
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_events = list(response.context['admin_events'])
+        self.assertEqual(admin_events[0].id, event_new.id)
+        self.assertEqual(admin_events[1].id, event_old.id)
+
+
+# ---------------------------------------------------------------------------
+# event_create view tests
+# ---------------------------------------------------------------------------
+
+class EventCreateAuthTests(TestCase):
+    """Tests for the event_create view's created_by behaviour with auth."""
+
+    def setUp(self):
+        self.url = reverse('event_create')
+        self.user = _make_auth_user()
+        # A valid date well in the future avoids the 'date in the past' form error
+        self.future_date = dt.date(2030, 6, 1)
+        self.valid_post = {
+            'name': 'Auth Test Race',
+            'date': '2030-06-01',
+            'start_time_utc': '12:00',
+            'length_hours': 6,
+            'length_minutes': 0,
+            'car': '',
+            'track': '',
+            'team_name': '',
+            'recruiting': '',
+        }
+
+    def test_authenticated_post_sets_created_by_to_user(self):
+        self.client.force_login(self.user)
+
+        self.client.post(self.url, self.valid_post)
+
+        event = Event.objects.get(name='Auth Test Race')
+        self.assertEqual(event.created_by, self.user)
+
+    def test_unauthenticated_post_leaves_created_by_as_none(self):
+        self.client.post(self.url, self.valid_post)
+
+        event = Event.objects.get(name='Auth Test Race')
+        self.assertIsNone(event.created_by)
+
+
+# ---------------------------------------------------------------------------
+# signup view tests
+# ---------------------------------------------------------------------------
+
+class SignupViewAuthTests(TestCase):
+    """Tests for the signup view's auth-aware prefill_name and driver.user assignment."""
+
+    def setUp(self):
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        self.url = reverse('signup', kwargs={'event_id': self.event.id})
+        self.user = _make_auth_user(username='plain_user')
+        self.user.discord_username = 'DiscordUser'
+        self.user.save(update_fields=['discord_username'])
+
+    def _valid_post_data(self):
+        """Build the minimal valid POST data for the signup view."""
+        from events.utils import get_availability_slots
+        slots = get_availability_slots(self.event)
+        slot_str = (
+            slots[0].isoformat().replace('+00:00', 'Z')
+            if slots[0].tzinfo else slots[0].isoformat() + 'Z'
+        )
+        return {
+            'driver_name': 'Test Driver',
+            'timezone': 'UTC',
+            'slots': [slot_str],
+        }
+
+    def test_get_unauthenticated_prefill_name_is_empty_string(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context['prefill_name'], '')
+
+    def test_get_authenticated_prefill_name_is_discord_username(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context['prefill_name'], 'DiscordUser')
+
+    def test_get_authenticated_no_discord_username_falls_back_to_username(self):
+        self.user.discord_username = ''
+        self.user.save(update_fields=['discord_username'])
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context['prefill_name'], 'plain_user')
+
+    def test_post_authenticated_sets_driver_user(self):
+        self.client.force_login(self.user)
+
+        self.client.post(self.url, self._valid_post_data())
+
+        driver = Driver.objects.filter(event=self.event).first()
+        self.assertIsNotNone(driver)
+        self.assertEqual(driver.user, self.user)
+
+    def test_post_unauthenticated_driver_user_is_none(self):
+        self.client.post(self.url, self._valid_post_data())
+
+        driver = Driver.objects.filter(event=self.event).first()
+        self.assertIsNotNone(driver)
+        self.assertIsNone(driver.user)
+
+
+# ---------------------------------------------------------------------------
+# admin_dashboard view — Discord auth paths
+# ---------------------------------------------------------------------------
+
+class AdminDashboardDiscordAuthTests(TestCase):
+    """Tests for admin_dashboard() covering the Discord-owner and
+    authenticated-non-owner access paths added to the view.
+    """
+
+    def setUp(self):
+        self.owner = _make_auth_user(username='owner_user')
+        self.other_user = _make_auth_user(username='other_user')
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+            created_by=self.owner,
+        )
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self, event_id=None):
+        session = self.client.session
+        session[f'admin_{event_id or self.event.id}'] = True
+        session.save()
+
+    def test_discord_owner_gets_200(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_discord_owner_access_sets_session_flag(self):
+        self.client.force_login(self.owner)
+
+        self.client.get(self.url)
+
+        self.assertTrue(self.client.session.get(f'admin_{self.event.id}'))
+
+    def test_discord_owner_sees_admin_template(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url)
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin.html', template_names)
+
+    def test_authenticated_non_owner_with_valid_session_gets_200(self):
+        self.client.force_login(self.other_user)
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_authenticated_non_owner_without_session_gets_error_page(self):
+        self.client.force_login(self.other_user)
+
+        response = self.client.get(self.url)
+
+        # Returns 200 with an error page, not a redirect
+        self.assertEqual(response.status_code, 200)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin_error.html', template_names)
+
+    def test_authenticated_non_owner_without_session_does_not_redirect(self):
+        self.client.force_login(self.other_user)
+
+        response = self.client.get(self.url)
+
+        self.assertNotEqual(response.status_code, 302)
+
+    def test_unauthenticated_without_session_redirects_to_discord_login(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/discord/login/', response['Location'])
+
+    def test_unauthenticated_without_session_redirect_includes_next_param(self):
+        response = self.client.get(self.url)
+
+        self.assertIn('next=', response['Location'])
+
+    def test_unauthenticated_with_valid_session_gets_200(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin.html', template_names)
+
+    def test_discord_owner_access_rotates_session_key(self):
+        """cycle_key() must be called in the Discord-owner branch to prevent
+        session fixation after privilege elevation."""
+        from unittest.mock import patch
+        self.client.force_login(self.owner)
+        # Capture the session key before the request
+        key_before = self.client.session.session_key
+
+        # Patch cycle_key to record calls; the real implementation still runs
+        original_cycle = self.client.session.__class__.cycle_key
+        called = []
+
+        def recording_cycle_key(self_session):
+            called.append(True)
+            return original_cycle(self_session)
+
+        with patch.object(self.client.session.__class__, 'cycle_key', recording_cycle_key):
+            self.client.get(self.url)
+
+        self.assertTrue(called, 'cycle_key() was not called in the Discord-owner path')
+
+    def test_owner_of_different_event_treated_as_non_owner(self):
+        """Authenticated user who owns a different event is not the owner here."""
+        other_event = save_event(
+            created_by=self.other_user,
+            date=dt.date(2030, 7, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        # other_user owns other_event but NOT self.event
+        self.client.force_login(self.other_user)
+
+        response = self.client.get(self.url)
+
+        # No session → should get error page, not admin
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin_error.html', template_names)
+
+
+# ---------------------------------------------------------------------------
+# view_event — user_driver context variable
+# ---------------------------------------------------------------------------
+
+class ViewEventUserDriverTests(TestCase):
+    """Tests for view_event()'s user_driver context variable.
+
+    Verifies that an authenticated driver gets their Driver object back,
+    a non-driver gets None, and unauthenticated users get None.
+    """
+
+    def setUp(self):
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        self.url = reverse('view_event', kwargs={'event_id': self.event.id})
+        self.user = _make_auth_user()
+
+    def test_unauthenticated_user_driver_is_none(self):
+        response = self.client.get(self.url)
+
+        self.assertIsNone(response.context['user_driver'])
+
+    def test_authenticated_user_not_signed_up_user_driver_is_none(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertIsNone(response.context['user_driver'])
+
+    def test_authenticated_user_who_is_driver_gets_driver_object(self):
+        driver = Driver.objects.create(
+            event=self.event,
+            name='Known Driver',
+            timezone='UTC',
+            user=self.user,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context['user_driver'], driver)
+
+    def test_driver_for_different_event_does_not_appear(self):
+        other_event = save_event(
+            date=dt.date(2030, 7, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        Driver.objects.create(
+            event=other_event,
+            name='Wrong Event Driver',
+            timezone='UTC',
+            user=self.user,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertIsNone(response.context['user_driver'])

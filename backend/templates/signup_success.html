@@ -36,9 +36,11 @@
       <div class="success-title">
         {% if updated %}Availability Updated{% else %}You're In{% endif %}
       </div>
+      {% if not discord_user %}
       <div class="success-subtitle">
         Save your links before leaving this page.
       </div>
+      {% endif %}
     </div>
   </div>
 

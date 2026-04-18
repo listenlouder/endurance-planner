@@ -343,9 +343,21 @@
 </section>
 
 <!-- ============================================================
-     SIGNUP BANNER (recruiting flow only) — bottom of page
+     SIGNUP BANNER — bottom of page
 ============================================================ -->
-{% if show_signup_link %}
+{% if user_driver %}
+<div class="signup-banner fade-up-delay-1">
+  <div class="signup-banner-text">
+    Signed up as <strong>{{ user_driver.name }}</strong>.
+    Update your available stints if your schedule changes.
+  </div>
+  <a href="{% url 'signup_edit' event.id user_driver.id %}"
+     class="btn-secondary">
+    Edit availability →
+  </a>
+</div>
+
+{% elif show_signup_link %}
 <div class="signup-banner fade-up-delay-2">
   <div class="signup-banner-text">
     Not signed up yet?
