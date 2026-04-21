@@ -205,13 +205,21 @@
                value="{{ event.name }}">
       </div>
 
-      <!-- Team name (full width) -->
-      <div class="detail-field full-width">
+      <!-- Team name + Game -->
+      <div class="detail-field">
         <span class="detail-label">Team name</span>
         <input class="detail-input"
                type="text"
                name="team_name"
                value="{{ event.team_name }}">
+      </div>
+      <div class="detail-field">
+        <span class="detail-label">Game</span>
+        <input class="detail-input"
+               type="text"
+               name="game"
+               value="{{ event.game }}"
+               placeholder="e.g. iRacing, LMU, ACC">
       </div>
 
       <!-- Date -->

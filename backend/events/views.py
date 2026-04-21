@@ -476,6 +476,7 @@ def event_create(request):
             event = Event(
                 name=form.cleaned_data['name'],
                 team_name=form.cleaned_data.get('team_name', ''),
+                game=form.cleaned_data.get('game', ''),
                 car=form.cleaned_data.get('car', ''),
                 track=form.cleaned_data.get('track', ''),
                 date=form.cleaned_data['date'],
@@ -1149,6 +1150,7 @@ def admin_save_details(request, event_id):
     if length_seconds:
         event.length_seconds = length_seconds
     event.team_name = request.POST.get('team_name', '').strip()
+    event.game = request.POST.get('game', '').strip()
     event.car = request.POST.get('car', '').strip()
     event.track = request.POST.get('track', '').strip()
     event.setup = request.POST.get('setup', '').strip()

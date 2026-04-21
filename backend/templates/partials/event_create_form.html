@@ -41,13 +41,22 @@
         {% endif %}
       </div>
 
-      <!-- Team name -->
-      <div class="field {% if form.team_name.errors %}has-error{% endif %}">
-        <label for="{{ form.team_name.id_for_label }}">Team name</label>
-        {{ form.team_name }}
-        {% if form.team_name.errors %}
-        <span class="field-error">{{ form.team_name.errors|join:", " }}</span>
-        {% endif %}
+      <!-- Team name + Game -->
+      <div class="field-row">
+        <div class="field {% if form.team_name.errors %}has-error{% endif %}">
+          <label for="{{ form.team_name.id_for_label }}">Team name</label>
+          {{ form.team_name }}
+          {% if form.team_name.errors %}
+          <span class="field-error">{{ form.team_name.errors|join:", " }}</span>
+          {% endif %}
+        </div>
+        <div class="field {% if form.game.errors %}has-error{% endif %}">
+          <label for="{{ form.game.id_for_label }}">Game</label>
+          {{ form.game }}
+          {% if form.game.errors %}
+          <span class="field-error">{{ form.game.errors|join:", " }}</span>
+          {% endif %}
+        </div>
       </div>
 
       <!-- Car + Track -->

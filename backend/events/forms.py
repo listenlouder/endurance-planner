@@ -6,6 +6,13 @@ from datetime import datetime, timezone as dt_timezone
 class EventCreateForm(forms.Form):
     name = forms.CharField(max_length=255, label='Event name')
     team_name = forms.CharField(max_length=255, required=False, label='Team name')
+    game = forms.CharField(
+        max_length=100,
+        required=False,
+        widget=forms.TextInput(attrs={
+            'placeholder': 'e.g. iRacing, LMU, ACC'
+        })
+    )
     car = forms.CharField(max_length=255, required=False, label='Car')
     track = forms.CharField(max_length=255, required=False, label='Track')
     date = forms.DateField(

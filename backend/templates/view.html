@@ -110,6 +110,13 @@
       <span class="meta-pill-value">{{ length_display }}</span>
     </div>
 
+    {% if event.game %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Game</span>
+      <span class="meta-pill-value">{{ event.game }}</span>
+    </div>
+    {% endif %}
+
     {% if event.car %}
     <div class="meta-pill">
       <span class="meta-pill-label">Car</span>
