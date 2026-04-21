@@ -84,6 +84,7 @@
               {{ event.date|date:"d M Y"|upper }}
               · {{ event.driver_count }} driver{{ event.driver_count|pluralize }} signed up
               · {{ event.length_seconds|seconds_to_hours_display }}
+              {% if event.game %} · {{ event.game }}{% endif %}
               {% if event.track %} · {{ event.track }}{% endif %}
               {% if event.car %} · {{ event.car }}{% endif %}
             </span>
