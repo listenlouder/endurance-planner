@@ -774,7 +774,21 @@ def signup_success(request, event_id, driver_id):
 def driver_delete(request, event_id, driver_id):
     if request.method == 'DELETE':
         event = get_object_or_404(Event, id=event_id)
-        driver = get_object_or_404(Driver, id=driver_id, event=event)
+        driver = get_object_or_404(
+            Driver, id=driver_id, event=event
+        )
+
+        is_owner = (
+            request.user.is_authenticated
+            and driver.user == request.user
+        )
+        is_admin = request.session.get(
+            f'admin_{event_id}'
+        )
+
+        if not is_owner and not is_admin:
+            raise PermissionDenied
+
         driver.delete()
         response = HttpResponse()
         response['HX-Redirect'] = '/'
@@ -944,8 +958,9 @@ def admin_page(request, event_id, admin_key):
     request.session.cycle_key()
     request.session[f'admin_{event_id}'] = True
 
-    ctx = _build_admin_context(request, event)
-    return render(request, 'admin.html', ctx)
+    # Redirect to key-less URL so the admin key only appears in logs
+    # once (as this 302) rather than on every subsequent page visit.
+    return redirect('admin_dashboard', event_id=event_id)
 
 
 def admin_dashboard(request, event_id):

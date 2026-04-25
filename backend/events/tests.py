@@ -1354,12 +1354,12 @@ class AdminPageSessionTests(TestCase):
         key_after = self.client.session.session_key
         self.assertNotEqual(key_before, key_after)
 
-    def test_valid_key_renders_admin_template(self):
+    def test_valid_key_returns_302_redirect(self):
+        # admin_page now redirects to the key-less admin_dashboard URL so that
+        # the admin key only appears in logs once, not on every subsequent visit.
         response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, 200)
-        template_names = [t.name for t in response.templates]
-        self.assertIn('admin.html', template_names)
+        self.assertEqual(response.status_code, 302)
 
     def test_invalid_key_renders_error_template(self):
         response = self.client.get(self.wrong_key_url)
@@ -2174,9 +2174,9 @@ class HomeTemplateRenderingTests(TestCase):
         # The template wraps track in {% if event.track %} so no "·" with empty
         # We verify the word "Track" doesn't appear as a label in the recruiting section
         # by checking the full recruiting item doesn't have a trailing "· " artifact.
-        # A simpler proxy: count occurrences of "recent-item" to confirm the block renders,
-        # then confirm track placeholder isn't present.
-        self.assertContains(response, 'recent-item')
+        # A simpler proxy: confirm the recruiting block renders (event-item class present),
+        # then confirm no track text appears.
+        self.assertContains(response, 'event-item')
         self.assertNotContains(response, '· Monza')  # No track text present
 
 
@@ -2541,14 +2541,14 @@ class ViewEventContextTests(TestCase):
         signup_url = reverse('signup', kwargs={'event_id': self.event.id})
         self.assertNotContains(response, signup_url)
 
-    def test_wac_table_class_present_when_stints_exist(self):
+    def test_stint_table_class_present_when_stints_exist(self):
         from .models import StintAssignment
         driver = Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
         StintAssignment.objects.create(event=self.event, stint_number=1, driver=driver)
 
         response = self.client.get(self.url)
 
-        self.assertContains(response, 'wac-table')
+        self.assertContains(response, 'stint-table')
 
 
 # ---------------------------------------------------------------------------
@@ -2574,13 +2574,13 @@ class DriverListTemplateClassTests(TestCase):
         session[f'admin_{self.event.id}'] = True
         session.save()
 
-    def test_wac_table_class_present_when_drivers_exist(self):
+    def test_unified_table_class_present_when_drivers_exist(self):
         Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
         self._set_admin_session()
 
         response = self.client.get(self.admin_url)
 
-        self.assertContains(response, 'wac-table')
+        self.assertContains(response, 'unified-table')
 
     def test_no_drivers_message_shown_when_driver_list_empty(self):
         self._set_admin_session()
@@ -4437,7 +4437,9 @@ class AdminPageXssTests(TestCase):
     Assert that XSS payloads in driver names cannot break out of <script>
     blocks on the admin page.
 
-    Auth path: admin key URL (/<event_id>/admin/<admin_key>/).
+    Auth path: admin_dashboard URL (/<event_id>/admin/) with the admin
+    session flag pre-set.  The admin_page key URL now redirects immediately
+    and no longer renders the template directly.
     """
 
     XSS_PAYLOAD = '</script><script>alert(1)</script>'
@@ -4449,10 +4451,15 @@ class AdminPageXssTests(TestCase):
             name=self.XSS_PAYLOAD,
             timezone='UTC',
         )
+        # admin_page now redirects — use admin_dashboard with session flag
         self.url = reverse(
-            'admin_page',
-            kwargs={'event_id': self.event.id, 'admin_key': self.event.admin_key},
+            'admin_dashboard',
+            kwargs={'event_id': self.event.id},
         )
+        # Pre-set the admin session so admin_dashboard serves the page
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
 
     def _decoded(self, response):
         return response.content.decode('utf-8')
@@ -4604,3 +4611,206 @@ class ViewEventXssTests(TestCase):
     def test_response_status_200(self):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# AdminPageRedirectTests — Fix 1: admin_page redirects after key validation
+# ---------------------------------------------------------------------------
+
+
+class AdminPageRedirectTests(TestCase):
+    """Tests for views.admin_page() — redirect behaviour added by the security
+    fix that prevents the admin key from appearing in the browser's URL bar
+    after login.
+    """
+
+    def setUp(self):
+        self.event = save_event()
+        self.valid_url = reverse(
+            'admin_page',
+            kwargs={'event_id': self.event.id, 'admin_key': self.event.admin_key},
+        )
+        self.wrong_key_url = reverse(
+            'admin_page',
+            kwargs={'event_id': self.event.id, 'admin_key': 'wrong-key-value'},
+        )
+        self.dashboard_url = reverse(
+            'admin_dashboard', kwargs={'event_id': self.event.id}
+        )
+
+    def test_valid_key_returns_302(self):
+        response = self.client.get(self.valid_url)
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_valid_key_redirects_to_admin_dashboard_url(self):
+        response = self.client.get(self.valid_url)
+
+        self.assertRedirects(
+            response,
+            self.dashboard_url,
+            fetch_redirect_response=False,
+        )
+
+    def test_invalid_key_returns_200_not_redirect(self):
+        response = self.client.get(self.wrong_key_url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_invalid_key_renders_admin_error_template(self):
+        response = self.client.get(self.wrong_key_url)
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin_error.html', template_names)
+
+    def test_valid_key_sets_session_flag_before_redirect(self):
+        self.client.get(self.valid_url)
+
+        self.assertTrue(self.client.session.get(f'admin_{self.event.id}'))
+
+    def test_redirect_target_returns_200_because_session_was_set(self):
+        # Follow the redirect — admin_dashboard should serve the page because
+        # admin_page already set the session flag in the same request cycle.
+        response = self.client.get(self.valid_url, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        template_names = [t.name for t in response.templates]
+        self.assertIn('admin.html', template_names)
+
+
+# ---------------------------------------------------------------------------
+# DriverDeleteAuthTests — Fix 2: driver_delete authorization
+# ---------------------------------------------------------------------------
+
+
+class DriverDeleteAuthTests(TestCase):
+    """Tests for views.driver_delete() — authorization checks added to prevent
+    arbitrary users from deleting other drivers.
+    """
+
+    def setUp(self):
+        self.event = save_event()
+        self.driver = Driver.objects.create(
+            event=self.event,
+            name='Test Driver',
+            timezone='UTC',
+        )
+        self.url = reverse(
+            'driver_delete',
+            kwargs={'event_id': self.event.id, 'driver_id': self.driver.id},
+        )
+
+    def _set_admin_session(self, event_id):
+        """Write the admin session flag for the given event, matching the
+        pattern used throughout this test file."""
+        session = self.client.session
+        session[f'admin_{event_id}'] = True
+        session.save()
+
+    def _make_driver_owner(self):
+        """Create a User, link them to self.driver, and return the user."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.create_user(
+            username=f'owner_{uuid.uuid4().hex[:8]}',
+            password='testpass',
+        )
+        self.driver.user = user
+        self.driver.save()
+        return user
+
+    def test_unauthenticated_user_gets_403(self):
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_unauthenticated_user_driver_still_exists_in_db(self):
+        self.client.delete(self.url)
+
+        self.assertTrue(Driver.objects.filter(id=self.driver.id).exists())
+
+    def test_authenticated_non_owner_gets_403(self):
+        # Log in as a different user who has no link to the driver
+        other_user = _make_auth_user()
+        self.client.force_login(other_user)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_authenticated_non_owner_driver_still_exists_in_db(self):
+        other_user = _make_auth_user()
+        self.client.force_login(other_user)
+
+        self.client.delete(self.url)
+
+        self.assertTrue(Driver.objects.filter(id=self.driver.id).exists())
+
+    def test_owner_gets_200(self):
+        owner = self._make_driver_owner()
+        self.client.force_login(owner)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_owner_response_has_hx_redirect_to_root(self):
+        owner = self._make_driver_owner()
+        self.client.force_login(owner)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response['HX-Redirect'], '/')
+
+    def test_owner_driver_deleted_from_db(self):
+        owner = self._make_driver_owner()
+        self.client.force_login(owner)
+
+        self.client.delete(self.url)
+
+        self.assertFalse(Driver.objects.filter(id=self.driver.id).exists())
+
+    def test_admin_session_holder_gets_200(self):
+        self._set_admin_session(self.event.id)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_admin_session_holder_response_has_hx_redirect_to_root(self):
+        self._set_admin_session(self.event.id)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response['HX-Redirect'], '/')
+
+    def test_admin_session_holder_driver_deleted_from_db(self):
+        self._set_admin_session(self.event.id)
+
+        self.client.delete(self.url)
+
+        self.assertFalse(Driver.objects.filter(id=self.driver.id).exists())
+
+    def test_admin_session_for_different_event_gets_403(self):
+        # An admin session scoped to a different event must not grant access
+        other_event_id = uuid.uuid4()
+        self._set_admin_session(other_event_id)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_method_returns_405(self):
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_get_method_returns_405(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_wrong_method_response_has_allow_delete_header(self):
+        response = self.client.post(self.url)
+
+        self.assertEqual(response['Allow'], 'DELETE')

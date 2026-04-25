@@ -580,3 +580,32 @@ python manage.py check --deploy  # Will warn about HTTPS settings —
 User feedback is stored in the `Feedback` model and viewable
 at `/feedback/view/` behind the `FEEDBACK_PASSWORD` environment
 variable. No email integration — DB only.
+
+---
+
+## Security notes
+
+**Admin key URL logging (residual risk)**
+The admin key appears in Railway access logs once per session —
+on the initial key-bearing request which results in a 302
+redirect to the key-less admin URL. Subsequent admin page
+visits use `/<event_id>/admin/` with session cookie auth and
+are not logged with the key. Accepted residual risk: anyone
+with Railway dashboard access who reads logs can extract a
+key from that single redirect entry. Mitigated by: Railway
+access limited to project owner, 20-character random key,
+session established immediately so the key-bearing URL does
+not need to be revisited.
+
+A POST-based key submission (keeping the key out of the URL
+entirely) would eliminate this residual risk but requires a
+UX change to the shareable admin link. Not implemented in v0.1.
+
+**driver_delete authorization (fixed in v0.1)**
+The driver_delete endpoint previously had no authorization
+check. Fixed to require either: (a) the requesting user is
+the Discord-authenticated owner of the driver record, or
+(b) the requesting user holds a valid admin session for the
+event. CSRF protection alone is insufficient for destructive
+endpoints since CSRF tokens are freely available from any
+page on the site.
