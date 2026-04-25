@@ -123,7 +123,17 @@ SORTED_TIMEZONES = [
     for zone in group['zones']
 ]
 
-_TIMEZONE_LIST_JSON = json.dumps([
+def _safe_json(data, **kwargs):
+    """json.dumps safe for embedding in <script> blocks; prevents XSS via </script> injection."""
+    return (
+        json.dumps(data, **kwargs)
+        .replace('&', '\\u0026')
+        .replace('<', '\\u003c')
+        .replace('>', '\\u003e')
+    )
+
+
+_TIMEZONE_LIST_JSON = _safe_json([
     {
         'region': group['region'],
         'zones': [{'label': z[0], 'value': z[1]} for z in group['zones']],
@@ -379,7 +389,7 @@ def get_signup_context(event):
     slots = get_availability_slots(event)
     return {
         'slots': slots,
-        'slot_timestamps_json': json.dumps([
+        'slot_timestamps_json': _safe_json([
             s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
             for s in slots
         ]),
@@ -572,7 +582,7 @@ def view_event(request, event_id):
             'driver': assignments.get(n),
         })
 
-    stint_rows_json = json.dumps([
+    stint_rows_json = _safe_json([
         {
             'stint_number': row['stint_number'],
             'start_utc': normalize_iso(row['start_utc']),
@@ -847,7 +857,7 @@ def _build_admin_context(request, event):
         if getattr(event, f) is None
     ]
 
-    slot_timestamps_json = json.dumps([
+    slot_timestamps_json = _safe_json([
         s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
         for s in slots
     ])
@@ -908,16 +918,16 @@ def _build_admin_context(request, event):
         'stint_windows': stint_windows,
         'stint_availability': stint_availability_matrix,
         'stint_duration_display': stint_duration_display,
-        'stint_windows_json': json.dumps([{
+        'stint_windows_json': _safe_json([{
             'stint_number': sw['stint_number'],
             'start_utc': normalize_iso(sw['start_utc']),
             'end_utc': normalize_iso(sw['end_utc']),
         } for sw in stint_windows]),
-        'existing_assignments_json': json.dumps({str(k): str(v) for k, v in existing_assignments.items()}),
-        'drivers_json': json.dumps([{'id': str(d.id), 'name': d.name} for d in drivers]),
-        'availability_json': json.dumps(availability_json),
+        'existing_assignments_json': _safe_json({str(k): str(v) for k, v in existing_assignments.items()}),
+        'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name} for d in drivers]),
+        'availability_json': _safe_json(availability_json),
         'has_assignments': StintAssignment.objects.filter(event=event).exists(),
-        'stint_availability_json': json.dumps({
+        'stint_availability_json': _safe_json({
             str(driver_id): {str(stint_num): status for stint_num, status in stints.items()}
             for driver_id, stints in stint_availability_matrix.items()
         }),

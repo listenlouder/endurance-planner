@@ -4292,3 +4292,315 @@ class ViewEventUserDriverTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertIsNone(response.context['user_driver'])
+
+
+# ===========================================================================
+# XSS prevention — _safe_json helper and view-level injection
+# ===========================================================================
+
+import json as _json
+from events.views import _safe_json
+
+
+# ---------------------------------------------------------------------------
+# _safe_json unit tests
+# ---------------------------------------------------------------------------
+
+class SafeJsonUnitTests(SimpleTestCase):
+    """Tests for views._safe_json() — the XSS-safe JSON serialiser."""
+
+    # --- Character escaping ---
+
+    def test_less_than_is_escaped(self):
+        result = _safe_json('<')
+        self.assertNotIn('<', result)
+        self.assertIn('\\u003c', result)
+
+    def test_greater_than_is_escaped(self):
+        result = _safe_json('>')
+        self.assertNotIn('>', result)
+        self.assertIn('\\u003e', result)
+
+    def test_ampersand_is_escaped(self):
+        result = _safe_json('&')
+        self.assertNotIn('&', result)
+        self.assertIn('\\u0026', result)
+
+    def test_classic_script_injection_payload_is_escaped(self):
+        payload = '</script><script>alert(1)</script>'
+        result = _safe_json(payload)
+        self.assertNotIn('</script>', result)
+        self.assertNotIn('<script>', result)
+
+    def test_all_three_characters_escaped_in_single_string(self):
+        result = _safe_json('<div id="a&b">')
+        self.assertNotIn('<', result)
+        self.assertNotIn('>', result)
+        self.assertNotIn('&', result)
+
+    # --- Valid JSON output ---
+
+    def test_output_is_valid_json_for_string_with_special_chars(self):
+        payload = '</script><script>alert(1)</script>'
+        result = _safe_json(payload)
+        parsed = _json.loads(result)
+        # The parsed value must round-trip back to the original string
+        self.assertEqual(parsed, payload)
+
+    def test_output_is_valid_json_for_string_with_ampersand(self):
+        result = _safe_json('fish & chips')
+        parsed = _json.loads(result)
+        self.assertEqual(parsed, 'fish & chips')
+
+    # --- Normal values round-trip ---
+
+    def test_plain_string_round_trips(self):
+        result = _safe_json('hello world')
+        self.assertEqual(_json.loads(result), 'hello world')
+
+    def test_integer_round_trips(self):
+        result = _safe_json(42)
+        self.assertEqual(_json.loads(result), 42)
+
+    def test_float_round_trips(self):
+        result = _safe_json(3.14)
+        self.assertAlmostEqual(_json.loads(result), 3.14)
+
+    def test_none_round_trips(self):
+        result = _safe_json(None)
+        self.assertIsNone(_json.loads(result))
+
+    def test_true_round_trips(self):
+        result = _safe_json(True)
+        self.assertTrue(_json.loads(result))
+
+    def test_false_round_trips(self):
+        result = _safe_json(False)
+        self.assertFalse(_json.loads(result))
+
+    def test_empty_string_round_trips(self):
+        result = _safe_json('')
+        self.assertEqual(_json.loads(result), '')
+
+    def test_empty_list_round_trips(self):
+        result = _safe_json([])
+        self.assertEqual(_json.loads(result), [])
+
+    def test_empty_dict_round_trips(self):
+        result = _safe_json({})
+        self.assertEqual(_json.loads(result), {})
+
+    # --- Nested / complex structures ---
+
+    def test_list_of_dicts_with_xss_payload_round_trips(self):
+        data = [
+            {'id': '1', 'name': '</script><script>alert(1)</script>'},
+            {'id': '2', 'name': 'Normal Driver'},
+        ]
+        result = _safe_json(data)
+
+        # No raw injection characters in the serialised output
+        self.assertNotIn('</script>', result)
+        self.assertNotIn('<script>', result)
+
+        # But the parsed value is the original data unchanged
+        parsed = _json.loads(result)
+        self.assertEqual(parsed[0]['name'], '</script><script>alert(1)</script>')
+        self.assertEqual(parsed[1]['name'], 'Normal Driver')
+
+    def test_nested_dict_with_ampersand_round_trips(self):
+        data = {'driver': 'Alonso & Prost', 'team': 'A<B>C'}
+        result = _safe_json(data)
+
+        self.assertNotIn('&', result)
+        self.assertNotIn('<', result)
+        self.assertNotIn('>', result)
+
+        parsed = _json.loads(result)
+        self.assertEqual(parsed['driver'], 'Alonso & Prost')
+        self.assertEqual(parsed['team'], 'A<B>C')
+
+    def test_kwargs_forwarded_to_json_dumps(self):
+        # Confirm that extra kwargs (e.g. sort_keys) are honoured
+        data = {'b': 2, 'a': 1}
+        result = _safe_json(data, sort_keys=True)
+        # With sort_keys the first key in the JSON text must be "a"
+        self.assertLess(result.index('"a"'), result.index('"b"'))
+
+
+# ---------------------------------------------------------------------------
+# View-level XSS tests — admin page
+# ---------------------------------------------------------------------------
+
+class AdminPageXssTests(TestCase):
+    """
+    Assert that XSS payloads in driver names cannot break out of <script>
+    blocks on the admin page.
+
+    Auth path: admin key URL (/<event_id>/admin/<admin_key>/).
+    """
+
+    XSS_PAYLOAD = '</script><script>alert(1)</script>'
+
+    def setUp(self):
+        self.event = save_event()
+        self.driver = Driver.objects.create(
+            event=self.event,
+            name=self.XSS_PAYLOAD,
+            timezone='UTC',
+        )
+        self.url = reverse(
+            'admin_page',
+            kwargs={'event_id': self.event.id, 'admin_key': self.event.admin_key},
+        )
+
+    def _decoded(self, response):
+        return response.content.decode('utf-8')
+
+    def test_raw_script_close_tag_absent_from_response(self):
+        response = self.client.get(self.url)
+
+        self.assertNotIn('</script><script>', self._decoded(response))
+
+    def test_driver_name_payload_does_not_appear_verbatim_in_script_block(self):
+        response = self.client.get(self.url)
+
+        # The raw payload must not appear in the page at all
+        self.assertNotIn(self.XSS_PAYLOAD, self._decoded(response))
+
+    def test_drivers_json_context_contains_escaped_name(self):
+        response = self.client.get(self.url)
+
+        drivers_json_str = response.context['drivers_json']
+        # The escaped form must be present
+        self.assertIn('\\u003c/script\\u003e', drivers_json_str)
+        # The raw form must not be present
+        self.assertNotIn('</script>', drivers_json_str)
+
+    def test_drivers_json_in_context_is_valid_json(self):
+        response = self.client.get(self.url)
+
+        drivers_json_str = response.context['drivers_json']
+        parsed = _json.loads(drivers_json_str)
+        names = [d['name'] for d in parsed]
+        self.assertIn(self.XSS_PAYLOAD, names)
+
+    def test_ampersand_in_driver_name_is_escaped_in_drivers_json(self):
+        Driver.objects.create(
+            event=self.event,
+            name='Fast & Furious',
+            timezone='UTC',
+        )
+        response = self.client.get(self.url)
+
+        drivers_json_str = response.context['drivers_json']
+        self.assertNotIn('Fast & Furious', drivers_json_str)
+        self.assertIn('\\u0026', drivers_json_str)
+
+    def test_slot_timestamps_json_present_and_valid(self):
+        response = self.client.get(self.url)
+
+        slot_json_str = response.context['slot_timestamps_json']
+        parsed = _json.loads(slot_json_str)
+        self.assertIsInstance(parsed, list)
+
+    def test_response_status_200(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# View-level XSS tests — public view page
+# ---------------------------------------------------------------------------
+
+class ViewEventXssTests(TestCase):
+    """
+    Assert that XSS payloads in driver names cannot break out of <script>
+    blocks on the public view page (/<event_id>/view/).
+
+    The view page renders stint_rows_json which contains driver_name, a
+    user-controlled field.
+    """
+
+    XSS_PAYLOAD = '</script><script>alert(1)</script>'
+
+    def setUp(self):
+        self.event = save_event()
+        # Create a StintAssignment with the malicious driver so driver_name
+        # appears in stint_rows_json
+        self.driver = Driver.objects.create(
+            event=self.event,
+            name=self.XSS_PAYLOAD,
+            timezone='UTC',
+        )
+        StintAssignment.objects.create(
+            event=self.event,
+            stint_number=1,
+            driver=self.driver,
+        )
+        self.url = reverse('view_event', kwargs={'event_id': self.event.id})
+
+    def _decoded(self, response):
+        return response.content.decode('utf-8')
+
+    def test_raw_script_close_tag_absent_from_response(self):
+        response = self.client.get(self.url)
+
+        self.assertNotIn('</script><script>', self._decoded(response))
+
+    def test_driver_name_payload_does_not_appear_verbatim_in_response(self):
+        response = self.client.get(self.url)
+
+        self.assertNotIn(self.XSS_PAYLOAD, self._decoded(response))
+
+    def test_stint_rows_json_context_contains_escaped_driver_name(self):
+        response = self.client.get(self.url)
+
+        stint_rows_json_str = response.context['stint_rows_json']
+        # Escaped form present
+        self.assertIn('\\u003c/script\\u003e', stint_rows_json_str)
+        # Raw form absent
+        self.assertNotIn('</script>', stint_rows_json_str)
+
+    def test_stint_rows_json_in_context_is_valid_json(self):
+        response = self.client.get(self.url)
+
+        stint_rows_json_str = response.context['stint_rows_json']
+        parsed = _json.loads(stint_rows_json_str)
+        driver_names = [row['driver_name'] for row in parsed if row['driver_name']]
+        self.assertIn(self.XSS_PAYLOAD, driver_names)
+
+    def test_ampersand_in_driver_name_escaped_in_stint_rows_json(self):
+        amp_driver = Driver.objects.create(
+            event=self.event,
+            name='Fast & Furious',
+            timezone='UTC',
+        )
+        StintAssignment.objects.create(
+            event=self.event,
+            stint_number=2,
+            driver=amp_driver,
+        )
+        response = self.client.get(self.url)
+
+        stint_rows_json_str = response.context['stint_rows_json']
+        self.assertNotIn('Fast & Furious', stint_rows_json_str)
+        self.assertIn('\\u0026', stint_rows_json_str)
+
+    def test_unassigned_stint_driver_name_is_null_in_json(self):
+        StintAssignment.objects.create(
+            event=self.event,
+            stint_number=3,
+            driver=None,
+        )
+        response = self.client.get(self.url)
+
+        stint_rows_json_str = response.context['stint_rows_json']
+        parsed = _json.loads(stint_rows_json_str)
+        unassigned = [row for row in parsed if row['stint_number'] == 3]
+        self.assertEqual(len(unassigned), 1)
+        self.assertIsNone(unassigned[0]['driver_name'])
+
+    def test_response_status_200(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
