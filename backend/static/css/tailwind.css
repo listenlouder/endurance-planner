@@ -1082,6 +1082,11 @@ main {
   padding: 32px;
   margin-bottom: 2px;
 }
+@media (max-width: 600px) {
+  .form-card {
+    padding: 20px 16px;
+  }
+}
 .form-card-title {
   font-family: 'Rajdhani', sans-serif;
   font-size: 13px;
@@ -1114,6 +1119,11 @@ main {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
+}
+@media (max-width: 600px) {
+  .field-row {
+    grid-template-columns: 1fr;
+  }
 }
 .field {
   display: flex;
