@@ -1124,6 +1124,9 @@ main {
   .field-row {
     grid-template-columns: 1fr;
   }
+  .field-row > .field {
+    min-width: 0;
+  }
 }
 .field {
   display: flex;
