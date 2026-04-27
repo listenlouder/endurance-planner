@@ -302,6 +302,8 @@ textarea {
   padding: 10px 14px;
   transition: border-color 0.2s var(--ease);
   width: 100%;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
 select:focus,
@@ -1089,6 +1091,7 @@ main {
 @media (max-width: 600px) {
   .form-card {
     padding: 20px 16px;
+    overflow: hidden;
   }
 }
 .form-card-title {
@@ -1360,6 +1363,8 @@ main {
   outline: none;
   transition: border-color 0.2s var(--ease);
   width: 100%;
+  box-sizing: border-box;
+  max-width: 100%;
   border-radius: 0;
 }
 .detail-input:focus { border-color: var(--secondary); }
