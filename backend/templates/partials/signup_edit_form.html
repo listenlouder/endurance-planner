@@ -7,6 +7,7 @@
 </script>
 
 <div id="signup-edit-form-container">
+<div style="max-width: 680px;">
 <form method="post"
       hx-post="{% url 'signup_edit' event.id driver.id %}{% if from_admin %}?from=admin{% endif %}"
       hx-target="#signup-edit-form-container"
@@ -146,4 +147,5 @@
   </div>
 
 </form>
+</div>
 </div>

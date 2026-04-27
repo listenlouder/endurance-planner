@@ -136,11 +136,6 @@
 
 {% block content %}
 
-<!-- Mobile warning -->
-<div class="mobile-warning">
-  Admin page is designed for desktop use.
-</div>
-
 <!-- Toast notification -->
 <div class="toast"
      id="adminToast"
@@ -177,10 +172,22 @@
   </div>
 </section>
 
+<div style="max-width: 1400px; width: 100%; margin: 0 auto;">
+
+<!-- Mobile warning -->
+<div class="mobile-warning">
+  Admin page is designed for desktop use.
+</div>
+
+<!-- Two-column grid for top sections -->
+<div class="admin-top-grid">
+
 <!-- ============================================================
      SECTION 1 — EVENT DETAILS
 ============================================================ -->
-<section class="admin-section fade-up-delay-1">
+<section class="admin-section fade-up-delay-1"
+         style="border-bottom: none;
+                border-right: 1px solid var(--border);">
   <div class="section-heading">Event Details</div>
 
   <div id="admin-details-errors"></div>
@@ -321,6 +328,7 @@
      SECTION 2 — STINT CALCULATION
 ============================================================ -->
 <section class="admin-section fade-up-delay-1"
+         style="border-bottom: none;"
          x-data="stintCalc({
            lapTime:        '{{ event.avg_lap_seconds|seconds_to_mmss }}',
            inLap:          '{{ event.in_lap_seconds|seconds_to_mmss }}',
@@ -341,7 +349,7 @@
         hx-swap="innerHTML">
     {% csrf_token %}
 
-    <div class="details-grid" style="max-width: 700px; margin-bottom: 2px;">
+    <div class="details-grid" style="margin-bottom: 2px;">
 
       <!-- Avg lap time -->
       <div class="detail-field">
@@ -411,7 +419,6 @@
     <div style="display: grid;
                  grid-template-columns: repeat(4, 1fr);
                  gap: 2px;
-                 max-width: 700px;
                  margin-bottom: 16px;">
 
       <div class="stat-card">
@@ -450,7 +457,7 @@
 
     <!-- Sanity warnings -->
     {% if sanity_warnings %}
-    <div style="margin-bottom: 16px; max-width: 700px;">
+    <div style="margin-bottom: 16px;">
       {% for warning in sanity_warnings %}
       <div style="padding: 10px 14px;
                    border: 1px solid var(--danger);
@@ -470,7 +477,7 @@
 
     <!-- Rebuild warning -->
     <template x-if="showRebuildWarning">
-      <div style="margin-bottom: 12px; max-width: 700px; padding: 10px 14px;
+      <div style="margin-bottom: 12px; padding: 10px 14px;
                   border: 1px solid var(--primary); background: var(--bg-card);
                   border-left: 3px solid var(--primary);">
         <p style="font-size: 10px; color: var(--text-mid); letter-spacing: 0.06em; line-height: 1.5;">
@@ -491,6 +498,8 @@
   </form>
 
 </section>
+
+</div><!-- end admin-top-grid -->
 
 <!-- ============================================================
      SECTION 3 — DRIVERS
@@ -584,7 +593,7 @@
     <input type="hidden" name="stint_{{ sw.stint_number }}" :value="assignments[{{ sw.stint_number }}] || ''">
     {% endfor %}
 
-    <div class="table-wrapper" style="overflow-x: auto; max-height: 70vh; overflow-y: auto;">
+    <div class="table-wrapper" style="overflow-x: auto;">
       <table class="unified-table" id="unifiedTable">
         <thead>
           <tr>
@@ -705,6 +714,8 @@
   {% endif %}
 
 </section>
+
+</div><!-- end centering wrapper -->
 
 {% endblock %}
 

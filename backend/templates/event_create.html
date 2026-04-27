@@ -22,7 +22,8 @@
 <!-- ============================================================
      SUCCESS STATE
 ============================================================ -->
-<div style="padding: 40px 32px; max-width: 640px;" class="fade-up">
+<div style="padding: 40px 32px; max-width: 1400px; width: 100%; margin: 0 auto;" class="fade-up">
+<div style="max-width: 640px;">
 
   <!-- Success header -->
   <div style="display: flex; align-items: center;
@@ -120,15 +121,18 @@
   </a>
 
 </div>
+</div>
 
 {% else %}
 
 <!-- ============================================================
      FORM STATE
 ============================================================ -->
-<div style="padding: 40px 32px 48px; max-width: 640px;"
+<div style="padding: 40px 32px 48px; max-width: 1400px; width: 100%; margin: 0 auto;"
      class="fade-up-delay-1">
-  {% include 'partials/event_create_form.html' %}
+  <div id="create-form-container" style="max-width: 680px;">
+    {% include 'partials/event_create_form.html' %}
+  </div>
 </div>
 
 {% endif %}

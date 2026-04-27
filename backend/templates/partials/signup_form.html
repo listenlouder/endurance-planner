@@ -7,6 +7,7 @@
 </script>
 
 <div id="signup-form-container">
+<div style="max-width: 680px;">
 <form method="post"
       hx-post="{% url 'signup' event.id %}"
       hx-target="#signup-form-container"
@@ -146,4 +147,5 @@
   </div>
 
 </form>
+</div>
 </div>

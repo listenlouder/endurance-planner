@@ -145,7 +145,11 @@
      SCHEDULE SECTION
 ============================================================ -->
 <section class="schedule-section"
-         style="padding: 40px 32px 0; flex: 1;">
+         style="padding: 40px 32px 0;
+                max-width: 1400px;
+                width: 100%;
+                margin: 0 auto;
+                flex: 1;">
 
   {% if not stints_ready %}
 
@@ -353,27 +357,33 @@
      SIGNUP BANNER — bottom of page
 ============================================================ -->
 {% if user_driver %}
-<div class="signup-banner fade-up-delay-1">
-  <div class="signup-banner-text">
-    Signed up as <strong>{{ user_driver.name }}</strong>.
-    Update your available stints if your schedule changes.
+<div style="max-width: 1400px; width: 100%; margin: 0 auto; padding: 0 32px;">
+  <div class="signup-banner fade-up-delay-1"
+       style="margin: 32px 0 0;">
+    <div class="signup-banner-text">
+      Signed up as <strong>{{ user_driver.name }}</strong>.
+      Update your available stints if your schedule changes.
+    </div>
+    <a href="{% url 'signup_edit' event.id user_driver.id %}"
+       class="btn-secondary">
+      Edit availability →
+    </a>
   </div>
-  <a href="{% url 'signup_edit' event.id user_driver.id %}"
-     class="btn-secondary">
-    Edit availability →
-  </a>
 </div>
 
 {% elif show_signup_link %}
-<div class="signup-banner fade-up-delay-2">
-  <div class="signup-banner-text">
-    Not signed up yet?
-    <strong>Add your availability</strong>
-    so the admin can assign you to a stint.
+<div style="max-width: 1400px; width: 100%; margin: 0 auto; padding: 0 32px;">
+  <div class="signup-banner fade-up-delay-2"
+       style="margin: 32px 0 0;">
+    <div class="signup-banner-text">
+      Not signed up yet?
+      <strong>Add your availability</strong>
+      so the admin can assign you to a stint.
+    </div>
+    <a href="{% url 'signup' event.id %}" class="btn-secondary">
+      Sign up →
+    </a>
   </div>
-  <a href="{% url 'signup' event.id %}" class="btn-secondary">
-    Sign up →
-  </a>
 </div>
 {% endif %}
 

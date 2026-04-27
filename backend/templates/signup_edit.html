@@ -19,42 +19,44 @@
 <!-- ============================================================
      FORM
 ============================================================ -->
-<div style="padding: 40px 32px 0; max-width: 680px;" class="fade-up-delay-1">
+<div style="padding: 40px 32px 0; max-width: 1400px; width: 100%; margin: 0 auto;" class="fade-up-delay-1">
   {% include 'partials/signup_edit_form.html' with from_admin=from_admin %}
 </div>
 
 <!-- ============================================================
      REMOVE ME
 ============================================================ -->
-<div style="padding: 0 32px 48px; max-width: 680px;" class="fade-up-delay-2">
-  <div style="padding: 24px 32px;
-              border: 1px solid var(--border);
-              border-top: 3px solid var(--danger);
-              background: var(--bg-card);">
-    <div style="font-size: 10px;
-                letter-spacing: 0.18em;
-                text-transform: uppercase;
-                color: var(--danger);
-                margin-bottom: 8px;">
-      Remove yourself
+<div style="padding: 0 32px 48px; max-width: 1400px; width: 100%; margin: 0 auto;" class="fade-up-delay-2">
+  <div style="max-width: 680px;">
+    <div style="padding: 24px 32px;
+                border: 1px solid var(--border);
+                border-top: 3px solid var(--danger);
+                background: var(--bg-card);">
+      <div style="font-size: 10px;
+                  letter-spacing: 0.18em;
+                  text-transform: uppercase;
+                  color: var(--danger);
+                  margin-bottom: 8px;">
+        Remove yourself
+      </div>
+      <p style="font-size: 11px;
+                 color: var(--text-mid);
+                 letter-spacing: 0.03em;
+                 line-height: 1.6;
+                 margin-bottom: 16px;">
+        Permanently deletes your signup and availability data. This cannot be undone.
+      </p>
+      <button
+        hx-delete="{% url 'driver_delete' event.id driver.id %}"
+        hx-confirm="Remove yourself from {{ event.name }}? This cannot be undone."
+        hx-target="body"
+        hx-push-url="/"
+        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+        class="btn-secondary"
+        style="border-color: var(--danger); color: var(--danger);">
+        Remove me from this event
+      </button>
     </div>
-    <p style="font-size: 11px;
-               color: var(--text-mid);
-               letter-spacing: 0.03em;
-               line-height: 1.6;
-               margin-bottom: 16px;">
-      Permanently deletes your signup and availability data. This cannot be undone.
-    </p>
-    <button
-      hx-delete="{% url 'driver_delete' event.id driver.id %}"
-      hx-confirm="Remove yourself from {{ event.name }}? This cannot be undone."
-      hx-target="body"
-      hx-push-url="/"
-      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-      class="btn-secondary"
-      style="border-color: var(--danger); color: var(--danger);">
-      Remove me from this event
-    </button>
   </div>
 </div>
 
