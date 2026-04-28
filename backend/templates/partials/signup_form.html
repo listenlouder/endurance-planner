@@ -44,6 +44,7 @@
                name="driver_name"
                value="{{ submitted_name|default:prefill_name }}"
                placeholder="e.g. Will"
+               maxlength="50"
                autocomplete="off">
         {% if errors.driver_name %}
         <span class="field-error">{{ errors.driver_name }}</span>

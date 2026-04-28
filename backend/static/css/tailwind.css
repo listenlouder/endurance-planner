@@ -1580,6 +1580,7 @@ main {
   border-collapse: separate;
   border-spacing: 0 2px;
   min-width: 600px;
+  table-layout: fixed;
 }
 .unified-table thead th {
   padding: 8px 12px;
@@ -1606,6 +1607,8 @@ th.avail-group-header {
 .avail-driver-th {
   color: var(--secondary) !important;
   text-align: center;
+  vertical-align: bottom;
+  padding-bottom: 6px;
 }
 th.col-divider, td.col-divider {
   width: 16px;
@@ -1623,14 +1626,24 @@ th.col-divider, td.col-divider {
 }
 tr.row-assigned   { background: var(--assigned-bg); }
 tr.row-unassigned { background: var(--unassigned-bg); }
-td.s-num  { color: var(--text-dim); font-size: 10px; width: 36px; }
-td.s-time { color: var(--text); font-size: 12px; width: 100px; }
-td.s-dur  { color: var(--text-dim); font-size: 10px; width: 60px; }
-td.s-driver { width: 160px; }
+td.s-num  { color: var(--text-dim); font-size: 10px; width: 36px; white-space: nowrap; }
+td.s-time { color: var(--text); font-size: 12px; width: 80px; white-space: nowrap; }
+td.s-dur  { color: var(--text-dim); font-size: 10px; width: 80px; white-space: nowrap; }
+td.s-laps { width: 70px; text-align: center; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+td.s-driver { width: 180px; }
+.unified-table th.col-laps-left { text-align: center; width: 70px; }
+.finish-label {
+  color: var(--secondary) !important;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
 td.avail-td {
   text-align: center;
   width: 44px;
   padding: 0 4px;
+  vertical-align: middle;
 }
 .avail-cell {
   width: 32px;
@@ -1654,51 +1667,39 @@ td.avail-td {
 }
 
 /* ============================================================
-   DRIVER SELECT (inside unified table)
+   CUSTOM DRIVER DROPDOWN (inside unified table)
+   Uses position:fixed on the panel to escape table overflow.
 ============================================================ */
-.driver-select-wrap {
-  position: relative;
-}
-.driver-select-wrap::after {
-  content: '↓';
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 10px;
-  color: var(--text-dim);
-  pointer-events: none;
-}
-.driver-select {
-  width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border-mid);
-  color: var(--text-mid);
+.dd-option {
+  padding: 7px 10px;
   font-family: 'DM Mono', monospace;
   font-size: 11px;
-  letter-spacing: 0.04em;
-  padding: 6px 24px 6px 10px;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
+  color: var(--text-mid);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-  border-radius: 0;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
-.driver-select:focus { border-color: var(--secondary); }
-.driver-select.is-assigned {
-  color: var(--assigned-text);
-  border-color: var(--primary);
+.dd-option:hover { background: var(--bg-raised); }
+.dd-option.dd-selected {
   background: var(--assigned-bg);
+  color: var(--assigned-text);
 }
-.driver-select.is-conflict {
-  color: var(--unassigned-text);
-  border-color: var(--danger);
-  background: var(--unassigned-bg);
+.dd-option.dd-selected:hover { background: var(--assigned-bg); }
+.dd-unassign {
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
 }
+.dd-avail-tag {
+  font-size: 9px;
+  opacity: 0.6;
+  letter-spacing: 0.06em;
+}
+.dd-avail-tag.dd-unavail { opacity: 0.45; }
+.avail-cell.conflict { background: #f59e0b22; color: #f59e0b; border: 1px solid #f59e0b44; }
 tr.row-unassigned td.s-num,
 tr.row-unassigned td.s-time,
-tr.row-unassigned td.s-dur {
+tr.row-unassigned td.s-dur,
+tr.row-unassigned td.s-laps {
   color: var(--unassigned-text);
 }
 

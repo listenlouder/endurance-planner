@@ -3,9 +3,15 @@
 <div class="driver-row" id="driver-row-{{ driver.id }}">
   <div class="driver-row-left">
     {% include 'partials/driver_name_display.html' with driver=driver event=event only %}
-    <span class="driver-meta">
-      signed up {{ driver.signed_up_at|timesince }} ago
-    </span>
+    <div style="display:flex;flex-direction:column;gap:2px;">
+      <span class="driver-meta">
+        signed up {{ driver.signed_up_at|timesince }} ago
+      </span>
+      <span class="driver-meta"
+            style="color:var(--secondary);opacity:0.7;">
+        {{ driver.timezone }}
+      </span>
+    </div>
   </div>
   <div class="driver-row-right">
     <span class="avail-count">

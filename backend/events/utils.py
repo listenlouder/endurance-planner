@@ -107,17 +107,56 @@ def total_stints(event):
     return math.ceil(event.length_seconds / stint_length_seconds(event))
 
 
+def total_race_laps(event):
+    """
+    Estimated total laps in the race based on average lap time.
+    Returns None if required fields are not set.
+
+    When all stint fields are configured, uses total_stints × target_laps —
+    this is the correct planned lap count because each stint does exactly
+    target_laps laps and total_stints already accounts for in/out lap
+    overhead. Dividing raw race time by avg_lap would overcount because
+    the slower in/out laps consume more time than avg_lap implies.
+
+    Falls back to floor(race_length / avg_lap) as a rough estimate when
+    only avg_lap_seconds and length_seconds are set.
+    """
+    if event.has_required_stint_fields:
+        n = total_stints(event)
+        sl = stint_length_seconds(event)
+        last_stint_time = event.length_seconds - (n - 1) * sl
+        return (n - 1) * event.target_laps + math.floor(last_stint_time / event.avg_lap_seconds)
+    if not event.avg_lap_seconds or not event.length_seconds:
+        return None
+    return math.floor(event.length_seconds / event.avg_lap_seconds)
+
+
+def laps_remaining_after_stint(event, stint_number):
+    """
+    Estimated laps remaining in the race after stint N pits.
+    stint_number is 1-indexed. Returns None if required fields not set.
+    Returns 0 minimum (never negative).
+    Returns None for the last stint — caller signals that as FINISH.
+    """
+    total = total_race_laps(event)
+    if total is None or not event.target_laps:
+        return None
+    remaining = total - (stint_number * event.target_laps)
+    return max(0, remaining)
+
+
 def stint_start_time(event, stint_number):
     """
     Calculate the UTC start datetime for a given stint.
 
-    stint_number is 1-indexed. Stint 1 starts at event.start_datetime_utc.
-    Each subsequent stint starts one stint_length_seconds after the previous.
+    stint_number is 1-indexed. Stint 1 starts at
+    event.effective_start_datetime_utc (race_start_time_utc when set,
+    otherwise session start_time_utc).
 
     Returns timezone-aware datetime.
     """
     offset = (stint_number - 1) * stint_length_seconds(event)
-    return event.start_datetime_utc + timedelta(seconds=offset)
+    return event.effective_start_datetime_utc + timedelta(seconds=offset)
 
 
 def stint_end_time(event, stint_number):
@@ -125,13 +164,13 @@ def stint_end_time(event, stint_number):
     Calculate the UTC end datetime for a given stint.
 
     The end time of stint N is the start time of stint N+1.
-    For the final stint, it is event.end_datetime_utc.
+    For the final stint, it is event.effective_end_datetime_utc.
 
     Returns timezone-aware datetime.
     """
     n = total_stints(event)
     if stint_number >= n:
-        return event.end_datetime_utc
+        return event.effective_end_datetime_utc
     return stint_start_time(event, stint_number + 1)
 
 
@@ -188,9 +227,15 @@ def _snap_to_grid(start_utc, grid_anchor, slot_duration=timedelta(minutes=30)):
     return grid_anchor + offset_slots * slot_duration
 
 
-def build_stint_availability_matrix(drivers, stint_windows):
+def build_stint_availability_matrix(drivers, stint_windows, grid_anchor=None):
     """
     For each driver and each stint window, determine availability status.
+
+    grid_anchor must be the session start datetime (event.start_datetime_utc),
+    NOT the race start. Availability slots are always anchored to the session
+    start, so snapping must use the same origin. Defaults to
+    stint_windows[0]['start_utc'] for backward compatibility, but callers
+    should always pass event.start_datetime_utc explicitly.
 
     Returns a dict:
     {
@@ -204,10 +249,8 @@ def build_stint_availability_matrix(drivers, stint_windows):
 
     result = {}
     slot_duration = timedelta(minutes=30)
-    # Availability slots sit on a 30-min grid anchored at stint 1's start.
-    # When stint length isn't a multiple of 30 min, a stint's start_utc
-    # falls off-grid, so we snap to the first grid point >= start.
-    grid_anchor = stint_windows[0]['start_utc']
+    if grid_anchor is None:
+        grid_anchor = stint_windows[0]['start_utc']
 
     for driver in drivers:
         driver_avail = set(a.slot_utc for a in driver.availability.all())

@@ -99,14 +99,30 @@
         </div>
         <div class="field {% if form.start_time_utc.errors %}has-error{% endif %}">
           <label for="{{ form.start_time_utc.id_for_label }}">
-            Start time (UTC) <span class="required">*</span>
+            Session start (UTC) <span class="required">*</span>
           </label>
           {{ form.start_time_utc }}
-          <span class="field-hint">e.g. 13:00 = 1:00 PM UTC.</span>
+          <span class="field-hint">When the session opens — include warmup/qualifying.</span>
           {% if form.start_time_utc.errors %}
           <span class="field-error">{{ form.start_time_utc.errors|join:", " }}</span>
           {% endif %}
         </div>
+      </div>
+
+      <!-- Race start time (optional) -->
+      <div class="field {% if form.race_start_time_utc.errors %}has-error{% endif %}">
+        <label for="{{ form.race_start_time_utc.id_for_label }}">
+          Race start (UTC)
+        </label>
+        {{ form.race_start_time_utc }}
+        <span class="field-hint">
+          Optional. When the green flag drops. If set, stint schedules are
+          calculated from this time rather than session start. Leave blank
+          if warmup/qualifying is not applicable.
+        </span>
+        {% if form.race_start_time_utc.errors %}
+        <span class="field-error">{{ form.race_start_time_utc.errors|join:", " }}</span>
+        {% endif %}
       </div>
 
       <!-- Race length -->

@@ -26,6 +26,7 @@ class Event(models.Model):
     name = models.CharField(max_length=255)
     date = models.DateField()
     start_time_utc = models.TimeField()
+    race_start_time_utc = models.TimeField(null=True, blank=True)
     length_seconds = models.PositiveIntegerField()
     car = models.CharField(max_length=255, blank=True)
     track = models.CharField(max_length=255, blank=True)
@@ -66,6 +67,20 @@ class Event(models.Model):
         return self.start_datetime_utc + timedelta(seconds=self.length_seconds)
 
     @property
+    def effective_start_time_utc(self):
+        """race_start_time_utc when set, otherwise falls back to start_time_utc."""
+        return self.race_start_time_utc or self.start_time_utc
+
+    @property
+    def effective_start_datetime_utc(self):
+        """Timezone-aware datetime using effective start time. Use for stint calculations."""
+        return datetime.combine(self.date, self.effective_start_time_utc).replace(tzinfo=dt_utc.utc)
+
+    @property
+    def effective_end_datetime_utc(self):
+        return self.effective_start_datetime_utc + timedelta(seconds=self.length_seconds)
+
+    @property
     def has_required_stint_fields(self):
         """Returns True if all fields needed for stint calculation are set."""
         return all([
@@ -81,7 +96,7 @@ class Event(models.Model):
 class Driver(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='drivers')
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=50)
     timezone = models.CharField(max_length=100, default='UTC')
     signed_up_at = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(

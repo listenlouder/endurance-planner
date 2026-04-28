@@ -25,8 +25,10 @@ from .utils import (
     build_stint_availability_matrix,
     get_availability_slots,
     get_stint_windows,
+    laps_remaining_after_stint,
     seconds_to_mmss,
     stint_length_seconds,
+    total_race_laps,
     total_stints,
     validate_stint_sanity,
 )
@@ -419,6 +421,8 @@ def _validate_signup_post(post_data):
     errors = {}
     if not driver_name:
         errors['driver_name'] = 'Your name is required.'
+    elif len(driver_name) > 50:
+        errors['driver_name'] = 'Name must be 50 characters or fewer.'
     if not timezone:
         errors['timezone'] = 'Timezone is required.'
     if not slots_raw:
@@ -491,6 +495,7 @@ def event_create(request):
                 track=form.cleaned_data.get('track', ''),
                 date=form.cleaned_data['date'],
                 start_time_utc=form.cleaned_data['start_time_utc'],
+                race_start_time_utc=form.cleaned_data.get('race_start_time_utc') or None,
                 length_seconds=form.cleaned_data['length_seconds'],
                 recruiting=form.cleaned_data.get('recruiting', False),
             )
@@ -582,12 +587,21 @@ def view_event(request, event_id):
             'driver': assignments.get(n),
         })
 
+    total_stints_count = total_stints(event) if event.has_required_stint_fields else 0
+    event_total_race_laps = total_race_laps(event)
+
     stint_rows_json = _safe_json([
         {
             'stint_number': row['stint_number'],
             'start_utc': normalize_iso(row['start_utc']),
             'end_utc': normalize_iso(row['end_utc']),
             'driver_name': row['driver'].name if row['driver'] else None,
+            'is_last_stint': row['stint_number'] == total_stints_count,
+            'laps_remaining': (
+                None
+                if row['stint_number'] == total_stints_count
+                else laps_remaining_after_stint(event, row['stint_number'])
+            ),
         }
         for row in stint_rows
     ])
@@ -641,6 +655,9 @@ def view_event(request, event_id):
         'show_signup_link': request.GET.get('from') == 'recruiting',
         'stint_duration_display': stint_duration_display,
         'driver_counts': driver_counts,
+        'total_race_laps': event_total_race_laps,
+        'has_separate_race_start': bool(event.race_start_time_utc),
+        'effective_start_datetime_utc': event.effective_start_datetime_utc,
     })
 
 
@@ -675,6 +692,9 @@ def signup(request, event_id):
                 return response
             return redirect('signup_success', event_id=event_id, driver_id=driver.id)
 
+        prefill_name = ''
+        if request.user.is_authenticated:
+            prefill_name = request.user.discord_username or request.user.username
         ctx = get_signup_context(event)
         ctx.update({
             'event': event,
@@ -682,6 +702,7 @@ def signup(request, event_id):
             'submitted_name': cleaned['driver_name'],
             'submitted_slot_timestamps': cleaned['slots_raw'],
             'submitted_timezone': cleaned['timezone'],
+            'prefill_name': prefill_name,
         })
         if request.htmx:
             return render(request, 'partials/signup_form.html', ctx)
@@ -898,7 +919,9 @@ def _build_admin_context(request, event):
             for sa in StintAssignment.objects.filter(event=event)
             if sa.driver_id
         }
-        stint_availability_matrix = build_stint_availability_matrix(drivers, stint_windows)
+        stint_availability_matrix = build_stint_availability_matrix(
+            drivers, stint_windows, event.start_datetime_utc
+        )
         availability_json = {
             str(driver.id): [normalize_iso(a.slot_utc) for a in driver.availability.all()]
             for driver in drivers
@@ -911,6 +934,8 @@ def _build_admin_context(request, event):
         stint_duration_display = f"{sl_mins}m {sl_secs}s" if sl_secs else f"{sl_mins}m"
     else:
         stint_duration_display = None
+
+    _total_stints_count = total_stints(event) if has_required_stint_fields else 0
 
     return {
         'event': event,
@@ -936,11 +961,18 @@ def _build_admin_context(request, event):
             'stint_number': sw['stint_number'],
             'start_utc': normalize_iso(sw['start_utc']),
             'end_utc': normalize_iso(sw['end_utc']),
+            'is_last_stint': sw['stint_number'] == _total_stints_count,
+            'laps_remaining': (
+                None
+                if sw['stint_number'] == _total_stints_count
+                else laps_remaining_after_stint(event, sw['stint_number'])
+            ),
         } for sw in stint_windows]),
         'existing_assignments_json': _safe_json({str(k): str(v) for k, v in existing_assignments.items()}),
         'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name} for d in drivers]),
         'availability_json': _safe_json(availability_json),
         'has_assignments': StintAssignment.objects.filter(event=event).exists(),
+        'total_stints_count': _total_stints_count,
         'stint_availability_json': _safe_json({
             str(driver_id): {str(stint_num): status for stint_num, status in stints.items()}
             for driver_id, stints in stint_availability_matrix.items()
@@ -1011,14 +1043,15 @@ def admin_edit_driver_name(request, event_id, driver_id):
 
     if request.method == 'POST':
         name = request.POST.get('name', '').strip()
+        error = None
         if not name:
+            error = 'Driver name cannot be empty.'
+        elif len(name) > 50:
+            error = 'Name must be 50 characters or fewer.'
+        if error:
             return render(request,
                 'partials/driver_name_edit_form.html',
-                {
-                    'driver': driver,
-                    'event': event,
-                    'error': 'Driver name cannot be empty.'
-                })
+                {'driver': driver, 'event': event, 'error': error})
         driver.name = name
         driver.save(update_fields=['name'])
         return render(request,
@@ -1063,6 +1096,8 @@ def admin_add_driver(request, event_id):
     errors = {}
     if not driver_name:
         errors['driver_name'] = 'Driver name is required.'
+    elif len(driver_name) > 50:
+        errors['driver_name'] = 'Name must be 50 characters or fewer.'
     if not timezone or timezone not in VALID_TIMEZONES:
         errors['timezone'] = 'A valid timezone is required.'
 
@@ -1242,9 +1277,20 @@ def admin_save_calc(request, event_id):
         except ValueError:
             errors['target_laps'] = 'Invalid number.'
 
+    raw_race_start = request.POST.get('race_start_time_utc', '').strip()
+    race_start_submitted = 'race_start_time_utc' in request.POST
+    parsed_race_start = None
+    if raw_race_start:
+        try:
+            parsed_race_start = time_type.fromisoformat(raw_race_start)
+        except ValueError:
+            errors['race_start_time_utc'] = 'Invalid race start time.'
+
     if errors:
         return render(request, 'partials/admin_calc_errors.html', {'errors': errors})
 
+    if race_start_submitted:
+        event.race_start_time_utc = parsed_race_start
     event.save()
     if event.has_required_stint_fields:
         response = HttpResponse(status=200)

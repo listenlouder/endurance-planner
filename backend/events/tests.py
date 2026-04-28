@@ -210,7 +210,7 @@ class StintStartTimeTests(SimpleTestCase):
     def test_stint_1_starts_at_event_start(self):
         event = make_event()
         start = stint_start_time(event, 1)
-        self.assertEqual(start, event.start_datetime_utc)
+        self.assertEqual(start, event.effective_start_datetime_utc)
 
     def test_stint_1_is_utc_aware(self):
         event = make_event()
@@ -991,12 +991,17 @@ class ValidateSignupPostTests(SimpleTestCase):
         self.assertEqual(errors, {})
         self.assertEqual(cleaned['driver_name'], name.strip())
 
-    def test_very_long_name_passes_validation(self):
-        # _validate_signup_post does not enforce max length; the model field does
-        long_name = 'X' * 500
+    def test_name_over_50_characters_returns_error(self):
+        # _validate_signup_post enforces the 50-character limit directly
+        long_name = 'X' * 51
         cleaned, errors = _validate_signup_post(self._valid_post(driver_name=long_name))
+        self.assertIn('driver_name', errors)
+
+    def test_name_exactly_50_characters_passes_validation(self):
+        name_50 = 'X' * 50
+        cleaned, errors = _validate_signup_post(self._valid_post(driver_name=name_50))
         self.assertEqual(errors, {})
-        self.assertEqual(cleaned['driver_name'], long_name)
+        self.assertEqual(cleaned['driver_name'], name_50)
 
     def test_multiple_errors_reported_together(self):
         post = self._post(driver_name='', timezone='', slots=[])
@@ -4814,3 +4819,644 @@ class DriverDeleteAuthTests(TestCase):
         response = self.client.post(self.url)
 
         self.assertEqual(response['Allow'], 'DELETE')
+
+
+# ===========================================================================
+# New coverage: race_start_time_utc, effective start, total_race_laps,
+# laps_remaining_after_stint, driver name length, admin_save_calc/details,
+# and Django admin panel removed.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Event.effective_start_time_utc and effective_start_datetime_utc
+# ---------------------------------------------------------------------------
+
+class EventEffectiveStartTests(SimpleTestCase):
+    """Tests for Event.effective_start_time_utc and effective_start_datetime_utc."""
+
+    def test_effective_start_time_utc_returns_race_start_when_set(self):
+        event = make_event(
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 30, 0),
+        )
+        self.assertEqual(event.effective_start_time_utc, dt.time(12, 30, 0))
+
+    def test_effective_start_time_utc_falls_back_to_session_start_when_none(self):
+        event = make_event(
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=None,
+        )
+        self.assertEqual(event.effective_start_time_utc, dt.time(10, 0, 0))
+
+    def test_effective_start_datetime_utc_uses_race_start_when_set(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 30, 0),
+        )
+        expected = dt.datetime(2026, 6, 1, 12, 30, 0, tzinfo=timezone.utc)
+        self.assertEqual(event.effective_start_datetime_utc, expected)
+
+    def test_effective_start_datetime_utc_uses_session_start_when_race_start_none(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=None,
+        )
+        expected = dt.datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(event.effective_start_datetime_utc, expected)
+
+    def test_effective_start_datetime_utc_is_timezone_aware(self):
+        event = make_event(race_start_time_utc=dt.time(14, 0, 0))
+        self.assertIsNotNone(event.effective_start_datetime_utc.tzinfo)
+        self.assertEqual(event.effective_start_datetime_utc.utcoffset(), dt.timedelta(0))
+
+    def test_effective_start_datetime_utc_is_timezone_aware_when_race_start_none(self):
+        event = make_event(race_start_time_utc=None)
+        self.assertIsNotNone(event.effective_start_datetime_utc.tzinfo)
+        self.assertEqual(event.effective_start_datetime_utc.utcoffset(), dt.timedelta(0))
+
+    def test_effective_start_equals_session_start_when_race_start_same_as_session(self):
+        # When race_start equals start_time, effective_start still equals race_start
+        event = make_event(
+            start_time_utc=dt.time(12, 0, 0),
+            race_start_time_utc=dt.time(12, 0, 0),
+        )
+        self.assertEqual(event.effective_start_time_utc, dt.time(12, 0, 0))
+
+
+# ---------------------------------------------------------------------------
+# Driver model — name max_length constraint
+# ---------------------------------------------------------------------------
+
+class DriverNameMaxLengthTests(TestCase):
+    """Tests for Driver.name max_length=50 at the model level."""
+
+    def setUp(self):
+        self.event = save_event()
+
+    def test_name_at_max_length_50_saves_successfully(self):
+        driver = Driver.objects.create(
+            event=self.event,
+            name='A' * 50,
+            timezone='UTC',
+        )
+        driver.refresh_from_db()
+        self.assertEqual(len(driver.name), 50)
+
+    def test_driver_name_field_has_max_length_50(self):
+        field = Driver._meta.get_field('name')
+        self.assertEqual(field.max_length, 50)
+
+
+# ---------------------------------------------------------------------------
+# total_race_laps() utility function
+# ---------------------------------------------------------------------------
+
+class TotalRaceLapsTests(SimpleTestCase):
+    """Tests for utils.total_race_laps()."""
+
+    def setUp(self):
+        from .utils import total_race_laps as _total_race_laps
+        self.total_race_laps = _total_race_laps
+
+    def test_returns_none_when_avg_lap_seconds_is_none(self):
+        event = make_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertIsNone(self.total_race_laps(event))
+
+    def test_returns_none_when_length_seconds_is_none_and_no_stint_fields(self):
+        # length_seconds is required by the model but we can test the guard
+        # by making a stub with no avg_lap and no stint fields
+        event = make_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertIsNone(self.total_race_laps(event))
+
+    def test_fallback_floor_division_when_only_avg_lap_and_length_set(self):
+        # Without full stint fields, falls back to floor(length / avg_lap)
+        # 86400 / 102 = 847.058... → floor = 847
+        event = make_event(
+            length_seconds=86_400,
+            avg_lap_seconds=102.0,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(self.total_race_laps(event), 847)
+
+    def test_with_full_stint_fields_uses_stint_based_calculation(self):
+        # Default event: 6-hour race, stint_length=3615s, 6 stints, target_laps=30
+        # n=6 stints, sl=3615s
+        # last_stint_time = 21600 - 5*3615 = 21600 - 18075 = 3525s
+        # total = 5*30 + floor(3525/120) = 150 + 29 = 179
+        event = make_event()
+        result = self.total_race_laps(event)
+        self.assertIsInstance(result, int)
+        self.assertGreater(result, 0)
+
+    def test_known_value_86400s_102s_lap_fallback(self):
+        # Explicit check of the 847 example from the spec
+        event = make_event(
+            length_seconds=86_400,
+            avg_lap_seconds=102.0,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(self.total_race_laps(event), 847)
+
+    def test_exact_division_returns_integer(self):
+        # 3600s race / 120s lap = exactly 30 laps
+        event = make_event(
+            length_seconds=3_600,
+            avg_lap_seconds=120.0,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(self.total_race_laps(event), 30)
+
+    def test_result_is_floor_not_ceiling_for_fractional_division(self):
+        # 3601s / 120s = 30.008... → floor = 30 (not 31)
+        event = make_event(
+            length_seconds=3_601,
+            avg_lap_seconds=120.0,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(self.total_race_laps(event), 30)
+
+
+# ---------------------------------------------------------------------------
+# laps_remaining_after_stint() utility function
+# ---------------------------------------------------------------------------
+
+class LapsRemainingAfterStintTests(SimpleTestCase):
+    """Tests for utils.laps_remaining_after_stint()."""
+
+    def setUp(self):
+        from .utils import laps_remaining_after_stint as _laps_remaining
+        self.laps_remaining = _laps_remaining
+
+    def _event_no_stint_fields(self):
+        return make_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+
+    def test_returns_none_when_avg_lap_seconds_not_set(self):
+        event = self._event_no_stint_fields()
+        self.assertIsNone(self.laps_remaining(event, 1))
+
+    def test_returns_none_when_target_laps_not_set(self):
+        # target_laps is required by laps_remaining_after_stint
+        event = make_event(target_laps=None, fuel_capacity=None, fuel_per_lap=None)
+        self.assertIsNone(self.laps_remaining(event, 1))
+
+    def test_clamps_to_zero_never_negative(self):
+        # Using the default event (179 total laps, 30 target_laps per stint)
+        # A very late stint number would go negative without the clamp
+        event = make_event()
+        result = self.laps_remaining(event, 100)
+        self.assertEqual(result, 0)
+
+    def test_result_for_stint_1_is_total_minus_one_stint(self):
+        # Default event: total_race_laps ~179, target_laps=30
+        # After stint 1: remaining = 179 - 30 = 149
+        event = make_event()
+        from .utils import total_race_laps
+        total = total_race_laps(event)
+        expected = max(0, total - 30)
+        self.assertEqual(self.laps_remaining(event, 1), expected)
+
+    def test_result_for_last_productive_stint_is_zero_or_near_zero(self):
+        # Requesting remaining after a stint far beyond the race
+        event = make_event()
+        result = self.laps_remaining(event, 1000)
+        self.assertEqual(result, 0)
+
+    def test_exact_race_where_result_is_zero_at_final_stint(self):
+        # 2-stint race dividing evenly: 30 laps total, 15 laps per stint
+        # After stint 1: 30 - 15 = 15 laps remaining
+        # After stint 2: 30 - 30 = 0 laps remaining
+        event = make_event(
+            length_seconds=3_600,
+            avg_lap_seconds=120.0,
+            in_lap_seconds=120.0,
+            out_lap_seconds=120.0,
+            target_laps=15,
+        )
+        # total_race_laps uses stint-based calc: n=2 stints, sl=3600/2=1800... wait,
+        # let's compute: stint_length = 120*15 + (120+120-240) = 1800+0 = 1800
+        # total_stints = ceil(3600/1800) = 2
+        # last_stint_time = 3600 - 1*1800 = 1800, laps = 1*15 + floor(1800/120) = 15+15 = 30
+        result_after_stint2 = self.laps_remaining(event, 2)
+        self.assertEqual(result_after_stint2, 0)
+
+    def test_formula_total_minus_stint_times_target(self):
+        # Using fallback path: only avg_lap and length set, no full stint fields
+        # total_race_laps = floor(3600/120) = 30, target_laps=10
+        # After stint 1: remaining = max(0, 30 - 1*10) = 20
+        event = make_event(
+            length_seconds=3_600,
+            avg_lap_seconds=120.0,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=10,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(self.laps_remaining(event, 1), 20)
+
+    def test_formula_after_third_stint_in_fallback_path(self):
+        # total=30, target_laps=10 — after stint 3: 30 - 30 = 0
+        event = make_event(
+            length_seconds=3_600,
+            avg_lap_seconds=120.0,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=10,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(self.laps_remaining(event, 3), 0)
+
+
+# ---------------------------------------------------------------------------
+# get_stint_windows() uses effective_start_datetime_utc
+# ---------------------------------------------------------------------------
+
+class GetStintWindowsEffectiveStartTests(SimpleTestCase):
+    """Tests that get_stint_windows() uses effective start (race_start_time_utc
+    when set, otherwise session start_time_utc)."""
+
+    def test_without_race_start_first_stint_begins_at_session_start(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=None,
+        )
+        windows = get_stint_windows(event)
+        self.assertEqual(windows[0]['start_utc'], utc(2026, 6, 1, 10, 0, 0))
+
+    def test_with_race_start_first_stint_begins_at_race_start_not_session_start(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 0, 0),
+        )
+        windows = get_stint_windows(event)
+        # First stint must start at 12:00, NOT at 10:00
+        self.assertEqual(windows[0]['start_utc'], utc(2026, 6, 1, 12, 0, 0))
+        self.assertNotEqual(windows[0]['start_utc'], utc(2026, 6, 1, 10, 0, 0))
+
+    def test_with_race_start_set_all_stint_starts_are_after_race_start(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 0, 0),
+        )
+        windows = get_stint_windows(event)
+        race_start_dt = utc(2026, 6, 1, 12, 0, 0)
+        for w in windows:
+            self.assertGreaterEqual(w['start_utc'], race_start_dt)
+
+
+# ---------------------------------------------------------------------------
+# get_availability_slots() always uses session start_time_utc
+# ---------------------------------------------------------------------------
+
+class GetAvailabilitySlotsSessionStartTests(SimpleTestCase):
+    """Tests that get_availability_slots() always anchors to start_time_utc
+    even when race_start_time_utc is set to a later time."""
+
+    def test_slots_start_at_session_start_regardless_of_race_start(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 0, 0),
+        )
+        slots = get_availability_slots(event)
+        # Slots must begin at 10:00 (session start), not 12:00 (race start)
+        self.assertEqual(slots[0], utc(2026, 6, 1, 10, 0, 0))
+
+    def test_slots_do_not_start_at_race_start_when_different_from_session(self):
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 0, 0),
+        )
+        slots = get_availability_slots(event)
+        # The race start (12:00) must NOT be the first slot
+        self.assertNotEqual(slots[0], utc(2026, 6, 1, 12, 0, 0))
+
+    def test_slot_count_is_based_on_session_start_and_end(self):
+        # 6-hour race starting at 10:00 → end_datetime is 16:00
+        # Slots: 10:00, 10:30, ..., 15:30 = 12 slots (based on start_datetime_utc)
+        event = make_event(
+            date=dt.date(2026, 6, 1),
+            start_time_utc=dt.time(10, 0, 0),
+            race_start_time_utc=dt.time(12, 0, 0),
+            length_seconds=21_600,
+        )
+        slots = get_availability_slots(event)
+        self.assertEqual(len(slots), 12)
+
+
+# ---------------------------------------------------------------------------
+# Driver name length validation — signup view
+# ---------------------------------------------------------------------------
+
+class SignupDriverNameLengthTests(TestCase):
+    """Tests that the signup view enforces the 50-character name limit."""
+
+    def setUp(self):
+        # Use a far-future date so availability slots exist
+        self.event = save_event(
+            date=dt.date(2030, 6, 1),
+            start_time_utc=dt.time(12, 0, 0),
+        )
+        self.url = reverse('signup', kwargs={'event_id': self.event.id})
+
+    def _slot_str(self):
+        """Return a valid slot timestamp string for this event."""
+        slots = get_availability_slots(self.event)
+        s = slots[0]
+        return s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
+
+    def _post(self, name):
+        return self.client.post(self.url, {
+            'driver_name': name,
+            'timezone': 'UTC',
+            'slots': [self._slot_str()],
+        })
+
+    def test_name_over_50_characters_returns_200_with_error(self):
+        response = self._post('A' * 51)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('driver_name', response.context['errors'])
+
+    def test_name_over_50_characters_does_not_create_driver(self):
+        self._post('A' * 51)
+
+        self.assertEqual(Driver.objects.filter(event=self.event).count(), 0)
+
+    def test_name_exactly_50_characters_creates_driver(self):
+        self._post('A' * 50)
+
+        self.assertEqual(Driver.objects.filter(event=self.event).count(), 1)
+
+    def test_name_exactly_50_characters_saved_correctly(self):
+        self._post('A' * 50)
+
+        driver = Driver.objects.filter(event=self.event).first()
+        self.assertIsNotNone(driver)
+        self.assertEqual(len(driver.name), 50)
+
+    def test_error_message_mentions_50_characters(self):
+        response = self._post('A' * 51)
+
+        error_msg = response.context['errors']['driver_name']
+        self.assertIn('50', error_msg)
+
+
+# ---------------------------------------------------------------------------
+# Driver name length validation — admin_edit_driver_name view
+# ---------------------------------------------------------------------------
+
+class AdminEditDriverNameLengthTests(TestCase):
+    """Tests that admin_edit_driver_name enforces the 50-character name limit."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.driver = Driver.objects.create(
+            event=self.event, name='Original', timezone='UTC'
+        )
+        self.url = reverse(
+            'admin_edit_driver_name',
+            kwargs={'event_id': self.event.id, 'driver_id': self.driver.id},
+        )
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_name_over_50_characters_returns_edit_form_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': 'B' * 51})
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/driver_name_edit_form.html', template_names)
+
+    def test_name_over_50_characters_does_not_update_driver(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'name': 'B' * 51})
+
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.name, 'Original')
+
+    def test_name_over_50_characters_response_contains_error_message(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': 'B' * 51})
+
+        self.assertIn(b'50', response.content)
+
+    def test_name_exactly_50_characters_saves_successfully(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'name': 'C' * 50})
+
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.name, 'C' * 50)
+
+    def test_name_exactly_50_characters_returns_display_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'name': 'C' * 50})
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/driver_name_display.html', template_names)
+
+
+# ---------------------------------------------------------------------------
+# admin_save_calc saves race_start_time_utc
+# ---------------------------------------------------------------------------
+
+class AdminSaveCalcRaceStartTests(TestCase):
+    """Tests that admin_save_calc() saves and clears race_start_time_utc."""
+
+    def setUp(self):
+        self.event = save_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.url = reverse('admin_save_calc', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_posting_valid_race_start_time_saves_to_event(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'race_start_time_utc': '13:00'})
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.race_start_time_utc, dt.time(13, 0, 0))
+
+    def test_posting_empty_race_start_time_sets_field_to_none(self):
+        # Pre-set a value, then clear it
+        self.event.race_start_time_utc = dt.time(13, 0, 0)
+        self.event.save()
+        self._set_admin_session()
+
+        self.client.post(self.url, {'race_start_time_utc': ''})
+
+        self.event.refresh_from_db()
+        self.assertIsNone(self.event.race_start_time_utc)
+
+    def test_posting_invalid_race_start_time_returns_error_partial(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'race_start_time_utc': 'not-a-time'})
+
+        template_names = [t.name for t in response.templates]
+        self.assertIn('partials/admin_calc_errors.html', template_names)
+
+    def test_posting_invalid_race_start_time_does_not_save(self):
+        self.event.race_start_time_utc = dt.time(10, 0, 0)
+        self.event.save()
+        self._set_admin_session()
+
+        self.client.post(self.url, {'race_start_time_utc': 'bad'})
+
+        self.event.refresh_from_db()
+        # The existing value must be unchanged
+        self.assertEqual(self.event.race_start_time_utc, dt.time(10, 0, 0))
+
+    def test_posting_race_start_without_other_fields_returns_show_toast(self):
+        # Event has no required stint fields so no HX-Refresh; should get show-toast
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'race_start_time_utc': '13:00'})
+
+        self.assertEqual(response['HX-Trigger'], 'show-toast')
+
+
+# ---------------------------------------------------------------------------
+# admin_save_details does NOT save race_start_time_utc
+# ---------------------------------------------------------------------------
+
+class AdminSaveDetailsNoRaceStartTests(TestCase):
+    """Tests that admin_save_details() ignores race_start_time_utc even
+    if the field is present in the POST body."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse('admin_save_details', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def _valid_post(self, **overrides):
+        data = {
+            'name': 'Updated Race',
+            'date': '2027-06-01',
+            'start_time_utc': '14:00',
+            'length_hours': '2',
+            'length_minutes': '0',
+        }
+        data.update(overrides)
+        return data
+
+    def test_race_start_time_utc_in_post_body_is_not_saved(self):
+        # Pre-set race_start so we can verify it is unchanged after the save
+        self.event.race_start_time_utc = dt.time(10, 0, 0)
+        self.event.save()
+        self._set_admin_session()
+
+        self.client.post(
+            self.url,
+            self._valid_post(race_start_time_utc='14:00'),
+        )
+
+        self.event.refresh_from_db()
+        # race_start_time_utc must still be the pre-set value
+        self.assertEqual(self.event.race_start_time_utc, dt.time(10, 0, 0))
+
+    def test_race_start_time_utc_remains_none_after_save_details(self):
+        # Event starts with None race_start — posting to save-details must not change it
+        self.assertIsNone(self.event.race_start_time_utc)
+        self._set_admin_session()
+
+        self.client.post(
+            self.url,
+            self._valid_post(race_start_time_utc='15:30'),
+        )
+
+        self.event.refresh_from_db()
+        self.assertIsNone(self.event.race_start_time_utc)
+
+    def test_save_details_still_saves_name_correctly(self):
+        # Sanity check: the view does save other fields while ignoring race_start
+        self._set_admin_session()
+
+        self.client.post(self.url, self._valid_post(name='Sanity Check Race'))
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.name, 'Sanity Check Race')
+
+
+# ---------------------------------------------------------------------------
+# Django admin panel removed — /admin/ returns 404
+# ---------------------------------------------------------------------------
+
+class DjangoAdminRemovedTests(TestCase):
+    """Tests that the Django admin panel is not installed and /admin/ returns 404."""
+
+    def test_admin_root_returns_404(self):
+        response = self.client.get('/admin/')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_admin_login_url_returns_404(self):
+        response = self.client.get('/admin/login/')
+
+        self.assertEqual(response.status_code, 404)

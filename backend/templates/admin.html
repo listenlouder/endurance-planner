@@ -52,6 +52,10 @@
       raceSeconds:  initial.raceSeconds  || 0,
       hasAssignments: initial.hasAssignments || false,
 
+      targetLapsRaw:   String(initial.targetLaps   || ''),
+      fuelCapacityRaw: String(initial.fuelCapacity || ''),
+      fuelBurnRaw:     String(initial.fuelBurn     || ''),
+
       savedLapTime:      initial.lapTime      || '',
       savedInLap:        initial.inLap        || '',
       savedOutLap:       initial.outLap       || '',
@@ -79,6 +83,9 @@
         this.targetLaps   = this.savedTargetLaps;
         this.fuelCapacity = this.savedFuelCapacity;
         this.fuelBurn     = this.savedFuelBurn;
+        this.targetLapsRaw   = String(this.savedTargetLaps   || '');
+        this.fuelCapacityRaw = String(this.savedFuelCapacity || '');
+        this.fuelBurnRaw     = String(this.savedFuelBurn     || '');
       },
 
       parseMMSS(val) {
@@ -128,6 +135,21 @@
       get fuelOverCapacity() {
         if (!this.fuelBurn || !this.targetLaps || !this.fuelCapacity) return false;
         return (this.fuelBurn * this.targetLaps) > this.fuelCapacity;
+      },
+
+      get totalRaceLaps() {
+        const n = this.totalStints;
+        if (n === '—' || !this.targetLaps || !this.avgLapSec || !this.stintDurationSec) return '—';
+        const lastStintTime = this.raceSeconds - (n - 1) * this.stintDurationSec;
+        return (n - 1) * this.targetLaps + Math.floor(lastStintTime / this.avgLapSec);
+      },
+
+      lapsRemainingAfterStint(stintNumber, isLastStint) {
+        if (isLastStint) return 'FINISH';
+        const total = this.totalRaceLaps;
+        if (total === '—' || !this.targetLaps) return '—';
+        const remaining = total - (stintNumber * this.targetLaps);
+        return Math.max(0, remaining);
       }
     }
   }
@@ -238,9 +260,9 @@
                value="{{ event.date|date:'Y-m-d' }}">
       </div>
 
-      <!-- Start time -->
+      <!-- Session start time -->
       <div class="detail-field">
-        <span class="detail-label">Start time (UTC)</span>
+        <span class="detail-label">Session start (UTC)</span>
         <input class="detail-input"
                type="time"
                name="start_time_utc"
@@ -351,6 +373,33 @@
 
     <div class="details-grid" style="margin-bottom: 2px;">
 
+      <!-- Race start time (optional) -->
+      <div class="detail-field full-width">
+        <span class="detail-label">
+          Race start (UTC)
+          <span style="color: var(--text-dim);
+                        font-size: 9px;
+                        letter-spacing: 0.1em;
+                        margin-left: 4px;">
+            OPTIONAL
+          </span>
+        </span>
+        <input class="detail-input"
+               type="time"
+               name="race_start_time_utc"
+               value="{{ event.race_start_time_utc|time:'H:i'|default:'' }}"
+               style="max-width: 180px;">
+        <span style="font-size: 9px;
+                      color: var(--text-dim);
+                      letter-spacing: 0.04em;
+                      line-height: 1.5;
+                      margin-top: 4px;
+                      display: block;">
+          When the green flag drops. Stint schedules are calculated from this time.
+          Leave blank if session start = race start (no qualifying or warmup).
+        </span>
+      </div>
+
       <!-- Avg lap time -->
       <div class="detail-field">
         <span class="detail-label">Avg lap time (MM:SS)</span>
@@ -365,10 +414,11 @@
       <div class="detail-field">
         <span class="detail-label">Max fuel (litres)</span>
         <input class="detail-input"
-               type="number"
+               type="text"
                name="fuel_capacity"
-               x-model.number="fuelCapacity"
-               step="0.1"
+               inputmode="decimal"
+               x-model="fuelCapacityRaw"
+               @input="fuelCapacity = parseFloat($event.target.value) || 0"
                placeholder="e.g. 120">
       </div>
 
@@ -376,10 +426,11 @@
       <div class="detail-field">
         <span class="detail-label">Avg fuel burn (l/lap)</span>
         <input class="detail-input"
-               type="number"
+               type="text"
                name="fuel_burn"
-               x-model.number="fuelBurn"
-               step="0.01"
+               inputmode="decimal"
+               x-model="fuelBurnRaw"
+               @input="fuelBurn = parseFloat($event.target.value) || 0"
                placeholder="e.g. 3.8">
       </div>
 
@@ -387,9 +438,11 @@
       <div class="detail-field">
         <span class="detail-label">Target laps per stint</span>
         <input class="detail-input"
-               type="number"
+               type="text"
                name="target_laps"
-               x-model.number="targetLaps"
+               inputmode="numeric"
+               x-model="targetLapsRaw"
+               @input="targetLaps = parseInt($event.target.value) || 0"
                placeholder="e.g. 28">
       </div>
 
@@ -417,7 +470,7 @@
 
     <!-- Live calculation output -->
     <div style="display: grid;
-                 grid-template-columns: repeat(4, 1fr);
+                 grid-template-columns: repeat(5, 1fr);
                  gap: 2px;
                  margin-bottom: 16px;">
 
@@ -451,6 +504,12 @@
             ⚠ exceeds max fuel
           </span>
         </template>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">Est. race laps</span>
+        <span class="stat-value" x-text="totalRaceLaps"></span>
+        <span class="stat-unit">total laps</span>
       </div>
 
     </div>
@@ -516,7 +575,6 @@
   <div style="display: flex;
                align-items: center;
                gap: 8px;
-               max-width: 700px;
                padding: 10px 14px;
                background: var(--bg-card);
                border: 1px solid var(--border);"
@@ -549,7 +607,7 @@
 <!-- ============================================================
      SECTION 4 — STINT ASSIGNMENT
 ============================================================ -->
-<section class="admin-section fade-up-delay-2"
+<section class="admin-section"
          {% if has_required_stint_fields and stint_windows and drivers %}
          x-data="stintPlanner('{{ admin_tz }}')"
          x-init="init()"
@@ -593,25 +651,46 @@
     <input type="hidden" name="stint_{{ sw.stint_number }}" :value="assignments[{{ sw.stint_number }}] || ''">
     {% endfor %}
 
-    <div class="table-wrapper" style="overflow-x: auto;">
+    <div class="table-wrapper" style="overflow-x: auto; overflow-y: visible;">
       <table class="unified-table" id="unifiedTable">
         <thead>
           <tr>
-            <th colspan="4" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
+            <th colspan="5" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
             <th class="avail-divider"></th>
-            <th colspan="{{ drivers|length }}" class="avail-group-header">Availability</th>
+            <th colspan="{{ drivers|length }}" class="avail-group-header" style="padding: 8px 4px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                <span style="font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--secondary);">Availability</span>
+                <span style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
+                    <span style="color: var(--avail-text);">✓</span> Avail
+                  </span>
+                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
+                    <span style="color: var(--partial-text);">~</span> Partial
+                  </span>
+                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
+                    <span style="color: var(--text-dim);">—</span> Unavail
+                  </span>
+                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
+                    <span style="color: var(--primary);">★</span> Assigned
+                  </span>
+                </span>
+              </div>
+            </th>
           </tr>
           <tr class="avail-driver-header-row">
-            <th>#</th>
-            <th>Start</th>
-            <th>Dur.</th>
-            <th>Driver</th>
+            <th style="width: 36px;">#</th>
+            <th style="width: 80px;">Start</th>
+            <th style="width: 80px;">Dur.</th>
+            <th class="col-laps-left" style="width: 70px;">Laps left</th>
+            <th style="width: 180px;">Driver</th>
             <th class="avail-divider"></th>
             {% for driver in drivers %}
             <th class="avail-driver-th">
-              <span style="display: block;">{{ driver.name }}</span>
-              <span x-text="driverStintCount('{{ driver.id }}') + ' stint' + (driverStintCount('{{ driver.id }}') !== 1 ? 's' : '')"
-                    style="display: block; font-size: 9px; letter-spacing: 0.08em; color: var(--text-dim); font-weight: 400; margin-top: 1px;"></span>
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;">
+                <span>{{ driver.name }}</span>
+                <span x-text="driverStintCount('{{ driver.id }}') + ' stints'"
+                      style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 400;"></span>
+              </div>
             </th>
             {% endfor %}
           </tr>
@@ -621,7 +700,7 @@
 
           <template x-if="isNewDay({{ forloop.counter0 }})">
             <tr>
-              <td colspan="{{ drivers|length|add:5 }}"
+              <td colspan="{{ drivers|length|add:6 }}"
                   style="text-align: center; font-weight: 700; padding: 3px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; background: var(--primary); color: #111;">
                 <span x-text="formatStintDate('{{ sw.start_utc|to_utc_z }}')"></span>
               </td>
@@ -633,20 +712,77 @@
             <td class="s-num">#{{ sw.stint_number }}</td>
             <td class="s-time">{{ sw.start_local }}</td>
             <td class="s-dur">{{ stint_duration_display }}</td>
+            <td class="s-laps"
+                :title="lapsDisplay({{ sw.stint_number }}) === 'FINISH'
+                  ? 'Final stint — ends at the checkered flag'
+                  : 'Estimated laps remaining after this pit stop'">
+              <span :class="lapsClass({{ sw.stint_number }})"
+                    x-text="lapsDisplay({{ sw.stint_number }})">
+              </span>
+            </td>
             <td class="s-driver">
-              <div class="driver-select-wrap">
-                <select class="driver-select"
-                        :class="selectClass({{ sw.stint_number }})"
-                        x-model="assignments[{{ sw.stint_number }}]"
-                        @change="isDirty = true">
-                  <option value="">— unassigned —</option>
-                  {% for driver in drivers %}
-                  <option value="{{ driver.id }}"
-                          :style="availStyle({{ sw.stint_number }}, '{{ driver.id }}')">
-                    {{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} (partial){% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} (unavailable){% endif %}
-                  </option>
-                  {% endfor %}
-                </select>
+              <div style="display:flex;align-items:center;gap:4px;">
+
+                <div x-data="driverDropdown({{ sw.stint_number }}, assignments[{{ sw.stint_number }}] || null)"
+                     @driver-selected.window="
+                       if ($event.detail.stintNumber === {{ sw.stint_number }}) {
+                         selectedId = $event.detail.driverId || null;
+                       }
+                     "
+                     @click.outside="open = false"
+                     @scroll.window="closeOnScroll()"
+                     style="flex:1;min-width:0;position:relative;">
+
+                  <button type="button"
+                          x-ref="btn"
+                          @click="toggle()"
+                          :style="isAssigned && hasConflict
+                            ? 'background:#f59e0b22;border:1px solid #f59e0b;color:#f59e0b;'
+                            : isAssigned
+                              ? 'background:var(--assigned-bg);border:1px solid var(--primary);color:var(--assigned-text);'
+                              : 'background:var(--bg);border:1px solid var(--border-mid);color:var(--text-dim);'"
+                          :title="hasConflict ? '⚠ Driver not available for this stint' : ''"
+                          style="width:160px;min-width:160px;max-width:160px;display:flex;align-items:center;justify-content:space-between;
+                                 padding:6px 8px;font-family:'DM Mono',monospace;font-size:11px;
+                                 letter-spacing:0.04em;cursor:pointer;border-radius:0;gap:4px;
+                                 white-space:nowrap;overflow:hidden;">
+                    <span x-text="selectedName"
+                          style="overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;text-align:left;">
+                    </span>
+                    <span x-show="hasConflict" style="flex-shrink:0;font-size:10px;">⚠</span>
+                    <span x-show="!hasConflict" style="flex-shrink:0;font-size:9px;opacity:0.5;">↓</span>
+                  </button>
+
+                  <div x-show="open"
+                       :style="dropStyle"
+                       style="display:none;background:var(--bg-card);border:1px solid var(--border-mid);
+                              box-shadow:0 8px 24px rgba(0,0,0,0.35);max-height:200px;overflow-y:auto;"
+                       @click.stop>
+
+                    <div class="dd-option dd-unassign" @click="select('')">— unassigned —</div>
+
+                    {% for driver in drivers %}
+                    <div class="dd-option"
+                         :class="selectedId === '{{ driver.id }}' ? 'dd-selected' : ''"
+                         @click="select('{{ driver.id }}')">
+                      {{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} <span class="dd-avail-tag">partial</span>{% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} <span class="dd-avail-tag dd-unavail">unavail</span>{% endif %}
+                    </div>
+                    {% endfor %}
+
+                  </div>
+                </div>
+
+                <button type="button"
+                        x-show="!!assignments[{{ sw.stint_number }}]"
+                        @click="$dispatch('driver-selected', {stintNumber: {{ sw.stint_number }}, driverId: ''})"
+                        style="background:transparent;border:1px solid var(--border-mid);color:var(--text-dim);
+                               font-size:10px;padding:4px 6px;cursor:pointer;transition:border-color 0.15s,color 0.15s;
+                               white-space:nowrap;flex-shrink:0;border-radius:0;line-height:1;"
+                        onmouseenter="this.style.borderColor='var(--danger)';this.style.color='var(--danger)'"
+                        onmouseleave="this.style.borderColor='var(--border-mid)';this.style.color='var(--text-dim)'">
+                  ✕
+                </button>
+
               </div>
             </td>
             <td class="avail-divider"></td>
@@ -665,28 +801,6 @@
 
           {% endfor %}
         </tbody>
-        <tfoot>
-          <tr>
-            <td colspan="4" style="padding: 0; border: none; background: transparent;"></td>
-            <td class="avail-divider" style="border: none; background: transparent;"></td>
-            <td colspan="{{ drivers|length }}" style="padding: 10px 4px 4px; border: none; background: transparent;">
-              <div style="display: flex; gap: 16px; flex-wrap: wrap;">
-                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
-                  <span style="color: var(--avail-text);">✓</span> Available
-                </span>
-                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
-                  <span style="color: #cc8c14;">~</span> Partial
-                </span>
-                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
-                  <span style="color: var(--text-dim);">—</span> Unavailable
-                </span>
-                <span style="font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 5px;">
-                  <span style="color: var(--assigned-text);">★</span> Assigned
-                </span>
-              </div>
-            </td>
-          </tr>
-        </tfoot>
       </table>
     </div>
 
@@ -728,6 +842,89 @@
   const stintAvailability = {{ stint_availability_json|safe }};
   const existingAssignments = {{ existing_assignments_json|safe }};
   const driversData       = {{ drivers_json|safe }};
+  // Session start (not race start) — availability slots are always anchored here
+  const sessionStartUtc = '{{ event.start_datetime_utc|to_utc_z }}';
+
+  function checkDriverConflict(stintNumber, driverId) {
+    if (!driverId) return false;
+    const driverAvail = new Set(availabilityData[driverId] || []);
+    const sw = stintWindows.find(w => w.stint_number === stintNumber);
+    if (!sw) return false;
+    const slotMs = 30 * 60 * 1000;
+    const gridAnchorMs = new Date(sessionStartUtc).getTime();
+    const startMs = new Date(sw.start_utc).getTime();
+    const endMs   = new Date(sw.end_utc).getTime();
+    const snappedStartMs = gridAnchorMs + Math.ceil((startMs - gridAnchorMs) / slotMs) * slotMs;
+    // Mirror Python: if stint starts before the first grid boundary, check the slot
+    // covering the pre-grid portion (snappedStart - 30 min) — matches _snap_to_grid logic.
+    if (startMs < snappedStartMs) {
+      const preSlot = new Date(snappedStartMs - slotMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      if (!driverAvail.has(preSlot)) return true;
+    }
+    let currentMs = snappedStartMs;
+    while (currentMs < endMs) {
+      const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      if (!driverAvail.has(isoStr)) return true;
+      currentMs += slotMs;
+    }
+    return false;
+  }
+
+  function driverDropdown(stintNumber, initialDriverId) {
+    return {
+      open: false,
+      selectedId: initialDriverId || null,
+      dropStyle: {},
+
+      get selectedName() {
+        if (!this.selectedId) return '— unassigned —';
+        const d = driversData.find(d => d.id === this.selectedId);
+        return d ? d.name : '— unassigned —';
+      },
+
+      get isAssigned() { return !!this.selectedId; },
+
+      get hasConflict() { return checkDriverConflict(stintNumber, this.selectedId); },
+
+      toggle() {
+        if (this.open) { this.open = false; return; }
+        requestAnimationFrame(() => {
+          const rect = this.$refs.btn.getBoundingClientRect();
+          const dropHeight = 200;
+          const spaceBelow = window.innerHeight - rect.bottom;
+          const goUp = spaceBelow < dropHeight && rect.top >= spaceBelow;
+          this.dropStyle = goUp
+            ? {
+                position: 'fixed',
+                bottom: (window.innerHeight - Math.round(rect.top) + 2) + 'px',
+                top: 'auto',
+                left: Math.round(rect.left) + 'px',
+                width: '160px',
+                zIndex: 9999,
+              }
+            : {
+                position: 'fixed',
+                top: Math.round(rect.bottom + 2) + 'px',
+                bottom: 'auto',
+                left: Math.round(rect.left) + 'px',
+                width: '160px',
+                zIndex: 9999,
+              };
+          this.open = true;
+        });
+      },
+
+      select(driverId) {
+        this.selectedId = driverId || null;
+        this.open = false;
+        window.dispatchEvent(new CustomEvent('driver-selected', {
+          detail: { stintNumber: stintNumber, driverId: driverId || '' }
+        }));
+      },
+
+      closeOnScroll() { if (this.open) this.open = false; },
+    };
+  }
 
   function stintPlanner(adminTz) {
     return {
@@ -742,6 +939,14 @@
           this.assignments[n] = existingAssignments[String(n)] || '';
         });
         this.isDirty = false;
+        window.addEventListener('driver-selected', (e) => {
+          this.assignDriver(e.detail.stintNumber, e.detail.driverId);
+        });
+      },
+
+      assignDriver(stintNumber, driverId) {
+        this.assignments[stintNumber] = driverId || '';
+        this.isDirty = true;
       },
 
       onSaveStart() { this.saveState = 'saving'; },
@@ -765,22 +970,7 @@
 
       // Returns true if driver has a conflict (missing avail slot) for this stint
       hasConflict(stintNumber, driverId) {
-        if (!driverId) return false;
-        const driverAvail = new Set(availabilityData[driverId] || []);
-        const sw = stintWindows.find(w => w.stint_number === stintNumber);
-        if (!sw || !stintWindows.length) return false;
-        const slotMs = 30 * 60 * 1000;
-        const gridAnchorMs = new Date(stintWindows[0].start_utc).getTime();
-        const startMs = new Date(sw.start_utc).getTime();
-        const endMs   = new Date(sw.end_utc).getTime();
-        const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
-        let currentMs = gridAnchorMs + offsetSlots * slotMs;
-        while (currentMs < endMs) {
-          const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
-          if (!driverAvail.has(isoStr)) return true;
-          currentMs += slotMs;
-        }
-        return false;
+        return checkDriverConflict(stintNumber, driverId);
       },
 
       rowClass(stintNumber) {
@@ -807,7 +997,7 @@
         if (!sw) return '';
         const driverAvailSet = new Set(driverAvail);
         const slotMs = 30 * 60 * 1000;
-        const gridAnchorMs = stintWindows.length ? new Date(stintWindows[0].start_utc).getTime() : 0;
+        const gridAnchorMs = new Date(sessionStartUtc).getTime();
         const startMs = new Date(sw.start_utc).getTime();
         const endMs   = new Date(sw.end_utc).getTime();
         const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
@@ -821,12 +1011,16 @@
         return hasMissing ? 'opacity: 0.45' : '';
       },
 
-      // Avail cell class — color always follows actual availability status
+      // Avail cell class — color follows availability; conflict appended when assigned driver is unavailable
       availCellClass(stintNumber, driverId, serverStatus) {
-        if (serverStatus === 'full')    return 'yes';
-        if (serverStatus === 'partial') return 'partial';
-        if (serverStatus === 'none')    return 'no';
-        return '';
+        let cls = '';
+        if (serverStatus === 'full')    cls = 'yes';
+        else if (serverStatus === 'partial') cls = 'partial';
+        else if (serverStatus === 'none')    cls = 'no';
+        if (this.assignments[stintNumber] === driverId && checkDriverConflict(stintNumber, driverId)) {
+          cls += ' conflict';
+        }
+        return cls.trim();
       },
 
       availCellSymbol(stintNumber, driverId, serverStatus) {
@@ -847,6 +1041,19 @@
         const prev = stintWindows[index - 1];
         const curr = stintWindows[index];
         return this.formatStintDate(prev.start_utc) !== this.formatStintDate(curr.start_utc);
+      },
+
+      lapsDisplay(stintNumber) {
+        const sw = stintWindows.find(w => w.stint_number === stintNumber);
+        if (!sw) return '—';
+        if (sw.is_last_stint) return 'FINISH';
+        if (sw.laps_remaining === null || sw.laps_remaining === undefined) return '—';
+        return sw.laps_remaining;
+      },
+
+      lapsClass(stintNumber) {
+        const sw = stintWindows.find(w => w.stint_number === stintNumber);
+        return (sw && sw.is_last_stint) ? 'finish-label' : '';
       },
     };
   }

@@ -84,10 +84,12 @@
       </span>
     </div>
 
-    <!-- Start time — Alpine renders in local tz -->
+    <!-- Session start time — Alpine renders in local tz -->
     <div class="meta-pill"
          x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
-      <span class="meta-pill-label">Start time</span>
+      <span class="meta-pill-label">
+        {% if has_separate_race_start %}Session start{% else %}Start time{% endif %}
+      </span>
       <span class="meta-pill-value accent"
             x-text="new Date('{{ event.start_datetime_utc|to_utc_z }}')
               .toLocaleTimeString('en-US', {
@@ -105,10 +107,40 @@
       </span>
     </div>
 
+    <!-- Race start pill — only when a separate race start is set -->
+    {% if has_separate_race_start %}
+    <div class="meta-pill"
+         x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+      <span class="meta-pill-label">Race start</span>
+      <span class="meta-pill-value accent"
+            x-text="new Date('{{ effective_start_datetime_utc|to_utc_z }}')
+              .toLocaleTimeString('en-US', {
+                timeZone: tz,
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+              }) + ' ' +
+              new Intl.DateTimeFormat('en', {
+                timeZoneName: 'short', timeZone: tz
+              }).formatToParts(
+                new Date('{{ effective_start_datetime_utc|to_utc_z }}')
+              ).find(p => p.type === 'timeZoneName')?.value">
+        {{ event.race_start_time_utc|time:"H:i" }} UTC
+      </span>
+    </div>
+    {% endif %}
+
     <div class="meta-pill">
       <span class="meta-pill-label">Duration</span>
       <span class="meta-pill-value">{{ length_display }}</span>
     </div>
+
+    {% if total_race_laps %}
+    <div class="meta-pill">
+      <span class="meta-pill-label">Est. laps</span>
+      <span class="meta-pill-value">~{{ total_race_laps }}</span>
+    </div>
+    {% endif %}
 
     {% if event.game %}
     <div class="meta-pill">
@@ -261,6 +293,17 @@
                         background: var(--bg-raised);">
               Duration
             </th>
+            <th style="padding: 8px 14px;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--text-dim);
+                        font-weight: 500;
+                        text-align: center;
+                        background: var(--bg-raised);
+                        width: 70px;">
+              Laps left
+            </th>
             <th style="padding: 8px 16px;
                         font-size: 10px;
                         letter-spacing: 0.15em;
@@ -279,7 +322,7 @@
               <!-- Date separator — only when day changes -->
               <template x-if="isNewDay(index)">
                 <tr>
-                  <td colspan="4"
+                  <td colspan="5"
                       style="padding: 8px 16px;
                              font-size: 9px;
                              letter-spacing: 0.2em;
@@ -314,6 +357,14 @@
                            color: var(--text-dim);
                            width: 22%;">
                   {{ stint_duration_display|default:"—" }}
+                </td>
+                <td style="padding: 8px 14px;
+                           text-align: center;
+                           width: 70px;">
+                  <span :class="lapsClass(row)"
+                        x-text="lapsDisplay(row)"
+                        style="font-size: 11px; color: var(--text-dim);">
+                  </span>
                 </td>
                 <td style="padding: 10px 16px;
                            font-size: 12px;
@@ -441,6 +492,16 @@
         const prev = this.stintRows[index - 1];
         const curr = this.stintRows[index];
         return !isSameDay(prev.start_utc, curr.start_utc, this.tz);
+      },
+
+      lapsDisplay(row) {
+        if (row.is_last_stint) return 'FINISH';
+        if (row.laps_remaining === null || row.laps_remaining === undefined) return '—';
+        return row.laps_remaining;
+      },
+
+      lapsClass(row) {
+        return row.is_last_stint ? 'finish-label' : '';
       }
     }
   }

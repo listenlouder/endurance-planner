@@ -21,7 +21,12 @@ class EventCreateForm(forms.Form):
     )
     start_time_utc = forms.TimeField(
         widget=forms.TimeInput(attrs={'type': 'time'}),
-        label='Start time (UTC)',
+        label='Session start (UTC)',
+    )
+    race_start_time_utc = forms.TimeField(
+        required=False,
+        widget=forms.TimeInput(attrs={'type': 'time'}),
+        label='Race start time (UTC)',
     )
     length_hours = forms.IntegerField(
         min_value=0,
