@@ -636,9 +636,68 @@
 
   {% else %}
 
-  <p style="font-size: 11px; color: var(--text-dim); letter-spacing: 0.04em; margin-bottom: 20px; line-height: 1.6;">
+  <p style="font-size: 11px; color: var(--text-dim); letter-spacing: 0.04em; margin-bottom: 16px; line-height: 1.6;">
     Use the dropdown on each stint row to assign a driver. The availability matrix shows who's free for each window.
   </p>
+
+  <!-- Legend row — sits above the table, right-aligned -->
+  <div style="display: flex;
+               justify-content: flex-end;
+               align-items: center;
+               gap: 16px;
+               margin-bottom: 8px;
+               flex-wrap: wrap;">
+    <span style="font-size: 9px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.06em;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                  font-family: 'DM Mono', monospace;">
+      <span style="color: var(--avail-text);">✓</span>
+      Avail
+    </span>
+    <span style="font-size: 9px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.06em;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                  font-family: 'DM Mono', monospace;">
+      <span style="color: var(--partial-text);">~</span>
+      Partial
+    </span>
+    <span style="font-size: 9px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.06em;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                  font-family: 'DM Mono', monospace;">
+      <span style="color: var(--text-dim);">—</span>
+      Unavail
+    </span>
+    <span style="font-size: 9px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.06em;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                  font-family: 'DM Mono', monospace;">
+      <span style="color: var(--primary);">★</span>
+      Assigned
+    </span>
+    <span style="font-size: 9px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.06em;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                  font-family: 'DM Mono', monospace;">
+      <span style="color: #f59e0b;">⚠</span>
+      Conflict
+    </span>
+  </div>
 
   <form hx-post="{% url 'admin_save_assignments' event.id %}"
         hx-target="#stint-assignment-errors"
@@ -657,24 +716,10 @@
           <tr>
             <th colspan="5" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
             <th class="avail-divider"></th>
-            <th colspan="{{ drivers|length }}" class="avail-group-header" style="padding: 8px 4px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-                <span style="font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--secondary);">Availability</span>
-                <span style="display: flex; align-items: center; gap: 10px;">
-                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
-                    <span style="color: var(--avail-text);">✓</span> Avail
-                  </span>
-                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
-                    <span style="color: var(--partial-text);">~</span> Partial
-                  </span>
-                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
-                    <span style="color: var(--text-dim);">—</span> Unavail
-                  </span>
-                  <span style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; display: flex; align-items: center; gap: 4px;">
-                    <span style="color: var(--primary);">★</span> Assigned
-                  </span>
-                </span>
-              </div>
+            <th colspan="{{ drivers|length }}"
+                class="avail-group-header"
+                style="padding: 8px 4px;">
+              Availability
             </th>
           </tr>
           <tr class="avail-driver-header-row">
