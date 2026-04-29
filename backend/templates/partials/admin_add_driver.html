@@ -1,101 +1,229 @@
-{% load static %}
-<div x-data="{ open: false }" style="margin-top: 16px;">
-  <button @click="open = !open" class="btn-ghost">
-    <span x-text="open ? 'Cancel' : '+ Add Driver'"></span>
-  </button>
+<div x-data="{
+  tzSearch: '',
+  timezone: 'UTC',
+  showTzPicker: false,
+  checked: (typeof slotTimestamps !== 'undefined' ? slotTimestamps : []).map(() => false),
 
-  <div x-show="open"
-       x-transition
-       style="margin-top: 12px;
-              padding: 20px;
-              border: 1px solid var(--border);
-              background: var(--bg-card);">
+  get flatSlots() {
+    const ts = typeof slotTimestamps !== 'undefined' ? slotTimestamps : [];
+    const result = [];
+    let lastDay = '';
+    for (let i = 0; i < ts.length; i++) {
+      const day = this.formatDate(ts[i]);
+      if (day !== lastDay) {
+        result.push({ type: 'sep', label: day });
+        lastDay = day;
+      }
+      result.push({ type: 'slot', index: i, ts: ts[i] });
+    }
+    return result;
+  },
 
-    <form hx-post="{% url 'admin_add_driver' event.id %}"
-          hx-target="#driver-list-container"
-          hx-swap="innerHTML"
-          @htmx:after-request="if ($event.detail.successful) {
-            open = false;
+  formatTime(utcString) {
+    return new Date(utcString).toLocaleTimeString('en-US', {
+      timeZone: this.timezone, hour: '2-digit', minute: '2-digit', hour12: false
+    });
+  },
+
+  formatDate(utcString) {
+    return new Date(utcString).toLocaleDateString('en-US', {
+      timeZone: this.timezone, weekday: 'short', month: 'short', day: 'numeric'
+    });
+  },
+
+  get filteredGroups() {
+    const list = typeof timezoneList !== 'undefined' ? timezoneList : [];
+    if (!this.tzSearch) return list;
+    const q = this.tzSearch.toLowerCase();
+    return list.map(g => ({
+      ...g,
+      zones: g.zones.filter(z =>
+        z.label.toLowerCase().includes(q) ||
+        z.value.toLowerCase().includes(q)
+      )
+    })).filter(g => g.zones.length > 0);
+  },
+
+  selectAll()  { this.checked = this.checked.map(() => true); },
+  clearAll()   { this.checked = this.checked.map(() => false); },
+
+  resetForm() {
+    this.timezone = 'UTC';
+    this.showTzPicker = false;
+    this.tzSearch = '';
+    this.checked = this.checked.map(() => false);
+  }
+}">
+
+  <form hx-post="{% url 'admin_add_driver' event.id %}"
+        hx-target="#driver-list-container"
+        hx-swap="innerHTML"
+        @htmx:after-request="
+          if ($event.detail.successful) {
+            resetForm();
             $el.reset();
-            $dispatch('driver-form-reset');
-          }">
-      {% csrf_token %}
+            $dispatch('close-add-driver');
+          }
+        "
+        hx-on::response-error="
+          const errorDiv = document.getElementById('add-driver-errors');
+          if (errorDiv) errorDiv.innerHTML = $event.detail.xhr.responseText;
+        ">
+    {% csrf_token %}
 
-      <div x-data="{
-        timezone: 'UTC',
-        slotTimestamps: slotTimestamps,
-        checked: Array(slotTimestamps ? slotTimestamps.length : 0).fill(false),
-        formatTime(utcString) {
-          return new Date(utcString).toLocaleTimeString('en-US', {
-            timeZone: this.timezone, hour: '2-digit', minute: '2-digit', hour12: true
-          });
-        },
-        formatDate(utcString) {
-          return new Date(utcString).toLocaleDateString('en-US', {
-            timeZone: this.timezone, weekday: 'short', month: 'short', day: 'numeric'
-          });
-        },
-        isNewDay(i) {
-          if (i === 0) return true;
-          const opts = { timeZone: this.timezone, year: 'numeric', month: 'numeric', day: 'numeric' };
-          const prev = new Date(this.slotTimestamps[i-1]).toLocaleDateString('en-US', opts);
-          const curr = new Date(this.slotTimestamps[i]).toLocaleDateString('en-US', opts);
-          return prev !== curr;
-        },
-        selectAll() { this.checked = this.checked.map(() => true); },
-        clearAll()  { this.checked = this.checked.map(() => false); },
-        reset()     { this.timezone = 'UTC'; this.checked = this.checked.map(() => false); }
-      }"
-      @driver-form-reset.window="reset()"
-      @timezone-selected.window="timezone = $event.detail.value"
-      style="display: flex; flex-direction: column; gap: 16px;">
+    <div id="add-driver-errors" style="margin-bottom: 8px;"></div>
 
-        <div>
-          <span class="detail-label" style="display: block; margin-bottom: 6px;">Driver Name</span>
-          <input type="text"
-                 name="driver_name"
-                 required
-                 maxlength="50"
-                 class="detail-input"
-                 style="border-bottom: 1px solid var(--border-mid);
-                        padding-bottom: 4px;">
-        </div>
+    <!-- Driver name -->
+    <div class="detail-field full-width" style="margin-bottom: 2px;">
+      <span class="detail-label">
+        Driver name
+        <span style="color: var(--primary); margin-left: 2px;">*</span>
+      </span>
+      <input class="detail-input"
+             type="text"
+             name="driver_name"
+             maxlength="50"
+             placeholder="e.g. Will"
+             autocomplete="off"
+             required>
+    </div>
 
-        <div>
-          <span class="detail-label" style="display: block; margin-bottom: 6px;">Timezone</span>
-          {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
-        </div>
+    <!-- Timezone picker -->
+    <div class="detail-field full-width" style="margin-bottom: 2px;">
+      <span class="detail-label">Timezone</span>
+      <input type="hidden" name="timezone" :value="timezone">
 
-        {% if slots %}
-        <div>
-          <div style="display: flex; align-items: center;
+      <div @click.outside="showTzPicker = false">
+        <!-- Trigger button -->
+        <button type="button"
+                @click="showTzPicker = !showTzPicker"
+                class="detail-input"
+                style="display: flex;
+                       align-items: center;
                        justify-content: space-between;
-                       margin-bottom: 8px;">
-            <span class="detail-label">Availability</span>
-            <div style="display: flex; gap: 8px;">
-              <button type="button"
-                      @click="selectAll()"
-                      class="btn-ghost"
-                      style="padding: 4px 10px; font-size: 10px;">
-                Select All
-              </button>
-              <button type="button"
-                      @click="clearAll()"
-                      class="btn-ghost"
-                      style="padding: 4px 10px; font-size: 10px;">
-                Clear All
-              </button>
+                       cursor: pointer;
+                       text-align: left;">
+          <span x-text="timezone"
+                style="color: var(--text);"></span>
+          <span style="font-size: 9px;
+                       opacity: 0.5;
+                       transition: transform 0.15s;"
+                :style="showTzPicker ? 'transform: rotate(180deg)' : ''">↓</span>
+        </button>
+
+        <!-- Grouped picker -->
+        <div x-show="showTzPicker"
+             style="border: 1px solid var(--border-mid);
+                    background: var(--bg-card);
+                    margin-top: 2px;
+                    z-index: 50;
+                    position: relative;">
+
+          <!-- Search -->
+          <div style="padding: 8px; border-bottom: 1px solid var(--border);">
+            <input type="text"
+                   x-model="tzSearch"
+                   placeholder="Search timezones..."
+                   class="detail-input"
+                   style="width: 100%;"
+                   @click.stop>
+          </div>
+
+          <!-- Grouped list -->
+          <div style="max-height: 200px; overflow-y: auto;">
+            <template x-for="group in filteredGroups" :key="group.region">
+              <div>
+                <div style="padding: 5px 10px;
+                            font-size: 9px;
+                            letter-spacing: 0.2em;
+                            text-transform: uppercase;
+                            color: var(--primary);
+                            background: var(--bg-raised);
+                            border-bottom: 1px solid var(--border);
+                            position: sticky;
+                            top: 0;"
+                     x-text="group.region"></div>
+                <template x-for="tz in group.zones" :key="tz.value">
+                  <div @click="timezone = tz.value; showTzPicker = false; tzSearch = '';"
+                       :style="timezone === tz.value
+                         ? 'background: var(--secondary-dim); color: var(--secondary);'
+                         : 'color: var(--text-mid);'"
+                       style="padding: 7px 14px;
+                              font-size: 11px;
+                              letter-spacing: 0.03em;
+                              cursor: pointer;
+                              font-family: 'DM Mono', monospace;
+                              transition: background 0.1s;"
+                       @mouseenter="if (timezone !== tz.value) $el.style.background = 'var(--bg-raised)'"
+                       @mouseleave="$el.style.background = timezone === tz.value ? 'var(--secondary-dim)' : 'transparent'"
+                       x-text="tz.label">
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Availability -->
+    <div class="detail-field full-width" style="margin-bottom: 2px;">
+      <div style="display: flex;
+                  align-items: center;
+                  justify-content: space-between;
+                  margin-bottom: 10px;">
+        <span class="detail-label" style="margin-bottom: 0;">Availability</span>
+        <div style="display: flex; gap: 6px;">
+          <button type="button"
+                  class="btn-ghost"
+                  style="padding: 4px 10px; font-size: 10px;"
+                  @click="selectAll()">Select all</button>
+          <button type="button"
+                  class="btn-ghost"
+                  style="padding: 4px 10px; font-size: 10px;"
+                  @click="clearAll()">Clear all</button>
+        </div>
+      </div>
+
+      {% if slots %}
+      <div class="avail-grid">
+        <template x-for="(item, fi) in flatSlots" :key="fi">
+          <div style="display: contents;">
+            <div x-show="item.type === 'sep'"
+                 class="avail-day-label"
+                 x-text="item.label"></div>
+            <div x-show="item.type === 'slot'"
+                 class="avail-slot">
+              <input type="checkbox"
+                     :id="'add-slot-' + item.index"
+                     name="slots"
+                     :value="item.ts"
+                     x-model="checked[item.index]">
+              <label :for="'add-slot-' + item.index">
+                <span x-text="formatTime(item.ts)"></span>
+                <span class="slot-check">✓</span>
+              </label>
             </div>
           </div>
-          {% include 'partials/availability_grid.html' %}
-        </div>
-        {% endif %}
-
-        <div>
-          <button type="submit" class="btn-primary">Add Driver</button>
-        </div>
-
+        </template>
       </div>
-    </form>
-  </div>
+      {% else %}
+      <p style="font-size: 10px;
+                color: var(--text-dim);
+                letter-spacing: 0.06em;
+                padding: 4px 0;">
+        No availability slots configured for this event.
+      </p>
+      {% endif %}
+    </div>
+
+    <!-- Actions -->
+    <div style="display: flex; gap: 8px; margin-top: 2px;">
+      <button type="submit" class="btn-primary">Add Driver</button>
+      <button type="button"
+              class="btn-ghost"
+              @click="$dispatch('close-add-driver')">Cancel</button>
+    </div>
+
+  </form>
 </div>

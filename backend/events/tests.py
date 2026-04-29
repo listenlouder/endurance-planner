@@ -3170,7 +3170,7 @@ class AdminAddDriverTests(TestCase):
             {'driver_name': '', 'timezone': 'UTC'},
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 422)
         self.assertIn(b'Driver name is required', response.content)
 
     def test_missing_driver_name_does_not_create_driver(self):
@@ -3188,7 +3188,7 @@ class AdminAddDriverTests(TestCase):
             {'driver_name': 'Bob', 'timezone': 'Not/A/Real/Zone'},
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 422)
         self.assertIn(b'valid timezone', response.content)
 
     def test_invalid_timezone_does_not_create_driver(self):
@@ -5460,3 +5460,81 @@ class DjangoAdminRemovedTests(TestCase):
         response = self.client.get('/admin/login/')
 
         self.assertEqual(response.status_code, 404)
+
+
+# ---------------------------------------------------------------------------
+# admin_delete_event
+# ---------------------------------------------------------------------------
+
+class AdminDeleteEventTests(TestCase):
+    """Tests for views.admin_delete_event()."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.driver = Driver.objects.create(
+            event=self.event, name='Alice', timezone='UTC'
+        )
+        Availability.objects.create(
+            driver=self.driver,
+            slot_utc=utc(2026, 6, 1, 12, 0),
+        )
+        self.url = reverse('admin_delete_event', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def test_get_request_returns_405(self):
+        self._set_admin_session()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+        self.assertTrue(Event.objects.filter(pk=self.event.pk).exists())
+
+    def test_post_without_session_returns_403(self):
+        response = self.client.post(self.url, {'confirm_name': 'DELETE'})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Event.objects.filter(pk=self.event.pk).exists())
+
+    def test_post_wrong_confirmation_redirects_to_admin(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'confirm_name': 'WRONG'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id}),
+            response['Location'],
+        )
+        self.assertTrue(Event.objects.filter(pk=self.event.pk).exists())
+
+    def test_post_correct_confirmation_deletes_event(self):
+        self._set_admin_session()
+
+        response = self.client.post(self.url, {'confirm_name': 'DELETE'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('home'), response['Location'])
+        self.assertFalse(Event.objects.filter(pk=self.event.pk).exists())
+
+    def test_cascade_deletes_driver_and_availability(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'confirm_name': 'DELETE'})
+
+        self.assertFalse(Driver.objects.filter(pk=self.driver.pk).exists())
+        self.assertFalse(
+            Availability.objects.filter(driver=self.driver).exists()
+        )
+
+    def test_admin_session_cleared_after_deletion(self):
+        self._set_admin_session()
+
+        self.client.post(self.url, {'confirm_name': 'DELETE'})
+
+        self.assertFalse(
+            bool(self.client.session.get(f'admin_{self.event.id}'))
+        )

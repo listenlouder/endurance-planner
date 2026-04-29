@@ -12,7 +12,7 @@ from django.db import transaction
 from django.db.models import Count, Q, Subquery, OuterRef
 
 logger = logging.getLogger(__name__)
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, render, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -1101,34 +1101,17 @@ def admin_add_driver(request, event_id):
     if not timezone or timezone not in VALID_TIMEZONES:
         errors['timezone'] = 'A valid timezone is required.'
 
+    if errors:
+        error_html = ''.join(
+            f'<p style="color: var(--danger); font-size: 10px;'
+            f' letter-spacing: 0.06em; margin-bottom: 4px;">{msg}</p>'
+            for msg in errors.values()
+        )
+        return HttpResponse(error_html, status=422)
+
     admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
     if admin_tz not in VALID_TIMEZONES:
         admin_tz = 'UTC'
-
-    drivers_qs = (
-        Driver.objects.filter(event=event)
-        .prefetch_related('availability')
-        .annotate(stint_count=Count('stint_assignments'))
-        .order_by('signed_up_at')
-    )
-
-    if errors:
-        error_msg = ' '.join(errors.values())
-        err_slots = get_availability_slots(event)
-        err_matrix, _ = _build_availability_matrix(drivers_qs, err_slots)
-        driver_list_html = render_to_string(
-            'partials/driver_list.html',
-            {
-                'drivers': drivers_qs,
-                'event': event,
-                'admin_tz': admin_tz,
-                'availability_matrix': err_matrix,
-                'slots': err_slots,
-            },
-            request=request,
-        )
-        error_html = f'<div class="text-red-400 text-sm mb-3 px-2">⚠ {error_msg}</div>'
-        return HttpResponse(error_html + driver_list_html)
 
     driver = Driver.objects.create(event=event, name=driver_name, timezone=timezone)
     if slots_raw:
@@ -1305,6 +1288,29 @@ def create_stints_redirect(request, event_id):
     """Stub — stint assignment is now on the admin dashboard."""
     event = require_admin_session(request, event_id)
     return redirect('admin_dashboard', event_id=event_id)
+
+
+def admin_delete_event(request, event_id):
+    """POST only. Validates admin session, confirms 'DELETE' typed, deletes event."""
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    event = require_admin_session(request, event_id)
+
+    submitted_name = request.POST.get('confirm_name', '').strip()
+    if submitted_name != 'DELETE':
+        messages.error(request, 'Confirmation did not match. Deletion cancelled.')
+        return redirect('admin_dashboard', event_id=event_id)
+
+    session_key = f'admin_{event_id}'
+    if session_key in request.session:
+        del request.session[session_key]
+
+    event_name = event.name
+    event.delete()
+
+    messages.success(request, f'"{event_name}" has been permanently deleted.')
+    return redirect('home')
 
 
 def admin_save_assignments(request, event_id):

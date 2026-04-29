@@ -600,7 +600,19 @@
   </div>
 
   <!-- Add driver form (collapsible) -->
-  {% include 'partials/admin_add_driver.html' %}
+  <div x-data="{ open: false }"
+       @close-add-driver.window="open = false"
+       style="margin-top: 16px;">
+    <button @click="open = !open"
+            class="btn-secondary"
+            style="margin-bottom: 12px;">
+      <span x-text="open ? 'Cancel' : '+ Add Driver'"></span>
+    </button>
+
+    <div x-show="open" x-transition>
+      {% include 'partials/admin_add_driver.html' with event=event slots=slots only %}
+    </div>
+  </div>
 
 </section>
 
@@ -875,6 +887,235 @@
 </section>
 
 </div><!-- end centering wrapper -->
+
+<!-- ============================================================
+     DANGER ZONE
+============================================================ -->
+<section class="admin-section"
+         style="border-bottom: none;
+                 border-top: 1px solid var(--danger);
+                 max-width: 1400px;
+                 margin: 0 auto;">
+
+  <div style="display: flex;
+               align-items: center;
+               gap: 10px;
+               margin-bottom: 16px;">
+    <div class="section-heading"
+         style="color: var(--danger);
+                 margin-bottom: 0;
+                 flex: 1;">
+      Danger Zone
+    </div>
+  </div>
+
+  <div style="display: flex;
+               align-items: center;
+               justify-content: space-between;
+               gap: 16px;
+               padding: 16px 20px;
+               border: 1px solid var(--danger);
+               background: var(--danger-dim);">
+    <div>
+      <p style="font-size: 12px;
+                 color: var(--text);
+                 letter-spacing: 0.03em;
+                 margin-bottom: 4px;
+                 font-family: 'DM Mono', monospace;">
+        Delete this event
+      </p>
+      <p style="font-size: 10px;
+                 color: var(--text-dim);
+                 letter-spacing: 0.04em;
+                 line-height: 1.6;
+                 font-family: 'DM Mono', monospace;">
+        Permanently deletes the event, all driver signups,
+        availability schedules, and stint assignments.
+        This cannot be undone.
+      </p>
+    </div>
+    <button type="button"
+            @click="$dispatch('open-delete-modal')"
+            style="flex-shrink: 0;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 10px 20px;
+                    background: transparent;
+                    color: var(--danger);
+                    font-family: 'DM Mono', monospace;
+                    font-size: 11px;
+                    font-weight: 500;
+                    letter-spacing: 0.1em;
+                    text-transform: uppercase;
+                    border: 1px solid var(--danger);
+                    cursor: pointer;
+                    transition: background 0.15s, color 0.15s;"
+            onmouseenter="this.style.background='var(--danger)';this.style.color='#fff'"
+            onmouseleave="this.style.background='transparent';this.style.color='var(--danger)'">
+      Delete Event
+    </button>
+  </div>
+
+</section>
+
+<!-- Delete event modal -->
+<div x-data="{
+       open: false,
+       typedName: '',
+       get nameMatches() {
+         return this.typedName.trim() === 'DELETE';
+       }
+     }"
+     @open-delete-modal.window="
+       open = true;
+       typedName = '';
+       $nextTick(() => $refs.confirmInput.focus())
+     "
+     x-cloak>
+
+  <!-- Outer: x-show controls visibility; position:fixed fills viewport -->
+  <div x-show="open"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       style="position: fixed; inset: 0; z-index: 200;">
+
+    <!-- Inner: flex centering + backdrop click-to-close -->
+    <div @click.self="open = false; typedName = ''"
+         style="display: flex;
+                 align-items: center;
+                 justify-content: center;
+                 width: 100%;
+                 height: 100%;
+                 padding: 16px;
+                 background: rgba(0,0,0,0.7);">
+
+    <div x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 scale-100"
+         x-transition:leave-end="opacity-0 scale-95"
+         style="width: 100%;
+                 max-width: 440px;
+                 background: var(--bg-card);
+                 border: 1px solid var(--danger);
+                 border-top: 3px solid var(--danger);
+                 padding: 32px;
+                 position: relative;">
+
+      <button @click="open = false; typedName = ''"
+              style="position: absolute;
+                      top: 12px; right: 12px;
+                      background: none;
+                      border: none;
+                      color: var(--text-dim);
+                      cursor: pointer;
+                      font-size: 16px;
+                      line-height: 1;"
+              onmouseenter="this.style.color='var(--text)'"
+              onmouseleave="this.style.color='var(--text-dim)'">
+        ✕
+      </button>
+
+      <h2 style="font-family: 'Rajdhani', sans-serif;
+                  font-size: 20px;
+                  font-weight: 700;
+                  letter-spacing: 0.04em;
+                  text-transform: uppercase;
+                  color: var(--danger);
+                  margin-bottom: 12px;">
+        Delete Event
+      </h2>
+
+      <p style="font-size: 11px;
+                 color: var(--text-mid);
+                 letter-spacing: 0.04em;
+                 line-height: 1.7;
+                 margin-bottom: 8px;
+                 font-family: 'DM Mono', monospace;">
+        This will permanently delete
+        <strong style="color: var(--text);">{{ event.name }}</strong>
+        and all associated drivers, availability
+        schedules, and stint assignments.
+      </p>
+      <p style="font-size: 11px;
+                 color: var(--danger);
+                 letter-spacing: 0.04em;
+                 line-height: 1.7;
+                 margin-bottom: 24px;
+                 font-family: 'DM Mono', monospace;">
+        This cannot be undone.
+      </p>
+
+      <div style="margin-bottom: 20px;">
+        <label style="display: block;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--text-dim);
+                        margin-bottom: 8px;
+                        font-family: 'DM Mono', monospace;">
+          Type <strong style="color: var(--text);">DELETE</strong> to confirm
+        </label>
+        <input type="text"
+               x-ref="confirmInput"
+               x-model="typedName"
+               @keydown.enter="if (nameMatches) $refs.confirmBtn.click()"
+               @keydown.escape="open = false; typedName = ''"
+               placeholder="Type DELETE to confirm..."
+               autocomplete="off"
+               style="width: 100%;
+                       background: var(--bg);
+                       border: 1px solid var(--border-mid);
+                       color: var(--text);
+                       font-family: 'DM Mono', monospace;
+                       font-size: 12px;
+                       padding: 10px 14px;
+                       border-radius: 0;
+                       outline: none;
+                       transition: border-color 0.2s;
+                       box-sizing: border-box;"
+               :style="typedName && !nameMatches
+                 ? 'border-color: var(--danger);'
+                 : typedName && nameMatches
+                   ? 'border-color: var(--secondary);'
+                   : ''">
+      </div>
+
+      <form method="post"
+            action="{% url 'admin_delete_event' event.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="confirm_name" :value="typedName">
+        <button type="submit"
+                x-ref="confirmBtn"
+                :disabled="!nameMatches"
+                :style="nameMatches
+                  ? 'background: var(--danger); border-color: var(--danger); color: #fff; cursor: pointer;'
+                  : 'opacity: 0.35; cursor: not-allowed;'"
+                style="width: 100%;
+                        padding: 12px 20px;
+                        background: transparent;
+                        color: var(--danger);
+                        font-family: 'DM Mono', monospace;
+                        font-size: 11px;
+                        font-weight: 500;
+                        letter-spacing: 0.1em;
+                        text-transform: uppercase;
+                        border: 1px solid var(--danger);
+                        transition: background 0.15s, color 0.15s, opacity 0.15s;">
+          Permanently Delete Event
+        </button>
+      </form>
+
+    </div>
+    </div><!-- end flex centering wrapper -->
+  </div><!-- end x-show overlay -->
+</div><!-- end x-data -->
 
 {% endblock %}
 
