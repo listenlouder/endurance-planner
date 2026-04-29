@@ -2,6 +2,7 @@
   tzSearch: '',
   timezone: 'UTC',
   showTzPicker: false,
+  dropStyle: {},
   checked: (typeof slotTimestamps !== 'undefined' ? slotTimestamps : []).map(() => false),
 
   get flatSlots() {
@@ -42,6 +43,21 @@
         z.value.toLowerCase().includes(q)
       )
     })).filter(g => g.zones.length > 0);
+  },
+
+  openPicker() {
+    requestAnimationFrame(() => {
+      const r = this.$refs.tzBtn.getBoundingClientRect();
+      this.dropStyle = {
+        position: 'fixed',
+        top: Math.round(r.bottom + 2) + 'px',
+        bottom: 'auto',
+        left: Math.round(r.left) + 'px',
+        width: Math.round(r.width) + 'px',
+        zIndex: 9999
+      };
+      this.showTzPicker = true;
+    });
   },
 
   selectAll()  { this.checked = this.checked.map(() => true); },
@@ -93,10 +109,12 @@
       <span class="detail-label">Timezone</span>
       <input type="hidden" name="timezone" :value="timezone">
 
-      <div @click.outside="showTzPicker = false">
+      <div @click.outside="showTzPicker = false; tzSearch = ''"
+           @scroll.window="showTzPicker = false; tzSearch = ''">
         <!-- Trigger button -->
         <button type="button"
-                @click="showTzPicker = !showTzPicker"
+                x-ref="tzBtn"
+                @click="showTzPicker ? (showTzPicker = false, tzSearch = '') : openPicker()"
                 class="detail-input"
                 style="display: flex;
                        align-items: center;
@@ -113,16 +131,15 @@
 
         <!-- Grouped picker -->
         <div x-show="showTzPicker"
+             :style="dropStyle"
              style="border: 1px solid var(--border-mid);
-                    background: var(--bg-card);
-                    margin-top: 2px;
-                    z-index: 50;
-                    position: relative;">
+                    background: var(--bg-card);">
 
           <!-- Search -->
           <div style="padding: 8px; border-bottom: 1px solid var(--border);">
             <input type="text"
                    x-model="tzSearch"
+                   x-init="$watch('showTzPicker', v => { if (v) $nextTick(() => $el.focus()) })"
                    placeholder="Search timezones..."
                    class="detail-input"
                    style="width: 100%;"

@@ -4,6 +4,170 @@
     document.getElementById('submitted-slots-data').textContent
   );
   window.submittedTimezone = '{{ submitted_timezone|escapejs }}';
+
+  function tzPickerData(initTz) {
+    return {
+      timezone: initTz,
+      showPicker: false,
+      tzSearch: '',
+      portalEl: null,
+      _searchInput: null,
+      _resultsEl: null,
+      _closeHandler: null,
+
+      init() {
+        this.portalEl = document.createElement('div');
+        this.portalEl.style.cssText =
+          'position: fixed; z-index: 9999; display: none;' +
+          'background: var(--bg-card);' +
+          'border: 1px solid var(--border-mid);' +
+          'box-shadow: 0 8px 24px rgba(0,0,0,0.4);' +
+          'overflow: hidden;';
+
+        const searchWrapper = document.createElement('div');
+        searchWrapper.style.cssText =
+          'padding: 8px; border-bottom: 1px solid var(--border);';
+
+        this._searchInput = document.createElement('input');
+        this._searchInput.type = 'text';
+        this._searchInput.placeholder = 'Search timezones...';
+        this._searchInput.className = 'tz-search';
+        this._searchInput.style.cssText =
+          'width: 100%;' +
+          'background: var(--bg);' +
+          'border: 1px solid var(--border-mid);' +
+          'color: var(--text);' +
+          'font-family: DM Mono, monospace;' +
+          'font-size: 12px;' +
+          'padding: 6px 10px;' +
+          'border-radius: 0;' +
+          'outline: none;' +
+          'box-sizing: border-box;';
+        this._searchInput.addEventListener('input', (e) => {
+          this.tzSearch = e.target.value;
+          this.renderResults();
+        });
+
+        searchWrapper.appendChild(this._searchInput);
+        this.portalEl.appendChild(searchWrapper);
+
+        this._resultsEl = document.createElement('div');
+        this._resultsEl.style.cssText = 'overflow-y: auto; max-height: 230px;';
+        this.portalEl.appendChild(this._resultsEl);
+
+        document.body.appendChild(this.portalEl);
+
+        this._closeHandler = (e) => {
+          if (this.showPicker &&
+              !this.$el.contains(e.target) &&
+              !this.portalEl.contains(e.target)) {
+            this.closePicker();
+          }
+        };
+        document.addEventListener('click', this._closeHandler);
+      },
+
+      destroy() {
+        this.portalEl?.remove();
+        if (this._closeHandler) {
+          document.removeEventListener('click', this._closeHandler);
+        }
+      },
+
+      openPicker() {
+        requestAnimationFrame(() => {
+          const btn = this.$refs.tzBtn;
+          const card = this.$refs.tzCard;
+          const rect = btn.getBoundingClientRect();
+          const cardRect = card.getBoundingClientRect();
+          const dropHeight = 280;
+          const spaceBelow = window.innerHeight - rect.bottom;
+          const top = (spaceBelow >= dropHeight || spaceBelow >= rect.top)
+            ? Math.round(rect.bottom + 2)
+            : Math.round(cardRect.top - dropHeight - 2);
+
+          this.portalEl.style.top = top + 'px';
+          this.portalEl.style.left = Math.round(cardRect.left) + 'px';
+          this.portalEl.style.width = Math.round(cardRect.width) + 'px';
+          this.portalEl.style.display = 'block';
+          this.showPicker = true;
+
+          this.$nextTick(() => {
+            if (this._searchInput) {
+              this._searchInput.value = '';
+              this.tzSearch = '';
+              this._searchInput.focus();
+            }
+          });
+        });
+      },
+
+      closePicker() {
+        this.showPicker = false;
+        this.tzSearch = '';
+        if (this._searchInput) this._searchInput.value = '';
+        if (this.portalEl) this.portalEl.style.display = 'none';
+      },
+
+      selectTz(value) {
+        this.timezone = value;
+        window.dispatchEvent(new CustomEvent('timezone-selected', { detail: { value } }));
+        this.closePicker();
+      },
+
+      renderResults() {
+        if (!this._resultsEl) return;
+        const q = this.tzSearch.toLowerCase();
+        const groups = q
+          ? timezoneList.map(g => ({
+              ...g,
+              zones: g.zones.filter(z =>
+                z.label.toLowerCase().includes(q) ||
+                z.value.toLowerCase().includes(q))
+            })).filter(g => g.zones.length > 0)
+          : timezoneList;
+
+        let html = '';
+        groups.forEach(group => {
+          html +=
+            '<div style="padding: 5px 10px;' +
+            'font-size: 9px; letter-spacing: 0.2em;' +
+            'text-transform: uppercase;' +
+            'color: var(--primary);' +
+            'background: var(--bg-raised);' +
+            'border-bottom: 1px solid var(--border);' +
+            'position: sticky; top: 0;' +
+            'font-family: DM Mono, monospace;">' +
+            group.region + '</div>';
+          group.zones.forEach(tz => {
+            const sel = tz.value === this.timezone;
+            html +=
+              '<div data-tz="' + tz.value + '"' +
+              ' style="padding: 8px 14px;' +
+              'font-size: 11px; letter-spacing: 0.03em;' +
+              'cursor: pointer; font-family: DM Mono, monospace;' +
+              'background: ' + (sel ? 'var(--secondary-dim)' : 'transparent') +
+              '; color: ' + (sel ? 'var(--secondary)' : 'var(--text-mid)') +
+              ';">' + tz.label + '</div>';
+          });
+        });
+
+        this._resultsEl.innerHTML = html;
+
+        this._resultsEl.querySelectorAll('[data-tz]').forEach(el => {
+          el.addEventListener('click', () => this.selectTz(el.dataset.tz));
+          el.addEventListener('mouseenter', () => {
+            if (el.dataset.tz !== this.timezone)
+              el.style.background = 'var(--bg-raised)';
+          });
+          el.addEventListener('mouseleave', () => {
+            el.style.background =
+              el.dataset.tz === this.timezone ? 'var(--secondary-dim)' : 'transparent';
+          });
+        });
+      }
+    };
+  }
 </script>
 
 <div id="signup-form-container">
@@ -13,7 +177,7 @@
       hx-target="#signup-form-container"
       hx-swap="outerHTML"
       x-data="signupFormData()"
-      @timezone-selected.window="timezone = $event.detail.value; tzOverrideOpen = true;">
+      @timezone-selected.window="timezone = $event.detail.value">
   {% csrf_token %}
 
   {% if errors.slots %}
@@ -56,31 +220,98 @@
            style="margin-bottom: 0;">
         <label>Your timezone <span class="required">*</span></label>
 
-        <!-- Banner: detected tz -->
-        <template x-if="!tzOverrideOpen">
-          <div>
-            <div class="tz-banner">
-              <div>
-                <div class="tz-banner-label">Detected timezone</div>
-                <div class="tz-banner-value" x-text="timezone + ' (' + tzShort + ')'"></div>
-                <div class="tz-banner-question">Is this correct?</div>
+        <div x-data="tzPickerData((window.submittedTimezone && window.submittedTimezone !== '') ? window.submittedTimezone : detectedTz)"
+             x-effect="if (showPicker) renderResults()"
+             @scroll.window="closePicker()">
+          <input type="hidden" name="timezone" :value="timezone">
+
+          <!-- Timezone confirmation card -->
+          <div x-ref="tzCard"
+               style="background: var(--bg);
+                      border: 1px solid var(--border-mid);
+                      padding: 14px 16px;
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: 16px;
+                      width: 100%;
+                      box-sizing: border-box;">
+
+            <!-- Left: label + value -->
+            <div style="min-width: 0;">
+              <div style="font-family: 'DM Mono', monospace;
+                          font-size: 9px;
+                          letter-spacing: 0.2em;
+                          text-transform: uppercase;
+                          color: var(--text-dim);
+                          margin-bottom: 4px;">
+                Detected timezone
               </div>
-              <div class="tz-banner-actions">
-                <button type="button" class="btn-tz-confirm">Looks right</button>
-                <button type="button" class="btn-tz-change"
-                        @click="tzOverrideOpen = true">Change</button>
+              <div x-text="timezone"
+                   style="font-family: 'DM Mono', monospace;
+                          font-size: 13px;
+                          color: var(--text);
+                          letter-spacing: 0.03em;
+                          white-space: nowrap;
+                          overflow: hidden;
+                          text-overflow: ellipsis;">
+              </div>
+              <div x-show="!showPicker"
+                   style="font-family: 'DM Mono', monospace;
+                          font-size: 10px;
+                          color: var(--text-dim);
+                          letter-spacing: 0.04em;
+                          margin-top: 2px;">
+                Is this correct?
               </div>
             </div>
-            <input type="hidden" name="timezone" :value="timezone">
-          </div>
-        </template>
 
-        <!-- Override picker -->
-        <template x-if="tzOverrideOpen">
-          <div style="margin-top: 4px;">
-            {% include 'partials/timezone_picker.html' with field_name="timezone" only %}
+            <!-- Right: action buttons -->
+            <div style="display: flex; gap: 8px; flex-shrink: 0;">
+
+              <button type="button"
+                      x-show="!showPicker"
+                      @mouseenter="$el.style.opacity = '0.85'"
+                      @mouseleave="$el.style.opacity = '1'"
+                      style="padding: 8px 14px;
+                             background: var(--secondary);
+                             color: var(--bg);
+                             font-family: 'DM Mono', monospace;
+                             font-size: 10px;
+                             font-weight: 600;
+                             letter-spacing: 0.1em;
+                             text-transform: uppercase;
+                             border: none;
+                             cursor: pointer;
+                             transition: opacity 0.15s;
+                             white-space: nowrap;">
+                Looks right
+              </button>
+
+              <button type="button"
+                      x-ref="tzBtn"
+                      x-text="showPicker ? 'Cancel' : 'Change'"
+                      @click="showPicker ? closePicker() : openPicker()"
+                      @mouseenter="$el.style.borderColor = 'var(--text-mid)'; $el.style.color = 'var(--text)'"
+                      @mouseleave="if (!showPicker) { $el.style.borderColor = 'var(--border-mid)'; $el.style.color = 'var(--text-mid)'; } else { $el.style.borderColor = 'var(--secondary)'; $el.style.color = 'var(--secondary)'; }"
+                      :style="showPicker ? 'border-color: var(--secondary); color: var(--secondary);' : ''"
+                      style="padding: 8px 14px;
+                             background: transparent;
+                             color: var(--text-mid);
+                             font-family: 'DM Mono', monospace;
+                             font-size: 10px;
+                             letter-spacing: 0.1em;
+                             text-transform: uppercase;
+                             border: 1px solid var(--border-mid);
+                             cursor: pointer;
+                             transition: border-color 0.15s, color 0.15s;
+                             white-space: nowrap;">
+              </button>
+
+            </div>
           </div>
-        </template>
+
+        </div>
 
         {% if errors.timezone %}
         <span class="field-error" style="display: block;">{{ errors.timezone }}</span>

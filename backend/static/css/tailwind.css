@@ -130,7 +130,7 @@ h1, h2, h3, h4, h5, h6 {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -1091,7 +1091,6 @@ main {
 @media (max-width: 600px) {
   .form-card {
     padding: 20px 16px;
-    overflow: hidden;
   }
 }
 .form-card-title {
