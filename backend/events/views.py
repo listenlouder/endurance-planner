@@ -570,12 +570,9 @@ def view_event(request, event_id):
     else:
         stint_windows = []
 
-    assignments = {
-        sa.stint_number: sa.driver
-        for sa in StintAssignment.objects.filter(
-            event=event
-        ).select_related('driver')
-    }
+    sa_list = list(StintAssignment.objects.filter(event=event).select_related('driver'))
+    assignments = {sa.stint_number: sa.driver for sa in sa_list}
+    conditions_map = {sa.stint_number: sa.condition for sa in sa_list}
 
     stint_rows = []
     for sw in stint_windows:
@@ -602,6 +599,7 @@ def view_event(request, event_id):
                 if row['stint_number'] == total_stints_count
                 else laps_remaining_after_stint(event, row['stint_number'])
             ),
+            'condition': conditions_map.get(row['stint_number'], 'dry'),
         }
         for row in stint_rows
     ])
@@ -856,6 +854,16 @@ def _build_admin_context(request, event):
 
     table_data = _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz)
 
+    if slots:
+        last_slot = slots[-1]
+        drivers_missing_end_coverage = [
+            driver.name
+            for driver in drivers
+            if last_slot not in {a.slot_utc for a in driver.availability.all()}
+        ]
+    else:
+        drivers_missing_end_coverage = []
+
     field_groups = [
         {
             'title': 'Basic Info',
@@ -906,6 +914,7 @@ def _build_admin_context(request, event):
     has_required_stint_fields = event.has_required_stint_fields
     stint_windows = []
     existing_assignments = {}
+    conditions = {}
     stint_availability_matrix = {}
     availability_json = {}
 
@@ -914,11 +923,13 @@ def _build_admin_context(request, event):
         admin_tz_zone = ZoneInfo(admin_tz)
         for sw in stint_windows:
             sw['start_local'] = sw['start_utc'].astimezone(admin_tz_zone).strftime('%H:%M')
+        all_sa = list(StintAssignment.objects.filter(event=event))
         existing_assignments = {
             sa.stint_number: str(sa.driver_id)
-            for sa in StintAssignment.objects.filter(event=event)
+            for sa in all_sa
             if sa.driver_id
         }
+        conditions = {sa.stint_number: sa.condition for sa in all_sa}
         stint_availability_matrix = build_stint_availability_matrix(
             drivers, stint_windows, event.start_datetime_utc
         )
@@ -951,6 +962,7 @@ def _build_admin_context(request, event):
         'slot_timestamps_json': slot_timestamps_json,
         'slots': slots,
         'signup_url': signup_url,
+        'drivers_missing_end_coverage': drivers_missing_end_coverage,
         'length_hours_display': total_seconds // 3600,
         'length_minutes_display': (total_seconds % 3600) // 60,
         'has_required_stint_fields': has_required_stint_fields,
@@ -968,6 +980,7 @@ def _build_admin_context(request, event):
                 else laps_remaining_after_stint(event, sw['stint_number'])
             ),
         } for sw in stint_windows]),
+        'conditions': conditions,
         'existing_assignments_json': _safe_json({str(k): str(v) for k, v in existing_assignments.items()}),
         'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name} for d in drivers]),
         'availability_json': _safe_json(availability_json),
@@ -1284,6 +1297,37 @@ def admin_save_calc(request, event_id):
     return response
 
 
+CONDITION_CYCLE = ['dry', 'mixed', 'wet']
+
+
+def cycle_condition(request, event_id, stint_number):
+    """
+    POST only. Cycles condition on a StintAssignment: dry → mixed → wet → dry.
+    Creates the assignment with driver=None if none exists yet.
+    Requires admin session. Returns the updated button partial for HTMX outerHTML swap.
+    """
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    event = require_admin_session(request, event_id)
+
+    assignment, _ = StintAssignment.objects.get_or_create(
+        event=event,
+        stint_number=stint_number,
+        defaults={'driver': None, 'condition': 'dry'},
+    )
+
+    current = assignment.condition if assignment.condition in CONDITION_CYCLE else 'dry'
+    assignment.condition = CONDITION_CYCLE[(CONDITION_CYCLE.index(current) + 1) % len(CONDITION_CYCLE)]
+    assignment.save(update_fields=['condition'])
+
+    return render(request, 'partials/condition_cycle_btn.html', {
+        'event': event,
+        'stint_number': stint_number,
+        'condition': assignment.condition,
+    })
+
+
 def create_stints_redirect(request, event_id):
     """Stub — stint assignment is now on the admin dashboard."""
     event = require_admin_session(request, event_id)
@@ -1322,6 +1366,11 @@ def admin_save_assignments(request, event_id):
     if not event.has_required_stint_fields:
         return HttpResponseBadRequest()
 
+    existing_conditions = {
+        sa.stint_number: sa.condition
+        for sa in StintAssignment.objects.filter(event=event)
+    }
+
     stint_windows = get_stint_windows(event)
 
     assignments_to_create = []
@@ -1338,7 +1387,12 @@ def admin_save_assignments(request, event_id):
                     driver_id, event_id, n,
                 )
         assignments_to_create.append(
-            StintAssignment(event=event, stint_number=n, driver=driver)
+            StintAssignment(
+                event=event,
+                stint_number=n,
+                driver=driver,
+                condition=existing_conditions.get(n, 'dry'),
+            )
         )
 
     with transaction.atomic():

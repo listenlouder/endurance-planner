@@ -1,0 +1,7 @@
+<button hx-post="{% url 'cycle_condition' event.id stint_number %}"
+        hx-target="this"
+        hx-swap="outerHTML"
+        class="condition-cycle-btn"
+        title="Click to cycle: Dry → Mixed → Wet → Dry">
+  {% include 'partials/condition_pill.html' with condition=condition only %}
+</button>

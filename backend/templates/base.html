@@ -45,6 +45,17 @@
   <!-- HTMX -->
   <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js">
   </script>
+  <script>
+    document.addEventListener('htmx:configRequest', (e) => {
+      const csrfCookie = document.cookie
+        .split(';')
+        .find(c => c.trim().startsWith('csrftoken='));
+      if (csrfCookie) {
+        e.detail.headers['X-CSRFToken'] =
+          csrfCookie.split('=')[1];
+      }
+    });
+  </script>
 
   {% block extra_head %}{% endblock %}
 </head>

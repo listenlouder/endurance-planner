@@ -301,6 +301,17 @@
                         font-weight: 500;
                         text-align: center;
                         background: var(--bg-raised);
+                        width: 90px;">
+              Conditions
+            </th>
+            <th style="padding: 8px 14px;
+                        font-size: 10px;
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        color: var(--text-dim);
+                        font-weight: 500;
+                        text-align: center;
+                        background: var(--bg-raised);
                         width: 70px;">
               Laps left
             </th>
@@ -322,7 +333,7 @@
               <!-- Date separator — only when day changes -->
               <template x-if="isNewDay(index)">
                 <tr>
-                  <td colspan="5"
+                  <td colspan="6"
                       style="padding: 8px 16px;
                              font-size: 9px;
                              letter-spacing: 0.2em;
@@ -357,6 +368,11 @@
                            color: var(--text-dim);
                            width: 22%;">
                   {{ stint_duration_display|default:"—" }}
+                </td>
+                <td style="padding: 8px 14px;
+                           text-align: center;
+                           width: 90px;">
+                  <span x-html="conditionPill(row.condition)"></span>
                 </td>
                 <td style="padding: 8px 14px;
                            text-align: center;
@@ -502,6 +518,16 @@
 
       lapsClass(row) {
         return row.is_last_stint ? 'finish-label' : '';
+      },
+
+      conditionPill(condition) {
+        if (condition === 'wet') {
+          return '<span class="condition-pill condition-wet">⛆ Wet</span>';
+        }
+        if (condition === 'mixed') {
+          return '<span class="condition-pill condition-mixed">◑ Mixed</span>';
+        }
+        return '';
       }
     }
   }

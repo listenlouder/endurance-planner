@@ -64,7 +64,8 @@ class Event(models.Model):
 
     @property
     def end_datetime_utc(self):
-        return self.start_datetime_utc + timedelta(seconds=self.length_seconds)
+        """True race end — effective start (race_start_time_utc when set) plus length."""
+        return self.effective_start_datetime_utc + timedelta(seconds=self.length_seconds)
 
     @property
     def effective_start_time_utc(self):
@@ -140,6 +141,12 @@ class Feedback(models.Model):
 
 
 class StintAssignment(models.Model):
+    CONDITION_CHOICES = [
+        ('dry',   'Dry'),
+        ('mixed', 'Mixed'),
+        ('wet',   'Wet'),
+    ]
+
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='stint_assignments')
     stint_number = models.PositiveIntegerField()
     driver = models.ForeignKey(
@@ -148,6 +155,11 @@ class StintAssignment(models.Model):
         null=True,
         blank=True,
         related_name='stint_assignments',
+    )
+    condition = models.CharField(
+        max_length=10,
+        choices=CONDITION_CHOICES,
+        default='dry',
     )
 
     class Meta:

@@ -1703,6 +1703,51 @@ tr.row-unassigned td.s-laps {
 }
 
 /* ============================================================
+   CONDITION PILLS
+============================================================ */
+.condition-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.condition-dry {
+  color: var(--text-dim);
+  border-color: var(--border-mid);
+}
+.condition-mixed {
+  color: #cc8c14;
+  border-color: #cc8c14;
+  background: rgba(204, 140, 20, 0.08);
+}
+.condition-wet {
+  color: var(--secondary);
+  border-color: var(--secondary);
+  background: var(--secondary-dim);
+}
+.condition-cycle-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 0;
+}
+.condition-cycle-btn:hover .condition-pill {
+  opacity: 0.75;
+}
+td.s-condition {
+  width: 90px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ============================================================
    SUMMARY PILLS
    Used on view event page stints per driver section.
 ============================================================ */

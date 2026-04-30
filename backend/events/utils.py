@@ -200,14 +200,18 @@ def get_stint_windows(event):
 def get_availability_slots(event):
     """
     Returns a list of UTC datetimes representing every 30-minute
-    availability slot from event start to event end.
+    availability slot from session start to one hour past effective
+    race end.
 
-    Each slot represents the start of a 30-minute block. The final slot
-    included is the last one that begins before event.end_datetime_utc.
+    Always anchors to start_datetime_utc (session start) so warmup
+    and qualifying slots are included even when race_start_time_utc
+    differs. Extends one hour past end_datetime_utc as a buffer for
+    races that run long and to cover the race_start_time_utc offset.
     """
+    start = event.start_datetime_utc
+    end = event.end_datetime_utc + timedelta(hours=1)
     slots = []
-    current = event.start_datetime_utc
-    end = event.end_datetime_utc
+    current = start
     while current < end:
         slots.append(current)
         current += timedelta(minutes=30)

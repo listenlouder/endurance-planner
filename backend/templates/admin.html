@@ -566,6 +566,26 @@
 <section class="admin-section fade-up-delay-2">
   <div class="section-heading">Drivers Signed Up</div>
 
+  {% if drivers_missing_end_coverage %}
+  <div style="padding: 10px 16px;
+               border: 1px solid var(--border);
+               background: var(--bg-raised);
+               border-left: 3px solid var(--text-dim);
+               margin-bottom: 12px;
+               max-width: 700px;">
+    <p style="font-size: 10px;
+                color: var(--text-dim);
+                letter-spacing: 0.06em;
+                line-height: 1.6;
+                font-family: 'DM Mono', monospace;">
+      ℹ Some drivers' availability doesn't cover the full race window:
+      <strong style="color: var(--text);">{{ drivers_missing_end_coverage|join:", " }}</strong>.
+      This may be because they signed up before the race end time was updated.
+      Ask them to update their availability, or assign them manually.
+    </p>
+  </div>
+  {% endif %}
+
   <!-- Driver list -->
   <div id="driver-list-container" style="margin-bottom: 16px;">
     {% include 'partials/driver_list.html' %}
@@ -726,7 +746,7 @@
       <table class="unified-table" id="unifiedTable">
         <thead>
           <tr>
-            <th colspan="5" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
+            <th colspan="6" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
             <th class="avail-divider"></th>
             <th colspan="{{ drivers|length }}"
                 class="avail-group-header"
@@ -740,6 +760,7 @@
             <th style="width: 80px;">Dur.</th>
             <th class="col-laps-left" style="width: 70px;">Laps left</th>
             <th style="width: 180px;">Driver</th>
+            <th style="width: 90px; text-align: center;">Conditions</th>
             <th class="avail-divider"></th>
             {% for driver in drivers %}
             <th class="avail-driver-th">
@@ -757,7 +778,7 @@
 
           <template x-if="isNewDay({{ forloop.counter0 }})">
             <tr>
-              <td colspan="{{ drivers|length|add:6 }}"
+              <td colspan="{{ drivers|length|add:7 }}"
                   style="text-align: center; font-weight: 700; padding: 3px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; background: var(--primary); color: #111;">
                 <span x-text="formatStintDate('{{ sw.start_utc|to_utc_z }}')"></span>
               </td>
@@ -841,6 +862,11 @@
                 </button>
 
               </div>
+            </td>
+            <td class="s-condition">
+              {% with cond=conditions|dict_get:sw.stint_number|default:"dry" %}
+              {% include 'partials/condition_cycle_btn.html' with event=event stint_number=sw.stint_number condition=cond only %}
+              {% endwith %}
             </td>
             <td class="avail-divider"></td>
             {% for driver in drivers %}
