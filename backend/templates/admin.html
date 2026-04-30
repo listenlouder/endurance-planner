@@ -547,9 +547,13 @@
 
     <div class="details-actions">
       <button type="submit"
+              id="recalcBtn"
               class="btn-primary"
+              hx-disabled-elt="this"
+              style="min-width: 160px; justify-content: center; position: relative;"
               :style="showRebuildWarning ? 'outline: 1px solid var(--primary); outline-offset: 2px;' : ''">
-        Recalculate
+        <span class="recalc-label">Recalculate</span>
+        <span class="recalc-loading" style="display: none;">Recalculating...</span>
       </button>
       <button type="button" class="btn-ghost" @click="reset()">Reset</button>
     </div>

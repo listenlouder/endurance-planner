@@ -1703,6 +1703,13 @@ tr.row-unassigned td.s-laps {
 }
 
 /* ============================================================
+   BUTTON LOADING STATES
+============================================================ */
+#recalcBtn.htmx-request .recalc-label  { display: none; }
+#recalcBtn.htmx-request .recalc-loading { display: inline !important; }
+#recalcBtn.htmx-request { opacity: 0.75; cursor: wait; }
+
+/* ============================================================
    CONDITION PILLS
 ============================================================ */
 .condition-pill {
