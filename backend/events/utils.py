@@ -96,6 +96,57 @@ def stint_length_seconds(event):
     return racing_time + transition_delta
 
 
+def last_stint_length_seconds(event):
+    """
+    Calculate the duration of the final stint in seconds.
+    The last stint covers only the remaining laps after all preceding full stints,
+    so it is typically shorter than a standard stint.
+
+    Returns None if required fields are not set or remaining laps <= 0.
+    Falls back to stint_length_seconds() if remaining laps >= target_laps
+    (edge case where the race divides evenly).
+    """
+    if not event.has_required_stint_fields:
+        return None
+
+    total = total_race_laps(event)
+    ts = total_stints(event)
+
+    if total is None or ts is None:
+        return None
+
+    remaining = total - ((ts - 1) * event.target_laps)
+
+    if remaining <= 0:
+        return None
+
+    if remaining >= event.target_laps:
+        return stint_length_seconds(event)
+
+    last_seconds = (
+        (remaining * event.avg_lap_seconds)
+        + event.in_lap_seconds
+        + event.out_lap_seconds
+        - (event.avg_lap_seconds * 2)
+    )
+    return max(last_seconds, 0)
+
+
+def format_stint_duration(seconds):
+    """
+    Format a duration in seconds as a human-readable string.
+    e.g. 3720 → "62m", 3661 → "61m 1s"
+    """
+    if seconds is None:
+        return '—'
+    total = int(round(seconds))
+    mins = total // 60
+    secs = total % 60
+    if secs:
+        return f"{mins}m {secs}s"
+    return f"{mins}m"
+
+
 def total_stints(event):
     """
     Calculate total number of stints for the event.
@@ -176,25 +227,36 @@ def stint_end_time(event, stint_number):
 
 def get_stint_windows(event):
     """
-    Returns a list of dicts for all stints:
+    Returns a list of dicts for all stints, including per-stint duration.
 
     [
         {
-            'stint_number': 1,
-            'start_utc': datetime,
-            'end_utc': datetime,
+            'stint_number':    int,
+            'start_utc':       datetime,
+            'end_utc':         datetime,
+            'duration_seconds': float,
+            'is_last':         bool,
         },
         ...
     ]
     """
-    return [
-        {
-            'stint_number': n,
-            'start_utc': stint_start_time(event, n),
-            'end_utc': stint_end_time(event, n),
-        }
-        for n in range(1, total_stints(event) + 1)
-    ]
+    if not event.has_required_stint_fields:
+        return []
+    ts = total_stints(event)
+    standard_duration = stint_length_seconds(event)
+    last_duration = last_stint_length_seconds(event)
+    windows = []
+    for n in range(1, ts + 1):
+        is_last = (n == ts)
+        duration = last_duration if is_last else standard_duration
+        windows.append({
+            'stint_number':    n,
+            'start_utc':       stint_start_time(event, n),
+            'end_utc':         stint_end_time(event, n),
+            'duration_seconds': duration,
+            'is_last':         is_last,
+        })
+    return windows
 
 
 def get_availability_slots(event):

@@ -1738,15 +1738,46 @@ tr.row-unassigned td.s-laps {
   border-color: var(--secondary);
   background: var(--secondary-dim);
 }
-.condition-cycle-btn {
+.condition-select {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 6px;
+  border: 1px solid currentColor;
   background: transparent;
-  border: none;
-  padding: 0;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
   border-radius: 0;
+  width: 88px;
+  text-align: center;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.condition-cycle-btn:hover .condition-pill {
-  opacity: 0.75;
+.condition-select:focus {
+  outline: none;
+}
+.condition-select.condition-dry {
+  color: var(--text-dim);
+  border-color: var(--border-mid);
+}
+.condition-select.condition-mixed {
+  color: #cc8c14;
+  border-color: #cc8c14;
+  background: rgba(204, 140, 20, 0.08);
+}
+.condition-select.condition-wet {
+  color: var(--secondary);
+  border-color: var(--secondary);
+  background: var(--secondary-dim);
+}
+.condition-select option {
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: none;
 }
 td.s-condition {
   width: 90px;

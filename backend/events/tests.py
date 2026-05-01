@@ -5569,164 +5569,7 @@ class AdminDeleteEventTests(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# cycle_condition view
-# ---------------------------------------------------------------------------
-
-class CycleConditionTests(TestCase):
-    """Tests for views.cycle_condition()."""
-
-    def setUp(self):
-        self.event = save_event()
-        self.url = lambda n: reverse(
-            'cycle_condition',
-            kwargs={'event_id': self.event.id, 'stint_number': n},
-        )
-
-    def _set_admin_session(self):
-        session = self.client.session
-        session[f'admin_{self.event.id}'] = True
-        session.save()
-
-    # --- auth / method guards ---
-
-    def test_get_request_returns_405(self):
-        self._set_admin_session()
-
-        response = self.client.get(self.url(1))
-
-        self.assertEqual(response.status_code, 405)
-
-    def test_post_without_admin_session_returns_403(self):
-        response = self.client.post(self.url(1))
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_post_without_admin_session_creates_no_assignment(self):
-        self.client.post(self.url(1))
-
-        self.assertFalse(
-            StintAssignment.objects.filter(event=self.event).exists()
-        )
-
-    # --- cycling with an existing assignment ---
-
-    def test_dry_cycles_to_mixed(self):
-        StintAssignment.objects.create(
-            event=self.event, stint_number=1, condition='dry'
-        )
-        self._set_admin_session()
-
-        self.client.post(self.url(1))
-
-        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
-        self.assertEqual(assignment.condition, 'mixed')
-
-    def test_mixed_cycles_to_wet(self):
-        StintAssignment.objects.create(
-            event=self.event, stint_number=1, condition='mixed'
-        )
-        self._set_admin_session()
-
-        self.client.post(self.url(1))
-
-        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
-        self.assertEqual(assignment.condition, 'wet')
-
-    def test_wet_cycles_back_to_dry(self):
-        StintAssignment.objects.create(
-            event=self.event, stint_number=1, condition='wet'
-        )
-        self._set_admin_session()
-
-        self.client.post(self.url(1))
-
-        assignment = StintAssignment.objects.get(event=self.event, stint_number=1)
-        self.assertEqual(assignment.condition, 'dry')
-
-    def test_full_cycle_returns_to_original(self):
-        StintAssignment.objects.create(
-            event=self.event, stint_number=2, condition='dry'
-        )
-        self._set_admin_session()
-
-        # dry → mixed → wet → dry
-        self.client.post(self.url(2))
-        self.client.post(self.url(2))
-        self.client.post(self.url(2))
-
-        assignment = StintAssignment.objects.get(event=self.event, stint_number=2)
-        self.assertEqual(assignment.condition, 'dry')
-
-    # --- creates if no assignment exists yet ---
-
-    def test_creates_assignment_with_driver_none_when_none_exists(self):
-        self._set_admin_session()
-
-        self.client.post(self.url(3))
-
-        assignment = StintAssignment.objects.get(event=self.event, stint_number=3)
-        self.assertIsNone(assignment.driver)
-
-    def test_creates_assignment_and_cycles_from_dry_when_none_exists(self):
-        """When no assignment exists the implicit starting condition is dry,
-        so the first cycle should land on mixed."""
-        self._set_admin_session()
-
-        self.client.post(self.url(4))
-
-        assignment = StintAssignment.objects.get(event=self.event, stint_number=4)
-        self.assertEqual(assignment.condition, 'mixed')
-
-    def test_does_not_create_duplicate_assignment(self):
-        self._set_admin_session()
-
-        self.client.post(self.url(5))
-        self.client.post(self.url(5))
-
-        count = StintAssignment.objects.filter(
-            event=self.event, stint_number=5
-        ).count()
-        self.assertEqual(count, 1)
-
-    # --- response shape ---
-
-    def test_post_returns_200(self):
-        self._set_admin_session()
-
-        response = self.client.post(self.url(1))
-
-        self.assertEqual(response.status_code, 200)
-
-    def test_response_contains_condition_value(self):
-        """The rendered partial should mention the new condition."""
-        StintAssignment.objects.create(
-            event=self.event, stint_number=1, condition='dry'
-        )
-        self._set_admin_session()
-
-        response = self.client.post(self.url(1))
-
-        # After cycling dry the condition becomes mixed.
-        self.assertContains(response, 'mixed')
-
-    def test_cycling_is_isolated_per_stint_number(self):
-        """Cycling stint 1 must not affect stint 2."""
-        StintAssignment.objects.create(
-            event=self.event, stint_number=1, condition='dry'
-        )
-        StintAssignment.objects.create(
-            event=self.event, stint_number=2, condition='wet'
-        )
-        self._set_admin_session()
-
-        self.client.post(self.url(1))
-
-        stint2 = StintAssignment.objects.get(event=self.event, stint_number=2)
-        self.assertEqual(stint2.condition, 'wet')
-
-
-# ---------------------------------------------------------------------------
-# admin_save_assignments — condition preservation
+# admin_save_assignments — condition persistence
 # ---------------------------------------------------------------------------
 
 class AdminSaveAssignmentsConditionTests(TestCase):
@@ -5747,9 +5590,15 @@ class AdminSaveAssignmentsConditionTests(TestCase):
         session[f'admin_{self.event.id}'] = True
         session.save()
 
-    def _post_assignment(self, stint_to_driver_map):
-        """POST save-assignments with a {stint_number: driver_id_str} mapping."""
+    def _post_assignment(self, stint_to_driver_map, conditions=None):
+        """POST save-assignments with a {stint_number: driver_id_str} mapping.
+
+        Pass conditions={stint_number: 'dry'|'mixed'|'wet'} to include
+        condition_N fields, mirroring what the Alpine form always sends.
+        """
         data = {f'stint_{n}': str(d_id) for n, d_id in stint_to_driver_map.items()}
+        if conditions:
+            data.update({f'condition_{n}': c for n, c in conditions.items()})
         return self.client.post(self.url, data)
 
     def test_pre_existing_wet_condition_is_preserved_after_save(self):
@@ -5761,8 +5610,8 @@ class AdminSaveAssignmentsConditionTests(TestCase):
         )
         self._set_admin_session()
 
-        # Re-save stint 1 with the same driver
-        self._post_assignment({1: self.driver.id})
+        # Alpine always POSTs the condition value — pass it explicitly
+        self._post_assignment({1: self.driver.id}, conditions={1: 'wet'})
 
         sa = StintAssignment.objects.get(event=self.event, stint_number=1)
         self.assertEqual(sa.condition, 'wet')
@@ -5776,42 +5625,47 @@ class AdminSaveAssignmentsConditionTests(TestCase):
         )
         self._set_admin_session()
 
-        self._post_assignment({2: self.driver.id})
+        self._post_assignment({2: self.driver.id}, conditions={2: 'mixed'})
 
         sa = StintAssignment.objects.get(event=self.event, stint_number=2)
         self.assertEqual(sa.condition, 'mixed')
 
     def test_new_stint_with_no_prior_assignment_defaults_to_dry(self):
-        """A stint that never had an assignment should receive condition='dry'."""
+        """A stint with no condition_N in POST falls back to 'dry'."""
         self._set_admin_session()
 
-        # Post with no pre-existing assignment for stint 1
+        # Omit conditions to exercise the missing-key fallback
         self._post_assignment({1: self.driver.id})
 
         sa = StintAssignment.objects.get(event=self.event, stint_number=1)
         self.assertEqual(sa.condition, 'dry')
 
     def test_conditions_preserved_across_all_stints_simultaneously(self):
-        """Saving all stints at once preserves each stint's individual condition."""
-        from .utils import total_stints
-        n_stints = total_stints(self.event)
-
-        # Create a wet assignment on stint 1 and a mixed on stint 2
-        StintAssignment.objects.create(
-            event=self.event, stint_number=1, condition='wet'
-        )
-        StintAssignment.objects.create(
-            event=self.event, stint_number=2, condition='mixed'
-        )
+        """Saving all stints at once writes each stint's individual condition."""
         self._set_admin_session()
 
-        # Save with driver assigned only to stint 1
-        self._post_assignment({1: self.driver.id})
+        self._post_assignment(
+            {1: self.driver.id},
+            conditions={1: 'wet', 2: 'mixed'},
+        )
 
         sa1 = StintAssignment.objects.get(event=self.event, stint_number=1)
         sa2 = StintAssignment.objects.get(event=self.event, stint_number=2)
         self.assertEqual(sa1.condition, 'wet')
         self.assertEqual(sa2.condition, 'mixed')
+
+    def test_invalid_condition_value_falls_back_to_dry(self):
+        """An invalid condition_N value must be rejected and fall back to dry."""
+        self._set_admin_session()
+
+        data = {
+            'stint_1': str(self.driver.id),
+            'condition_1': 'sideways',
+        }
+        self.client.post(self.url, data)
+
+        sa = StintAssignment.objects.get(event=self.event, stint_number=1)
+        self.assertEqual(sa.condition, 'dry')
 
     def test_save_without_admin_session_returns_403(self):
         response = self._post_assignment({1: self.driver.id})
@@ -5835,8 +5689,8 @@ class AdminSaveAssignmentsConditionTests(TestCase):
         )
         self._set_admin_session()
 
-        # Reassign stint 1 from Alice to Bob
-        self._post_assignment({1: driver2.id})
+        # Alpine sends the current condition alongside the new driver
+        self._post_assignment({1: driver2.id}, conditions={1: 'wet'})
 
         sa = StintAssignment.objects.get(event=self.event, stint_number=1)
         self.assertEqual(sa.condition, 'wet')

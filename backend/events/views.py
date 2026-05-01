@@ -23,6 +23,7 @@ from django.conf import settings as django_settings
 from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .utils import (
     build_stint_availability_matrix,
+    format_stint_duration,
     get_availability_slots,
     get_stint_windows,
     laps_remaining_after_stint,
@@ -32,6 +33,8 @@ from .utils import (
     total_stints,
     validate_stint_sanity,
 )
+
+VALID_CONDITIONS = {c[0] for c in StintAssignment.CONDITION_CHOICES}
 
 CURATED_TIMEZONES = [
     {
@@ -582,6 +585,8 @@ def view_event(request, event_id):
             'start_utc': sw['start_utc'],
             'end_utc': sw['end_utc'],
             'driver': assignments.get(n),
+            'duration_display': format_stint_duration(sw['duration_seconds']),
+            'is_last': sw['is_last'],
         })
 
     total_stints_count = total_stints(event) if event.has_required_stint_fields else 0
@@ -593,10 +598,11 @@ def view_event(request, event_id):
             'start_utc': normalize_iso(row['start_utc']),
             'end_utc': normalize_iso(row['end_utc']),
             'driver_name': row['driver'].name if row['driver'] else None,
-            'is_last_stint': row['stint_number'] == total_stints_count,
+            'duration_display': row['duration_display'],
+            'is_last_stint': row['is_last'],
             'laps_remaining': (
                 None
-                if row['stint_number'] == total_stints_count
+                if row['is_last']
                 else laps_remaining_after_stint(event, row['stint_number'])
             ),
             'condition': conditions_map.get(row['stint_number'], 'dry'),
@@ -630,8 +636,14 @@ def view_event(request, event_id):
             f"{sl_mins}m {sl_secs}s" if sl_secs
             else f"{sl_mins}m"
         )
+        if event.avg_lap_seconds:
+            avg = int(round(event.avg_lap_seconds))
+            target_lap_time = f"{avg // 60}:{avg % 60:02d}"
+        else:
+            target_lap_time = None
     else:
         stint_duration_display = None
+        target_lap_time = None
 
     # Driver stint counts for summary pills
     driver_counts = Counter()
@@ -639,6 +651,12 @@ def view_event(request, event_id):
         if row['driver']:
             driver_counts[row['driver'].name] += 1
     driver_counts = dict(driver_counts)
+
+    max_laps_on_fuel = (
+        int(event.fuel_capacity / event.fuel_per_lap)
+        if event.has_required_stint_fields and event.fuel_capacity and event.fuel_per_lap
+        else None
+    )
 
     return render(request, 'view.html', {
         'event': event,
@@ -652,6 +670,9 @@ def view_event(request, event_id):
         'user_driver': user_driver,
         'show_signup_link': request.GET.get('from') == 'recruiting',
         'stint_duration_display': stint_duration_display,
+        'target_lap_time': target_lap_time,
+        'total_stints_display': total_stints_count if event.has_required_stint_fields else None,
+        'max_laps_on_fuel': max_laps_on_fuel,
         'driver_counts': driver_counts,
         'total_race_laps': event_total_race_laps,
         'has_separate_race_start': bool(event.race_start_time_utc),
@@ -938,15 +959,12 @@ def _build_admin_context(request, event):
             for driver in drivers
         }
 
-    if has_required_stint_fields:
-        sl = stint_length_seconds(event)
-        sl_mins = int(sl // 60)
-        sl_secs = int(sl % 60)
-        stint_duration_display = f"{sl_mins}m {sl_secs}s" if sl_secs else f"{sl_mins}m"
-    else:
-        stint_duration_display = None
-
     _total_stints_count = total_stints(event) if has_required_stint_fields else 0
+
+    stint_duration_map = {
+        sw['stint_number']: format_stint_duration(sw['duration_seconds'])
+        for sw in stint_windows
+    } if stint_windows else {}
 
     return {
         'event': event,
@@ -968,20 +986,21 @@ def _build_admin_context(request, event):
         'has_required_stint_fields': has_required_stint_fields,
         'stint_windows': stint_windows,
         'stint_availability': stint_availability_matrix,
-        'stint_duration_display': stint_duration_display,
+        'stint_duration_map': stint_duration_map,
         'stint_windows_json': _safe_json([{
             'stint_number': sw['stint_number'],
             'start_utc': normalize_iso(sw['start_utc']),
             'end_utc': normalize_iso(sw['end_utc']),
-            'is_last_stint': sw['stint_number'] == _total_stints_count,
+            'is_last_stint': sw['is_last'],
             'laps_remaining': (
                 None
-                if sw['stint_number'] == _total_stints_count
+                if sw['is_last']
                 else laps_remaining_after_stint(event, sw['stint_number'])
             ),
         } for sw in stint_windows]),
         'conditions': conditions,
         'existing_assignments_json': _safe_json({str(k): str(v) for k, v in existing_assignments.items()}),
+        'existing_conditions_json': _safe_json({str(k): v for k, v in conditions.items()}),
         'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name} for d in drivers]),
         'availability_json': _safe_json(availability_json),
         'has_assignments': StintAssignment.objects.filter(event=event).exists(),
@@ -1297,37 +1316,6 @@ def admin_save_calc(request, event_id):
     return response
 
 
-CONDITION_CYCLE = ['dry', 'mixed', 'wet']
-
-
-def cycle_condition(request, event_id, stint_number):
-    """
-    POST only. Cycles condition on a StintAssignment: dry → mixed → wet → dry.
-    Creates the assignment with driver=None if none exists yet.
-    Requires admin session. Returns the updated button partial for HTMX outerHTML swap.
-    """
-    if request.method != 'POST':
-        return HttpResponseNotAllowed(['POST'])
-
-    event = require_admin_session(request, event_id)
-
-    assignment, _ = StintAssignment.objects.get_or_create(
-        event=event,
-        stint_number=stint_number,
-        defaults={'driver': None, 'condition': 'dry'},
-    )
-
-    current = assignment.condition if assignment.condition in CONDITION_CYCLE else 'dry'
-    assignment.condition = CONDITION_CYCLE[(CONDITION_CYCLE.index(current) + 1) % len(CONDITION_CYCLE)]
-    assignment.save(update_fields=['condition'])
-
-    return render(request, 'partials/condition_cycle_btn.html', {
-        'event': event,
-        'stint_number': stint_number,
-        'condition': assignment.condition,
-    })
-
-
 def create_stints_redirect(request, event_id):
     """Stub — stint assignment is now on the admin dashboard."""
     event = require_admin_session(request, event_id)
@@ -1358,18 +1346,13 @@ def admin_delete_event(request, event_id):
 
 
 def admin_save_assignments(request, event_id):
-    """POST. Saves all stint driver assignments at once."""
-    event = require_admin_session(request, event_id)
+    """POST. Saves all stint driver assignments and conditions at once."""
     if request.method != 'POST':
-        return HttpResponseBadRequest()
+        return HttpResponseNotAllowed(['POST'])
+    event = require_admin_session(request, event_id)
 
     if not event.has_required_stint_fields:
         return HttpResponseBadRequest()
-
-    existing_conditions = {
-        sa.stint_number: sa.condition
-        for sa in StintAssignment.objects.filter(event=event)
-    }
 
     stint_windows = get_stint_windows(event)
 
@@ -1386,12 +1369,14 @@ def admin_save_assignments(request, event_id):
                     "admin_save_assignments: driver_id %r not found for event %s — stint %d unassigned",
                     driver_id, event_id, n,
                 )
+        raw_condition = request.POST.get(f'condition_{n}', '').strip()
+        condition = raw_condition if raw_condition in VALID_CONDITIONS else 'dry'
         assignments_to_create.append(
             StintAssignment(
                 event=event,
                 stint_number=n,
                 driver=driver,
-                condition=existing_conditions.get(n, 'dry'),
+                condition=condition,
             )
         )
 

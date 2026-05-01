@@ -51,6 +51,7 @@
       fuelBurn:     initial.fuelBurn     || 0,
       raceSeconds:  initial.raceSeconds  || 0,
       hasAssignments: initial.hasAssignments || false,
+      recalculating: false,
 
       targetLapsRaw:   String(initial.targetLaps   || ''),
       fuelCapacityRaw: String(initial.fuelCapacity || ''),
@@ -86,6 +87,20 @@
         this.targetLapsRaw   = String(this.savedTargetLaps   || '');
         this.fuelCapacityRaw = String(this.savedFuelCapacity || '');
         this.fuelBurnRaw     = String(this.savedFuelBurn     || '');
+      },
+
+      async recalculateWithFeedback() {
+        this.recalculating = true;
+        // Yield to browser for one paint so Alpine re-renders the button
+        // before the synchronous form submission blocks the main thread
+        await new Promise(resolve => setTimeout(resolve, 30));
+        const form = document.getElementById('calc-form');
+        const self = this;
+        form.addEventListener('htmx:afterSettle', function once() {
+          setTimeout(() => { self.recalculating = false; }, 400);
+          form.removeEventListener('htmx:afterSettle', once);
+        });
+        form.requestSubmit();
       },
 
       parseMMSS(val) {
@@ -366,7 +381,8 @@
 
   <div id="admin-calc-errors"></div>
 
-  <form hx-post="{% url 'admin_save_calc' event.id %}"
+  <form id="calc-form"
+        hx-post="{% url 'admin_save_calc' event.id %}"
         hx-target="#admin-calc-errors"
         hx-swap="innerHTML">
     {% csrf_token %}
@@ -483,7 +499,7 @@
       <div class="stat-card accent">
         <span class="stat-label">Stint duration</span>
         <span class="stat-value" x-text="stintDurationDisplay"></span>
-        <span class="stat-unit">inc. in/out laps</span>
+        <span class="stat-unit">standard stint · last may vary</span>
       </div>
 
       <div class="stat-card">
@@ -546,14 +562,18 @@
     </template>
 
     <div class="details-actions">
-      <button type="submit"
-              id="recalcBtn"
+      <button type="button"
               class="btn-primary"
-              hx-disabled-elt="this"
-              style="min-width: 160px; justify-content: center; position: relative;"
-              :style="showRebuildWarning ? 'outline: 1px solid var(--primary); outline-offset: 2px;' : ''">
-        <span class="recalc-label">Recalculate</span>
-        <span class="recalc-loading" style="display: none;">Recalculating...</span>
+              :disabled="recalculating"
+              style="min-width: 160px; justify-content: center;"
+              :style="recalculating
+                ? 'opacity: 0.75; cursor: wait;'
+                : showRebuildWarning
+                  ? 'outline: 1px solid var(--primary); outline-offset: 2px;'
+                  : ''"
+              @click="recalculateWithFeedback()">
+        <span x-show="!recalculating">Recalculate</span>
+        <span x-show="recalculating">Recalculating...</span>
       </button>
       <button type="button" class="btn-ghost" @click="reset()">Reset</button>
     </div>
@@ -744,6 +764,7 @@
     {% csrf_token %}
     {% for sw in stint_windows %}
     <input type="hidden" name="stint_{{ sw.stint_number }}" :value="assignments[{{ sw.stint_number }}] || ''">
+    <input type="hidden" name="condition_{{ sw.stint_number }}" :value="conditions[{{ sw.stint_number }}] || 'dry'">
     {% endfor %}
 
     <div class="table-wrapper" style="overflow-x: auto; overflow-y: visible;">
@@ -793,7 +814,11 @@
               data-stint="{{ sw.stint_number }}">
             <td class="s-num">#{{ sw.stint_number }}</td>
             <td class="s-time">{{ sw.start_local }}</td>
-            <td class="s-dur">{{ stint_duration_display }}</td>
+            <td class="s-dur">
+              {% with dur=stint_duration_map|dict_get:sw.stint_number %}
+                {{ dur|default:"—" }}
+              {% endwith %}
+            </td>
             <td class="s-laps"
                 :title="lapsDisplay({{ sw.stint_number }}) === 'FINISH'
                   ? 'Final stint — ends at the checkered flag'
@@ -869,7 +894,13 @@
             </td>
             <td class="s-condition">
               {% with cond=conditions|dict_get:sw.stint_number|default:"dry" %}
-              {% include 'partials/condition_cycle_btn.html' with event=event stint_number=sw.stint_number condition=cond only %}
+              <select class="condition-select condition-{{ cond }}"
+                      :class="'condition-' + (conditions[{{ sw.stint_number }}] || 'dry')"
+                      @change="setCondition({{ sw.stint_number }}, $event.target.value)">
+                <option value="dry"   {% if cond == 'dry' %}selected{% endif %}   :selected="(conditions[{{ sw.stint_number }}] || 'dry') === 'dry'">○ Dry</option>
+                <option value="mixed" {% if cond == 'mixed' %}selected{% endif %} :selected="(conditions[{{ sw.stint_number }}] || 'dry') === 'mixed'">◑ Mixed</option>
+                <option value="wet"   {% if cond == 'wet' %}selected{% endif %}   :selected="(conditions[{{ sw.stint_number }}] || 'dry') === 'wet'">⛆ Wet</option>
+              </select>
               {% endwith %}
             </td>
             <td class="avail-divider"></td>
@@ -1157,6 +1188,7 @@
   const availabilityData  = {{ availability_json|safe }};
   const stintAvailability = {{ stint_availability_json|safe }};
   const existingAssignments = {{ existing_assignments_json|safe }};
+  const existingConditionsData = {{ existing_conditions_json|safe }};
   const driversData       = {{ drivers_json|safe }};
   // Session start (not race start) — availability slots are always anchored here
   const sessionStartUtc = '{{ event.start_datetime_utc|to_utc_z }}';
@@ -1245,6 +1277,7 @@
   function stintPlanner(adminTz) {
     return {
       assignments: {},
+      conditions:  {},
       isDirty: false,
       saveState: 'idle',
       showSavedBadge: false,
@@ -1253,6 +1286,7 @@
         stintWindows.forEach(sw => {
           const n = sw.stint_number;
           this.assignments[n] = existingAssignments[String(n)] || '';
+          this.conditions[n]  = existingConditionsData[String(n)] || 'dry';
         });
         this.isDirty = false;
         window.addEventListener('driver-selected', (e) => {
@@ -1262,6 +1296,11 @@
 
       assignDriver(stintNumber, driverId) {
         this.assignments[stintNumber] = driverId || '';
+        this.isDirty = true;
+      },
+
+      setCondition(stintNumber, condition) {
+        this.conditions[stintNumber] = condition;
         this.isDirty = true;
       },
 

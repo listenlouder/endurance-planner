@@ -5,11 +5,6 @@
 
 {% block extra_head %}
 <style>
-  .event-meta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-  }
   .schedule-section {
     animation: fadeUp 0.6s 0.15s var(--ease) both;
   }
@@ -67,110 +62,162 @@
 <section class="page-header">
   <div class="page-eyebrow">View Event</div>
   <h1 class="page-title">{{ event.name }}</h1>
-  <!-- Meta pills row -->
-  <div class="event-meta-row" style="margin-top: 24px;">
 
-    {% if event.team_name %}
-    <div class="meta-pill">
-      <span class="meta-pill-label">Team</span>
-      <span class="meta-pill-value">{{ event.team_name }}</span>
-    </div>
-    {% endif %}
+  <!-- ============================================================
+       EVENT INFO SECTION
+  ============================================================ -->
+  <div style="margin-top: 28px;">
 
-    <div class="meta-pill">
-      <span class="meta-pill-label">Date</span>
-      <span class="meta-pill-value">
-        {{ event.date|date:"j M Y" }}
-      </span>
+    <div class="section-heading" style="margin-bottom: 12px;">
+      Event Info
     </div>
 
-    <!-- Session start time — Alpine renders in local tz -->
-    <div class="meta-pill"
-         x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
-      <span class="meta-pill-label">
-        {% if has_separate_race_start %}Session start{% else %}Start time{% endif %}
-      </span>
-      <span class="meta-pill-value accent"
-            x-text="new Date('{{ event.start_datetime_utc|to_utc_z }}')
-              .toLocaleTimeString('en-US', {
-                timeZone: tz,
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false
-              }) + ' ' +
-              new Intl.DateTimeFormat('en', {
-                timeZoneName: 'short', timeZone: tz
-              }).formatToParts(
-                new Date('{{ event.start_datetime_utc|to_utc_z }}')
-              ).find(p => p.type === 'timeZoneName')?.value">
-        {{ event.start_time_utc|time:"H:i" }} UTC
-      </span>
-    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 2px;">
 
-    <!-- Race start pill — only when a separate race start is set -->
-    {% if has_separate_race_start %}
-    <div class="meta-pill"
-         x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
-      <span class="meta-pill-label">Race start</span>
-      <span class="meta-pill-value accent"
-            x-text="new Date('{{ effective_start_datetime_utc|to_utc_z }}')
-              .toLocaleTimeString('en-US', {
-                timeZone: tz,
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false
-              }) + ' ' +
-              new Intl.DateTimeFormat('en', {
-                timeZoneName: 'short', timeZone: tz
-              }).formatToParts(
-                new Date('{{ effective_start_datetime_utc|to_utc_z }}')
-              ).find(p => p.type === 'timeZoneName')?.value">
-        {{ event.race_start_time_utc|time:"H:i" }} UTC
-      </span>
-    </div>
-    {% endif %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Date</span>
+        <span class="meta-pill-value">{{ event.date|date:"j M Y" }}</span>
+      </div>
 
-    <div class="meta-pill">
-      <span class="meta-pill-label">Duration</span>
-      <span class="meta-pill-value">{{ length_display }}</span>
-    </div>
+      <div class="meta-pill"
+           x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+        <span class="meta-pill-label">
+          {% if has_separate_race_start %}Session start{% else %}Start time{% endif %}
+        </span>
+        <span class="meta-pill-value accent"
+              x-text="new Date('{{ event.start_datetime_utc|to_utc_z }}')
+                .toLocaleTimeString('en-US', {
+                  timeZone: tz,
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false
+                }) + ' ' +
+                new Intl.DateTimeFormat('en', {
+                  timeZoneName: 'short', timeZone: tz
+                }).formatToParts(
+                  new Date('{{ event.start_datetime_utc|to_utc_z }}')
+                ).find(p => p.type === 'timeZoneName')?.value">
+          {{ event.start_time_utc|time:"H:i" }} UTC
+        </span>
+      </div>
 
-    {% if total_race_laps %}
-    <div class="meta-pill">
-      <span class="meta-pill-label">Est. laps</span>
-      <span class="meta-pill-value">~{{ total_race_laps }}</span>
-    </div>
-    {% endif %}
+      {% if has_separate_race_start %}
+      <div class="meta-pill"
+           x-data="{ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }">
+        <span class="meta-pill-label">Race start</span>
+        <span class="meta-pill-value accent"
+              x-text="new Date('{{ effective_start_datetime_utc|to_utc_z }}')
+                .toLocaleTimeString('en-US', {
+                  timeZone: tz,
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false
+                }) + ' ' +
+                new Intl.DateTimeFormat('en', {
+                  timeZoneName: 'short', timeZone: tz
+                }).formatToParts(
+                  new Date('{{ effective_start_datetime_utc|to_utc_z }}')
+                ).find(p => p.type === 'timeZoneName')?.value">
+          {{ event.race_start_time_utc|time:"H:i" }} UTC
+        </span>
+      </div>
+      {% endif %}
 
-    {% if event.game %}
-    <div class="meta-pill">
-      <span class="meta-pill-label">Game</span>
-      <span class="meta-pill-value">{{ event.game }}</span>
-    </div>
-    {% endif %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Duration</span>
+        <span class="meta-pill-value">{{ length_display }}</span>
+      </div>
 
-    {% if event.car %}
-    <div class="meta-pill">
-      <span class="meta-pill-label">Car</span>
-      <span class="meta-pill-value">{{ event.car }}</span>
-    </div>
-    {% endif %}
+      {% if event.team_name %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Team</span>
+        <span class="meta-pill-value">{{ event.team_name }}</span>
+      </div>
+      {% endif %}
 
-    {% if event.track %}
-    <div class="meta-pill">
-      <span class="meta-pill-label">Track</span>
-      <span class="meta-pill-value">{{ event.track }}</span>
-    </div>
-    {% endif %}
+      {% if event.game %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Game</span>
+        <span class="meta-pill-value">{{ event.game }}</span>
+      </div>
+      {% endif %}
 
-    {% if event.setup %}
-    <div class="meta-pill">
-      <span class="meta-pill-label">Setup</span>
-      <span class="meta-pill-value">{{ event.setup }}</span>
-    </div>
-    {% endif %}
+      {% if event.car %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Car</span>
+        <span class="meta-pill-value">{{ event.car }}</span>
+      </div>
+      {% endif %}
 
+      {% if event.track %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Track</span>
+        <span class="meta-pill-value">{{ event.track }}</span>
+      </div>
+      {% endif %}
+
+      {% if event.setup %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Setup</span>
+        <span class="meta-pill-value">{{ event.setup }}</span>
+      </div>
+      {% endif %}
+
+    </div>
   </div>
+
+  <!-- ============================================================
+       STINT DETAILS SECTION
+       Only shown when stint fields are configured
+  ============================================================ -->
+  {% if stint_duration_display or total_stints_display %}
+  <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border);">
+
+    <div class="section-heading" style="margin-bottom: 12px;">
+      Stint Details
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 2px;">
+
+      {% if total_stints_display %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Total stints</span>
+        <span class="meta-pill-value accent">{{ total_stints_display }}</span>
+      </div>
+      {% endif %}
+
+      {% if stint_duration_display %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Stint duration</span>
+        <span class="meta-pill-value">{{ stint_duration_display }}</span>
+      </div>
+      {% endif %}
+
+      {% if target_lap_time %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Target lap time</span>
+        <span class="meta-pill-value">{{ target_lap_time }}</span>
+      </div>
+      {% endif %}
+
+      {% if max_laps_on_fuel %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Max laps on fuel</span>
+        <span class="meta-pill-value">{{ max_laps_on_fuel }}</span>
+      </div>
+      {% endif %}
+
+      {% if total_race_laps %}
+      <div class="meta-pill">
+        <span class="meta-pill-label">Est. laps</span>
+        <span class="meta-pill-value">~{{ total_race_laps }}</span>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+  {% endif %}
+
 </section>
 
 <!-- ============================================================
@@ -367,7 +414,7 @@
                            font-size: 10px;
                            color: var(--text-dim);
                            width: 22%;">
-                  {{ stint_duration_display|default:"—" }}
+                  <span x-text="row.duration_display || '—'"></span>
                 </td>
                 <td style="padding: 8px 14px;
                            text-align: center;

@@ -20,7 +20,6 @@ urlpatterns = [
     path('<uuid:event_id>/admin/save-details/', views.admin_save_details, name='admin_save_details'),
     path('<uuid:event_id>/admin/save-calc/', views.admin_save_calc, name='admin_save_calc'),
     path('<uuid:event_id>/admin/save-assignments/', views.admin_save_assignments, name='admin_save_assignments'),
-    path('<uuid:event_id>/admin/stints/<int:stint_number>/cycle-condition/', views.cycle_condition, name='cycle_condition'),
     path('<uuid:event_id>/admin/delete-event/', views.admin_delete_event, name='admin_delete_event'),
     path('<uuid:event_id>/admin/', views.admin_dashboard, name='admin_dashboard'),
     path('<uuid:event_id>/my-availability/', views.my_availability, name='my_availability'),
