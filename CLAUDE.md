@@ -609,3 +609,11 @@ the Discord-authenticated owner of the driver record, or
 event. CSRF protection alone is insufficient for destructive
 endpoints since CSRF tokens are freely available from any
 page on the site.
+
+**Live stint time editing — open to Discord users (known)**
+Any Discord-authenticated user can edit stint start times
+on the view event page via the set-start / reset-start
+endpoints. This is intentional for Phase 1 — the tool is
+used by good-faith team members. No event ownership or
+admin session is required. Noted for future tightening if
+abuse occurs.

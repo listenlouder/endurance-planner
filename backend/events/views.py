@@ -12,7 +12,7 @@ from django.db import transaction
 from django.db.models import Count, Q, Subquery, OuterRef
 
 logger = logging.getLogger(__name__)
-from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -568,25 +568,45 @@ def view_event(request, event_id):
     """Public view-only page. No authentication required."""
     event = get_object_or_404(Event, id=event_id)
 
+    assignment_objs = {
+        sa.stint_number: sa
+        for sa in StintAssignment.objects.filter(event=event).select_related('driver')
+    }
+
     if event.has_required_stint_fields:
-        stint_windows = get_stint_windows(event)
+        stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs)
     else:
         stint_windows = []
 
-    sa_list = list(StintAssignment.objects.filter(event=event).select_related('driver'))
-    assignments = {sa.stint_number: sa.driver for sa in sa_list}
-    conditions_map = {sa.stint_number: sa.condition for sa in sa_list}
+    # Only load driver availability when there are overrides (conflict detection)
+    driver_availability = {}
+    if any(sa.actual_start_utc for sa in assignment_objs.values()):
+        for d in Driver.objects.filter(event=event).prefetch_related('availability'):
+            driver_availability[d.id] = {a.slot_utc for a in d.availability.all()}
 
     stint_rows = []
     for sw in stint_windows:
         n = sw['stint_number']
+        sa = assignment_objs.get(n)
+        driver = sa.driver if sa else None
+
+        has_conflict = False
+        if driver and sw.get('is_overridden'):
+            start_utc = sw['start_utc']
+            slot_minute = (start_utc.minute // 30) * 30
+            slot_key = start_utc.replace(minute=slot_minute, second=0, microsecond=0).astimezone(dt_utc.utc)
+            has_conflict = slot_key not in driver_availability.get(driver.id, set())
+
         stint_rows.append({
-            'stint_number': n,
-            'start_utc': sw['start_utc'],
-            'end_utc': sw['end_utc'],
-            'driver': assignments.get(n),
+            'stint_number':     n,
+            'start_utc':        sw['start_utc'],
+            'end_utc':          sw['end_utc'],
+            'driver':           driver,
             'duration_display': format_stint_duration(sw['duration_seconds']),
-            'is_last': sw['is_last'],
+            'is_last':          sw['is_last'],
+            'is_overridden':    sw.get('is_overridden', False),
+            'has_conflict':     has_conflict,
+            'condition':        sa.condition if sa else 'dry',
         })
 
     total_stints_count = total_stints(event) if event.has_required_stint_fields else 0
@@ -594,18 +614,20 @@ def view_event(request, event_id):
 
     stint_rows_json = _safe_json([
         {
-            'stint_number': row['stint_number'],
-            'start_utc': normalize_iso(row['start_utc']),
-            'end_utc': normalize_iso(row['end_utc']),
-            'driver_name': row['driver'].name if row['driver'] else None,
+            'stint_number':     row['stint_number'],
+            'start_utc':        normalize_iso(row['start_utc']),
+            'end_utc':          normalize_iso(row['end_utc']),
+            'driver_name':      row['driver'].name if row['driver'] else None,
             'duration_display': row['duration_display'],
-            'is_last_stint': row['is_last'],
-            'laps_remaining': (
+            'is_last_stint':    row['is_last'],
+            'laps_remaining':   (
                 None
                 if row['is_last']
                 else laps_remaining_after_stint(event, row['stint_number'])
             ),
-            'condition': conditions_map.get(row['stint_number'], 'dry'),
+            'condition':        row['condition'],
+            'is_overridden':    row['is_overridden'],
+            'has_conflict':     row['has_conflict'],
         }
         for row in stint_rows
     ])
@@ -629,13 +651,7 @@ def view_event(request, event_id):
 
     # Stint duration display
     if event.has_required_stint_fields:
-        sl = stint_length_seconds(event)
-        sl_mins = int(sl // 60)
-        sl_secs = int(sl % 60)
-        stint_duration_display = (
-            f"{sl_mins}m {sl_secs}s" if sl_secs
-            else f"{sl_mins}m"
-        )
+        stint_duration_display = format_stint_duration(stint_length_seconds(event))
         if event.avg_lap_seconds:
             avg = int(round(event.avg_lap_seconds))
             target_lap_time = f"{avg // 60}:{avg % 60:02d}"
@@ -662,8 +678,9 @@ def view_event(request, event_id):
         'event': event,
         'stint_rows': stint_rows,
         'stint_rows_json': stint_rows_json,
-        'has_stints': bool(assignments),
+        'has_stints': bool(assignment_objs),
         'stints_ready': event.has_required_stint_fields,
+        'can_edit_stints': request.user.is_authenticated,
         'length_hours_display': lh_display,
         'length_display': length_display,
         'has_unassigned': has_unassigned,
@@ -678,6 +695,111 @@ def view_event(request, event_id):
         'has_separate_race_start': bool(event.race_start_time_utc),
         'effective_start_datetime_utc': event.effective_start_datetime_utc,
     })
+
+
+# ---------------------------------------------------------------------------
+# Live stint time editing
+# ---------------------------------------------------------------------------
+
+def _build_stint_rows_response(request, event):
+    """
+    Recomputes stint windows with current overrides and returns updated
+    stint_rows JSON. Used by set_stint_start and reset_stint_start.
+    """
+    assignment_objs = {
+        sa.stint_number: sa
+        for sa in StintAssignment.objects.filter(event=event).select_related('driver')
+    }
+
+    driver_availability = {}
+    if any(sa.actual_start_utc for sa in assignment_objs.values()):
+        for d in Driver.objects.filter(event=event).prefetch_related('availability'):
+            driver_availability[d.id] = {a.slot_utc for a in d.availability.all()}
+
+    stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs)
+
+    rows = []
+    for sw in stint_windows:
+        n = sw['stint_number']
+        sa = assignment_objs.get(n)
+        driver = sa.driver if sa else None
+
+        has_conflict = False
+        if driver and sw.get('is_overridden'):
+            start_utc = sw['start_utc']
+            slot_minute = (start_utc.minute // 30) * 30
+            slot_key = start_utc.replace(minute=slot_minute, second=0, microsecond=0).astimezone(dt_utc.utc)
+            has_conflict = slot_key not in driver_availability.get(driver.id, set())
+
+        rows.append({
+            'stint_number':     n,
+            'start_utc':        normalize_iso(sw['start_utc']),
+            'end_utc':          normalize_iso(sw['end_utc']),
+            'driver_name':      driver.name if driver else None,
+            'duration_display': format_stint_duration(sw['duration_seconds']),
+            'laps_remaining':   (
+                None if sw['is_last']
+                else laps_remaining_after_stint(event, n)
+            ),
+            'is_last_stint':    sw['is_last'],
+            'is_overridden':    sw['is_overridden'],
+            'has_conflict':     has_conflict,
+            'condition':        sa.condition if sa else 'dry',
+        })
+
+    return JsonResponse({'stint_rows': rows})
+
+
+def set_stint_start(request, event_id, stint_number):
+    """POST. Sets actual_start_utc on a StintAssignment. Requires Discord auth."""
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+    if not request.user.is_authenticated:
+        return HttpResponseForbidden()
+
+    event = get_object_or_404(Event, id=event_id)
+    if not event.has_required_stint_fields:
+        return HttpResponseBadRequest('Stint fields not configured.')
+
+    raw = request.POST.get('actual_start_utc', '').strip()
+    if not raw:
+        return HttpResponseBadRequest('actual_start_utc is required.')
+
+    try:
+        parsed_dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if parsed_dt.tzinfo is None:
+            parsed_dt = parsed_dt.replace(tzinfo=dt_utc.utc)
+    except ValueError:
+        return HttpResponseBadRequest('Invalid datetime format.')
+
+    assignment, _ = StintAssignment.objects.get_or_create(
+        event=event,
+        stint_number=stint_number,
+        defaults={'driver': None, 'condition': 'dry'},
+    )
+    assignment.actual_start_utc = parsed_dt
+    assignment.save(update_fields=['actual_start_utc'])
+
+    return _build_stint_rows_response(request, event)
+
+
+def reset_stint_start(request, event_id, stint_number):
+    """POST. Clears actual_start_utc override. Requires Discord auth."""
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+    if not request.user.is_authenticated:
+        return HttpResponseForbidden()
+
+    event = get_object_or_404(Event, id=event_id)
+
+    try:
+        assignment = StintAssignment.objects.get(event=event, stint_number=stint_number)
+        assignment.actual_start_utc = None
+        assignment.save(update_fields=['actual_start_utc'])
+    except StintAssignment.DoesNotExist:
+        pass
+
+    return _build_stint_rows_response(request, event)
 
 
 # ---------------------------------------------------------------------------
@@ -940,11 +1062,12 @@ def _build_admin_context(request, event):
     availability_json = {}
 
     if has_required_stint_fields:
-        stint_windows = get_stint_windows(event)
+        all_sa = list(StintAssignment.objects.filter(event=event))
+        assignment_objs_for_windows = {sa.stint_number: sa for sa in all_sa}
+        stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs_for_windows)
         admin_tz_zone = ZoneInfo(admin_tz)
         for sw in stint_windows:
             sw['start_local'] = sw['start_utc'].astimezone(admin_tz_zone).strftime('%H:%M')
-        all_sa = list(StintAssignment.objects.filter(event=event))
         existing_assignments = {
             sa.stint_number: str(sa.driver_id)
             for sa in all_sa
@@ -1354,11 +1477,19 @@ def admin_save_assignments(request, event_id):
     if not event.has_required_stint_fields:
         return HttpResponseBadRequest()
 
+    # Preserve existing overrides (actual_start_utc) before bulk delete
+    existing = {
+        sa.stint_number: sa
+        for sa in StintAssignment.objects.filter(event=event)
+    }
+
     stint_windows = get_stint_windows(event)
 
     assignments_to_create = []
     for sw in stint_windows:
         n = sw['stint_number']
+        prior = existing.get(n)
+
         driver_id = request.POST.get(f'stint_{n}', '').strip()
         driver = None
         if driver_id:
@@ -1370,13 +1501,16 @@ def admin_save_assignments(request, event_id):
                     driver_id, event_id, n,
                 )
         raw_condition = request.POST.get(f'condition_{n}', '').strip()
-        condition = raw_condition if raw_condition in VALID_CONDITIONS else 'dry'
+        condition = raw_condition if raw_condition in VALID_CONDITIONS else (
+            prior.condition if prior else 'dry'
+        )
         assignments_to_create.append(
             StintAssignment(
                 event=event,
                 stint_number=n,
                 driver=driver,
                 condition=condition,
+                actual_start_utc=prior.actual_start_utc if prior else None,
             )
         )
 

@@ -291,10 +291,8 @@
     <span x-text="tz"></span>
   </div>
 
-  <!-- Stint table -->
-  <script>
-    const stintRows = {{ stint_rows_json|safe }};
-  </script>
+  <!-- Stint table data -->
+  <script id="stintRowsData" type="application/json">{{ stint_rows_json|safe }}</script>
 
   <div class="table-wrapper"
        style="overflow-x: auto;
@@ -330,7 +328,7 @@
                         background: var(--bg-raised);">
               Start time
             </th>
-            <th style="padding: 8px 16px;
+            <th style="padding: 8px 16px 8px 48px;
                         font-size: 10px;
                         letter-spacing: 0.15em;
                         text-transform: uppercase;
@@ -388,12 +386,14 @@
                              color: var(--text-dim);
                              background: var(--bg-raised);
                              border-bottom: 1px solid var(--border);">
-                    <span x-text="formatDate(row.start_utc, tz)"></span>
+                    <span x-text="formatDate(row.start_utc, userTz)"></span>
                   </td>
                 </tr>
               </template>
               <!-- Stint row -->
-              <tr>
+              <tr :class="row.is_overridden ? 'row-overridden' : ''">
+
+                <!-- # -->
                 <td style="padding: 10px 16px;
                            font-size: 10px;
                            color: var(--text-dim);
@@ -401,16 +401,146 @@
                            letter-spacing: 0.1em;"
                     x-text="'#' + row.stint_number">
                 </td>
-                <td style="padding: 10px 16px;
-                           font-size: 12px;
-                           color: var(--text);
-                           width: 30%;
-                           white-space: nowrap;">
-                  <span x-text="formatTime(row.start_utc, tz)"></span>
-                  <span style="font-size: 10px; color: var(--text-dim);"
-                        x-text="' ' + tzShort"></span>
+
+                <!-- Start time — display mode or edit input -->
+                <td style="padding: 8px 6px 8px 4px; font-size: 12px; width: 30%;">
+
+                  <!--
+                    IMPORTANT: x-show must NOT be on the same element as display:flex.
+                    Alpine's x-show calls el.style.removeProperty('display') when showing,
+                    which strips display:flex from the inline style, collapsing the row to
+                    display:block. Fix: put x-show on a plain wrapper div (toggles
+                    none/block, always safe), keep the flex container inner and untouched.
+
+                    Indicators use :style visibility (not x-show) so they always occupy
+                    space — keeping the time value at a fixed horizontal position.
+                  -->
+
+                  <!-- Display mode wrapper — Alpine toggles this, never touches the flex row -->
+                  <div x-show="editingStint !== row.stint_number">
+                    <div style="display: flex; align-items: center; gap: 4px; white-space: nowrap;">
+
+                      <!-- ⚠ conflict — invisible when not applicable, always in flow -->
+                      <span :style="row.has_conflict
+                                      ? 'color: #f59e0b; cursor: help;'
+                                      : 'visibility: hidden; pointer-events: none;'"
+                            style="font-size: 10px; flex-shrink: 0; line-height: 1;"
+                            :title="'⚠ ' + (row.driver_name || 'Driver') +
+                              ' may be outside their availability window for this adjusted start time.'">⚠</span>
+
+                      <!-- ✎ override — invisible when not applicable, always in flow -->
+                      <span :style="row.is_overridden
+                                      ? 'color: var(--primary);'
+                                      : 'visibility: hidden;'"
+                            style="font-size: 10px; flex-shrink: 0; line-height: 1;"
+                            title="Start time manually adjusted">✎</span>
+
+                      <!-- ↩ reset — invisible when not applicable, always in flow -->
+                      {% if can_edit_stints %}
+                      <button type="button"
+                              :style="row.is_overridden && editingStint === null
+                                        ? 'color: var(--text-dim);'
+                                        : 'visibility: hidden; pointer-events: none;'"
+                              @click="resetStint(row)"
+                              title="Reset to calculated time"
+                              style="background: transparent;
+                                     border: none;
+                                     font-family: 'DM Mono', monospace;
+                                     font-size: 10px;
+                                     padding: 0;
+                                     cursor: pointer;
+                                     line-height: 1;
+                                     flex-shrink: 0;
+                                     transition: color 0.15s;"
+                              onmouseenter="this.style.color='var(--danger)'"
+                              onmouseleave="this.style.color='var(--text-dim)'">↩</button>
+                      {% else %}
+                      <span style="display: inline-block; width: 10px; flex-shrink: 0;"></span>
+                      {% endif %}
+
+                      <!-- Time value -->
+                      <span x-text="formatTime(row.start_utc)"
+                            :style="row.is_overridden ? 'color: var(--primary);' : ''"
+                            style="font-size: 12px; font-weight: 600; flex-shrink: 0;"></span>
+
+                      <!-- Edit button -->
+                      {% if can_edit_stints %}
+                      <button type="button"
+                              x-show="editingStint === null"
+                              @click="startEdit(row)"
+                              style="background: transparent;
+                                     border: 1px solid var(--border-mid);
+                                     color: var(--text-dim);
+                                     font-family: 'DM Mono', monospace;
+                                     font-size: 9px;
+                                     letter-spacing: 0.08em;
+                                     text-transform: uppercase;
+                                     padding: 2px 6px;
+                                     margin-left: 4px;
+                                     cursor: pointer;
+                                     white-space: nowrap;
+                                     flex-shrink: 0;
+                                     transition: border-color 0.15s, color 0.15s;"
+                              onmouseenter="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'"
+                              onmouseleave="this.style.borderColor='var(--border-mid)';this.style.color='var(--text-dim)'">Edit</button>
+                      {% endif %}
+
+                    </div>
+                  </div>
+
+                  <!-- Edit mode wrapper — Alpine toggles this, never touches the flex row -->
+                  {% if can_edit_stints %}
+                  <div x-show="editingStint === row.stint_number">
+                    <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+                      <input type="time"
+                             :id="'edit-input-' + row.stint_number"
+                             x-model="editValue"
+                             @keydown.enter="saveEdit(row)"
+                             @keydown.escape="cancelEdit()"
+                             style="background: var(--bg);
+                                    border: 1px solid var(--primary);
+                                    color: var(--text);
+                                    font-family: 'DM Mono', monospace;
+                                    font-size: 12px;
+                                    padding: 3px 8px;
+                                    border-radius: 0;
+                                    outline: none;
+                                    width: 110px;
+                                    box-sizing: border-box;">
+                      <div style="display: flex; gap: 4px;">
+                        <button type="button"
+                                @click="saveEdit(row)"
+                                :disabled="saving"
+                                style="background: var(--primary);
+                                       border: none;
+                                       color: #fff;
+                                       font-family: 'DM Mono', monospace;
+                                       font-size: 9px;
+                                       letter-spacing: 0.08em;
+                                       text-transform: uppercase;
+                                       padding: 4px 8px;
+                                       cursor: pointer;
+                                       white-space: nowrap;"
+                                x-text="saving ? 'Saving...' : 'Set'"></button>
+                        <button type="button"
+                                @click="cancelEdit()"
+                                style="background: transparent;
+                                       border: none;
+                                       color: var(--text-dim);
+                                       font-family: 'DM Mono', monospace;
+                                       font-size: 9px;
+                                       letter-spacing: 0.08em;
+                                       text-transform: uppercase;
+                                       padding: 4px 6px;
+                                       cursor: pointer;">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                  {% endif %}
+
                 </td>
-                <td style="padding: 10px 16px;
+
+                <td style="padding: 10px 16px 10px 48px;
                            font-size: 10px;
                            color: var(--text-dim);
                            width: 22%;">
@@ -419,7 +549,8 @@
                 <td style="padding: 8px 14px;
                            text-align: center;
                            width: 90px;">
-                  <span x-html="conditionPill(row.condition)"></span>
+                  <span :class="row.condition === 'wet' ? 'condition-pill condition-wet' : row.condition === 'mixed' ? 'condition-pill condition-mixed' : ''"
+                        x-text="conditionPill(row.condition)"></span>
                 </td>
                 <td style="padding: 8px 14px;
                            text-align: center;
@@ -505,14 +636,7 @@
 
 {% block extra_js %}
 <script>
-  function formatTime(utcString, tz) {
-    return new Date(utcString).toLocaleTimeString('en-US', {
-      timeZone: tz,
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-  }
+  const eventId = '{{ event.id }}';
 
   function formatDate(utcString, tz) {
     return new Date(utcString).toLocaleDateString('en-US', {
@@ -529,32 +653,146 @@
 
   function stintTable() {
     return {
-      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      userTz: Intl.DateTimeFormat().resolvedOptions().timeZone,
       tzShort: '',
       stintRows: [],
+      editingStint: null,
+      editValue: '',
+      saving: false,
 
       init() {
-        this.stintRows = typeof stintRows !== 'undefined'
-          ? stintRows : [];
+        try {
+          this.stintRows = JSON.parse(
+            document.getElementById('stintRowsData').textContent
+          );
+        } catch(e) {
+          this.stintRows = [];
+        }
 
-        // Get short timezone name
         const eventDate = this.stintRows.length
           ? new Date(this.stintRows[0].start_utc)
           : new Date();
 
         this.tzShort = new Intl.DateTimeFormat('en', {
           timeZoneName: 'short',
-          timeZone: this.tz
+          timeZone: this.userTz
         }).formatToParts(eventDate)
           .find(p => p.type === 'timeZoneName')?.value
-          || this.tz;
+          || this.userTz;
+      },
+
+      formatTime(utcString) {
+        return new Date(utcString).toLocaleTimeString('en-US', {
+          timeZone: this.userTz,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+      },
+
+      localTimeToUtc(timeStr, referenceUtcStr) {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        const refDate = new Date(referenceUtcStr);
+        const localDateStr = refDate.toLocaleDateString('en-CA', {
+          timeZone: this.userTz
+        });
+        const localIso = `${localDateStr}T` +
+          String(hours).padStart(2, '0') + ':' +
+          String(minutes).padStart(2, '0') + ':00';
+        // Get the UTC offset for this timezone at the reference moment
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone: this.userTz,
+          timeZoneName: 'longOffset'
+        }).formatToParts(refDate);
+        const offsetPart = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT+0';
+        const m = offsetPart.match(/GMT([+-])(\d+):(\d+)/);
+        const offsetMinutes = m
+          ? (m[1] === '+' ? 1 : -1) * (parseInt(m[2]) * 60 + parseInt(m[3]))
+          : 0;
+        // Append Z so the naive datetime is parsed as UTC, not browser-local time.
+        // Then subtract the timezone offset once to get true UTC.
+        const localMs = new Date(localIso + 'Z').getTime();
+        return new Date(localMs - offsetMinutes * 60000).toISOString();
       },
 
       isNewDay(index) {
         if (index === 0) return false;
         const prev = this.stintRows[index - 1];
         const curr = this.stintRows[index];
-        return !isSameDay(prev.start_utc, curr.start_utc, this.tz);
+        return !isSameDay(prev.start_utc, curr.start_utc, this.userTz);
+      },
+
+      startEdit(row) {
+        this.editingStint = row.stint_number;
+        const d = new Date(row.start_utc);
+        // en-GB with hour12: false reliably gives zero-padded HH:MM in 24h
+        const localTimeStr = d.toLocaleTimeString('en-GB', {
+          timeZone: this.userTz,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+        this.editValue = localTimeStr.slice(0, 5);
+        this.$nextTick(() => {
+          const input = document.getElementById('edit-input-' + row.stint_number);
+          if (input) { input.focus(); input.select(); }
+        });
+      },
+
+      cancelEdit() {
+        this.editingStint = null;
+        this.editValue = '';
+      },
+
+      async saveEdit(row) {
+        if (!this.editValue) return;
+        this.saving = true;
+        try {
+          const utcIso = this.localTimeToUtc(this.editValue, row.start_utc);
+          const formData = new FormData();
+          formData.append('actual_start_utc', utcIso);
+          formData.append(
+            'csrfmiddlewaretoken',
+            document.cookie.split(';')
+              .find(c => c.trim().startsWith('csrftoken='))
+              ?.split('=')[1] || ''
+          );
+          const res = await fetch(
+            `/${eventId}/stints/${row.stint_number}/set-start/`,
+            { method: 'POST', body: formData }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            this.stintRows = data.stint_rows;
+            this.editingStint = null;
+            this.editValue = '';
+          }
+        } finally {
+          this.saving = false;
+        }
+      },
+
+      async resetStint(row) {
+        this.saving = true;
+        try {
+          const formData = new FormData();
+          formData.append(
+            'csrfmiddlewaretoken',
+            document.cookie.split(';')
+              .find(c => c.trim().startsWith('csrftoken='))
+              ?.split('=')[1] || ''
+          );
+          const res = await fetch(
+            `/${eventId}/stints/${row.stint_number}/reset-start/`,
+            { method: 'POST', body: formData }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            this.stintRows = data.stint_rows;
+          }
+        } finally {
+          this.saving = false;
+        }
       },
 
       lapsDisplay(row) {
@@ -568,12 +806,9 @@
       },
 
       conditionPill(condition) {
-        if (condition === 'wet') {
-          return '<span class="condition-pill condition-wet">⛆ Wet</span>';
-        }
-        if (condition === 'mixed') {
-          return '<span class="condition-pill condition-mixed">◑ Mixed</span>';
-        }
+        // Dry is intentionally unlabelled — no pill shown. Only wet/mixed need calling out.
+        if (condition === 'wet') return '⛆ Wet';
+        if (condition === 'mixed') return '◑ Mixed';
         return '';
       }
     }

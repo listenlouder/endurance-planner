@@ -1702,6 +1702,10 @@ tr.row-unassigned td.s-laps {
   color: var(--unassigned-text);
 }
 
+tr.row-overridden td {
+  background: var(--primary-dim);
+}
+
 /* ============================================================
    BUTTON LOADING STATES
 ============================================================ */

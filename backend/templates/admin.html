@@ -100,7 +100,13 @@
           setTimeout(() => { self.recalculating = false; }, 400);
           form.removeEventListener('htmx:afterSettle', once);
         });
-        form.requestSubmit();
+        try {
+          form.requestSubmit();
+        } catch (e) {
+          form.removeEventListener('htmx:afterSettle', once);
+          self.recalculating = false;
+          throw e;
+        }
       },
 
       parseMMSS(val) {

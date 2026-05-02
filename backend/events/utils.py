@@ -115,9 +115,9 @@ def last_stint_length_seconds(event):
     if total is None or ts is None:
         return None
 
-    remaining = total - ((ts - 1) * event.target_laps)
+    remaining = max(0, total - ((ts - 1) * event.target_laps))
 
-    if remaining <= 0:
+    if remaining == 0:
         return None
 
     if remaining >= event.target_laps:
@@ -225,37 +225,50 @@ def stint_end_time(event, stint_number):
     return stint_start_time(event, stint_number + 1)
 
 
-def get_stint_windows(event):
+def get_stint_windows(event, assignment_overrides=None):
     """
     Returns a list of dicts for all stints, including per-stint duration.
 
-    [
-        {
-            'stint_number':    int,
-            'start_utc':       datetime,
-            'end_utc':         datetime,
-            'duration_seconds': float,
-            'is_last':         bool,
-        },
-        ...
-    ]
+    assignment_overrides: optional dict of { stint_number (int): StintAssignment }.
+    When provided, stints with actual_start_utc set use that as their start time.
+    All subsequent stints cascade from the overridden time unless they also have
+    their own override.
+
+    Each dict contains:
+        stint_number, start_utc, end_utc, duration_seconds, is_last, is_overridden
     """
     if not event.has_required_stint_fields:
         return []
+
     ts = total_stints(event)
     standard_duration = stint_length_seconds(event)
     last_duration = last_stint_length_seconds(event)
+
+    overrides = assignment_overrides or {}
+    previous_end = event.effective_start_datetime_utc
     windows = []
+
     for n in range(1, ts + 1):
         is_last = (n == ts)
         duration = last_duration if is_last else standard_duration
+
+        assignment = overrides.get(n)
+        is_overridden = bool(assignment and assignment.actual_start_utc)
+
+        start = assignment.actual_start_utc if is_overridden else previous_end
+        end = start + timedelta(seconds=duration) if duration else start
+
+        previous_end = end
+
         windows.append({
-            'stint_number':    n,
-            'start_utc':       stint_start_time(event, n),
-            'end_utc':         stint_end_time(event, n),
+            'stint_number':     n,
+            'start_utc':        start,
+            'end_utc':          end,
             'duration_seconds': duration,
-            'is_last':         is_last,
+            'is_last':          is_last,
+            'is_overridden':    is_overridden,
         })
+
     return windows
 
 

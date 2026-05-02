@@ -64,8 +64,11 @@ class Event(models.Model):
 
     @property
     def end_datetime_utc(self):
-        """True race end — effective start (race_start_time_utc when set) plus length."""
-        return self.effective_start_datetime_utc + timedelta(seconds=self.length_seconds)
+        """Race end time — alias for effective_end_datetime_utc. Both anchor to the
+        effective (race) start, not the session start. Use effective_end_datetime_utc
+        in new code; this property exists for backwards compatibility with templates
+        and tests that predate the effective_* naming convention."""
+        return self.effective_end_datetime_utc
 
     @property
     def effective_start_time_utc(self):
@@ -160,6 +163,14 @@ class StintAssignment(models.Model):
         max_length=10,
         choices=CONDITION_CHOICES,
         default='dry',
+    )
+    actual_start_utc = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            'Manual override for stint start time. When set, this '
+            'and all subsequent stints cascade from this time.'
+        ),
     )
 
     class Meta:
