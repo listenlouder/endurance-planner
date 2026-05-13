@@ -819,7 +819,23 @@
           <tr :class="rowClass({{ sw.stint_number }})"
               data-stint="{{ sw.stint_number }}">
             <td class="s-num">#{{ sw.stint_number }}</td>
-            <td class="s-time">{{ sw.start_local }}</td>
+            <td class="s-time">
+              {% with meta=stint_meta|dict_get:sw.stint_number %}
+              <div style="display: flex; align-items: center; gap: 0;">
+                <div style="width: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 3px; padding-right: 4px;">
+                  {% if meta.has_conflict %}
+                  <span style="color: #f59e0b; font-size: 9px; cursor: help;"
+                        title="Driver may be outside their availability window for this adjusted start time">⚠</span>
+                  {% endif %}
+                  {% if meta.is_overridden %}
+                  <span style="color: var(--primary); font-size: 9px;"
+                        title="Start time manually adjusted">✎</span>
+                  {% endif %}
+                </div>
+                <span style="font-size: 12px; white-space: nowrap;{% if meta.is_overridden %} color: var(--primary);{% endif %}">{{ sw.start_local }}</span>
+              </div>
+              {% endwith %}
+            </td>
             <td class="s-dur">
               {% with dur=stint_duration_map|dict_get:sw.stint_number %}
                 {{ dur|default:"—" }}

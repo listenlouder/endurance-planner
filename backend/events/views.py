@@ -1060,9 +1060,12 @@ def _build_admin_context(request, event):
     conditions = {}
     stint_availability_matrix = {}
     availability_json = {}
+    stint_duration_map = {}
+    stint_meta = {}
+    all_sa = []
 
     if has_required_stint_fields:
-        all_sa = list(StintAssignment.objects.filter(event=event))
+        all_sa = list(StintAssignment.objects.filter(event=event).select_related('driver'))
         assignment_objs_for_windows = {sa.stint_number: sa for sa in all_sa}
         stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs_for_windows)
         admin_tz_zone = ZoneInfo(admin_tz)
@@ -1082,12 +1085,31 @@ def _build_admin_context(request, event):
             for driver in drivers
         }
 
-    _total_stints_count = total_stints(event) if has_required_stint_fields else 0
+        for sw in stint_windows:
+            stint_duration_map[sw['stint_number']] = format_stint_duration(sw['duration_seconds'])
 
-    stint_duration_map = {
-        sw['stint_number']: format_stint_duration(sw['duration_seconds'])
-        for sw in stint_windows
-    } if stint_windows else {}
+        driver_avail_sets = {
+            d.id: {a.slot_utc for a in d.availability.all()}
+            for d in drivers
+        }
+        for sw in stint_windows:
+            n = sw['stint_number']
+            sa = assignment_objs_for_windows.get(n)
+            driver = sa.driver if sa else None
+            has_conflict = False
+            if driver and sw.get('is_overridden'):
+                start_utc = sw['start_utc']
+                slot_minute = (start_utc.minute // 30) * 30
+                slot_key = start_utc.replace(
+                    minute=slot_minute, second=0, microsecond=0
+                ).astimezone(dt_utc.utc)
+                has_conflict = slot_key not in driver_avail_sets.get(driver.id, set())
+            stint_meta[n] = {
+                'is_overridden': sw.get('is_overridden', False),
+                'has_conflict': has_conflict,
+            }
+
+    _total_stints_count = total_stints(event) if has_required_stint_fields else 0
 
     return {
         'event': event,
@@ -1115,6 +1137,7 @@ def _build_admin_context(request, event):
             'start_utc': normalize_iso(sw['start_utc']),
             'end_utc': normalize_iso(sw['end_utc']),
             'is_last_stint': sw['is_last'],
+            'is_overridden': sw.get('is_overridden', False),
             'laps_remaining': (
                 None
                 if sw['is_last']
@@ -1126,7 +1149,8 @@ def _build_admin_context(request, event):
         'existing_conditions_json': _safe_json({str(k): v for k, v in conditions.items()}),
         'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name} for d in drivers]),
         'availability_json': _safe_json(availability_json),
-        'has_assignments': StintAssignment.objects.filter(event=event).exists(),
+        'stint_meta': stint_meta,
+        'has_assignments': bool(all_sa),
         'total_stints_count': _total_stints_count,
         'stint_availability_json': _safe_json({
             str(driver_id): {str(stint_num): status for stint_num, status in stints.items()}
