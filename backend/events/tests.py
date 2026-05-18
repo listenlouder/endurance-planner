@@ -47,12 +47,16 @@ from .templatetags.tz_filters import (
 from .utils import (
     build_stint_availability_matrix,
     check_driver_conflict,
+    format_stint_duration,
     get_availability_slots,
     get_stint_windows,
+    last_stint_length_seconds,
+    seconds_to_mmss,
     stint_end_time,
     stint_length_seconds,
     stint_start_time,
     total_stints,
+    validate_stint_sanity,
 )
 from .views import _validate_and_save_field, _validate_signup_post
 
@@ -324,10 +328,24 @@ class GetStintWindowsTests(SimpleTestCase):
         windows = get_stint_windows(event)
         self.assertEqual(windows[0]['start_utc'], event.start_datetime_utc)
 
-    def test_last_window_ends_at_event_end(self):
+    def test_last_window_ends_at_last_stint_duration_from_its_start(self):
+        # get_stint_windows uses last_stint_length_seconds() for the final
+        # stint, which is calculated from remaining laps (floor division).
+        # This means the last window's end time equals its start + that
+        # computed duration — not necessarily the exact race clock end.
         event = make_event()
         windows = get_stint_windows(event)
-        self.assertEqual(windows[-1]['end_utc'], event.end_datetime_utc)
+        last = windows[-1]
+        expected_duration = last_stint_length_seconds(event)
+        expected_end = last['start_utc'] + dt.timedelta(seconds=expected_duration)
+        self.assertEqual(last['end_utc'], expected_end)
+
+    def test_last_window_ends_at_or_before_event_end(self):
+        # The lap-count-based last stint duration may be slightly shorter
+        # than the raw clock race length.
+        event = make_event()
+        windows = get_stint_windows(event)
+        self.assertLessEqual(windows[-1]['end_utc'], event.end_datetime_utc)
 
     def test_consecutive_windows_are_contiguous(self):
         # end of window N == start of window N+1
@@ -5868,3 +5886,433 @@ class AdminContextConditionsTests(TestCase):
         # Stint 2 has no assignment — it must not be a key
         self.assertNotIn(2, conditions)
         self.assertNotIn(4, conditions)
+
+
+# ---------------------------------------------------------------------------
+# utils.seconds_to_mmss (M:SS format — distinct from the template filter)
+# ---------------------------------------------------------------------------
+
+class SecondsMmssUtilTests(SimpleTestCase):
+    """Tests for utils.seconds_to_mmss() (M:SS, no leading zero on minutes).
+
+    This is the utility function in utils.py, not the template filter in
+    tz_filters.py. The utility returns '1:45' for 105 seconds; the template
+    filter returns '01:45'.
+    """
+
+    def test_exact_minutes_no_seconds(self):
+        self.assertEqual(seconds_to_mmss(120), '2:00')
+
+    def test_minutes_and_seconds(self):
+        self.assertEqual(seconds_to_mmss(105), '1:45')
+
+    def test_less_than_one_minute(self):
+        self.assertEqual(seconds_to_mmss(45), '0:45')
+
+    def test_single_second(self):
+        self.assertEqual(seconds_to_mmss(1), '0:01')
+
+    def test_zero_seconds(self):
+        self.assertEqual(seconds_to_mmss(0), '0:00')
+
+    def test_none_returns_empty_string(self):
+        self.assertEqual(seconds_to_mmss(None), '')
+
+    def test_float_input_truncates(self):
+        # 90.9 → int(90.9) = 90 → 1:30
+        self.assertEqual(seconds_to_mmss(90.9), '1:30')
+
+    def test_large_value_over_one_hour(self):
+        # 3661 s = 61 minutes 1 second
+        self.assertEqual(seconds_to_mmss(3661), '61:01')
+
+    def test_seconds_component_zero_padded_to_two_digits(self):
+        # 62 s = 1m 02s — the seconds part should be 02 not 2
+        self.assertEqual(seconds_to_mmss(62), '1:02')
+
+    def test_exactly_one_hour(self):
+        self.assertEqual(seconds_to_mmss(3600), '60:00')
+
+
+# ---------------------------------------------------------------------------
+# utils.format_stint_duration
+# ---------------------------------------------------------------------------
+
+class FormatStintDurationTests(SimpleTestCase):
+    """Tests for utils.format_stint_duration()."""
+
+    def test_none_returns_em_dash(self):
+        self.assertEqual(format_stint_duration(None), '—')
+
+    def test_exact_minutes_no_seconds(self):
+        self.assertEqual(format_stint_duration(3720), '62m')
+
+    def test_minutes_and_seconds(self):
+        self.assertEqual(format_stint_duration(3661), '61m 1s')
+
+    def test_zero_seconds_returns_zero_minutes(self):
+        self.assertEqual(format_stint_duration(0), '0m')
+
+    def test_sub_minute_duration(self):
+        self.assertEqual(format_stint_duration(45), '0m 45s')
+
+    def test_rounds_to_nearest_second(self):
+        # 3660.6 → rounds to 3661 → 61m 1s
+        self.assertEqual(format_stint_duration(3660.6), '61m 1s')
+
+    def test_rounds_down_when_below_half(self):
+        # 3660.4 → rounds to 3660 → 61m
+        self.assertEqual(format_stint_duration(3660.4), '61m')
+
+    def test_float_exact_minutes(self):
+        self.assertEqual(format_stint_duration(1800.0), '30m')
+
+    def test_one_second(self):
+        self.assertEqual(format_stint_duration(1), '0m 1s')
+
+    def test_59_seconds(self):
+        self.assertEqual(format_stint_duration(59), '0m 59s')
+
+
+# ---------------------------------------------------------------------------
+# utils.validate_stint_sanity
+# ---------------------------------------------------------------------------
+
+class ValidateStintSanityTests(SimpleTestCase):
+    """Tests for utils.validate_stint_sanity()."""
+
+    def test_returns_empty_list_when_required_fields_missing(self):
+        # Event without stint fields set — should return no warnings
+        event = make_event(
+            avg_lap_seconds=None,
+            in_lap_seconds=None,
+            out_lap_seconds=None,
+            target_laps=None,
+            fuel_capacity=None,
+            fuel_per_lap=None,
+        )
+        self.assertEqual(validate_stint_sanity(event), [])
+
+    def test_no_warnings_for_clean_config(self):
+        # Well-configured event with reasonable values
+        event = make_event(
+            avg_lap_seconds=120.0,
+            in_lap_seconds=130.0,
+            out_lap_seconds=125.0,
+            target_laps=30,
+            fuel_capacity=80.0,
+            fuel_per_lap=2.0,   # 2.0 × 30 = 60L < 80L — fine
+        )
+        self.assertEqual(validate_stint_sanity(event), [])
+
+    def test_warns_when_fuel_per_stint_exceeds_capacity(self):
+        event = make_event(
+            fuel_capacity=50.0,
+            fuel_per_lap=2.0,
+            target_laps=30,     # 2.0 × 30 = 60L > 50L
+        )
+        warnings = validate_stint_sanity(event)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('exceeds fuel capacity', warnings[0])
+
+    def test_warns_when_fuel_per_stint_above_98_percent_of_capacity(self):
+        # 2.0 × 30 = 60L; 60/61 ≈ 98.36% > 98%
+        event = make_event(
+            fuel_capacity=61.0,
+            fuel_per_lap=2.0,
+            target_laps=30,
+        )
+        warnings = validate_stint_sanity(event)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('98%', warnings[0])
+
+    def test_no_fuel_warning_when_usage_is_exactly_98_percent(self):
+        # 2.0 × 30 = 60L; 60/60 = 100% — but this exceeds capacity, so
+        # the "exceeds" warning fires, not the 98% warning.
+        # Test the boundary just below 98%: capacity = 61.23, usage = 60
+        event = make_event(
+            fuel_capacity=61.23,
+            fuel_per_lap=2.0,
+            target_laps=30,     # 60 / 61.23 ≈ 97.99% < 98%
+        )
+        self.assertEqual(validate_stint_sanity(event), [])
+
+    def test_warns_when_in_lap_faster_than_avg_lap(self):
+        event = make_event(
+            avg_lap_seconds=120.0,
+            in_lap_seconds=110.0,   # faster than avg — suspicious
+            out_lap_seconds=125.0,
+        )
+        warnings = validate_stint_sanity(event)
+        self.assertTrue(any('In lap' in w for w in warnings))
+
+    def test_warns_when_out_lap_faster_than_avg_lap(self):
+        event = make_event(
+            avg_lap_seconds=120.0,
+            in_lap_seconds=130.0,
+            out_lap_seconds=115.0,  # faster than avg — suspicious
+        )
+        warnings = validate_stint_sanity(event)
+        self.assertTrue(any('Out lap' in w for w in warnings))
+
+    def test_warns_when_stint_length_is_very_short(self):
+        # 1 lap × 60s avg + (65 + 62 - 120) = 60 + 7 = 67s — well under 600s
+        event = make_event(
+            avg_lap_seconds=60.0,
+            in_lap_seconds=65.0,
+            out_lap_seconds=62.0,
+            target_laps=1,
+        )
+        warnings = validate_stint_sanity(event)
+        self.assertTrue(any('very short' in w for w in warnings))
+
+    def test_warns_when_total_stints_exceeds_200(self):
+        # Make stint so short that we get >200 stints in a 6-hour race
+        # avg=120, target=1, in=130, out=125 → stint=120+(130+125-240)=135s
+        # total stints = ceil(21600/135) = 160 — not >200
+        # avg=120, target=1, in=121, out=121 → stint=120+(121+121-240)=122s
+        # total stints = ceil(21600/122) ≈ 178 — still not >200
+        # Use a shorter avg lap:
+        # avg=60, target=1, in=61, out=61 → stint=60+(61+61-120)=62s
+        # total stints = ceil(21600/62) = 349 — >200
+        event = make_event(
+            avg_lap_seconds=60.0,
+            in_lap_seconds=61.0,
+            out_lap_seconds=61.0,
+            target_laps=1,
+        )
+        warnings = validate_stint_sanity(event)
+        self.assertTrue(any('total stints' in w.lower() for w in warnings))
+
+    def test_returns_list_type(self):
+        event = make_event()
+        result = validate_stint_sanity(event)
+        self.assertIsInstance(result, list)
+
+    def test_multiple_warnings_can_be_returned(self):
+        # Both in_lap and out_lap faster than avg_lap → two warnings
+        event = make_event(
+            avg_lap_seconds=120.0,
+            in_lap_seconds=100.0,
+            out_lap_seconds=100.0,
+        )
+        warnings = validate_stint_sanity(event)
+        in_lap_warnings = [w for w in warnings if 'In lap' in w]
+        out_lap_warnings = [w for w in warnings if 'Out lap' in w]
+        self.assertGreater(len(in_lap_warnings), 0)
+        self.assertGreater(len(out_lap_warnings), 0)
+
+
+# ---------------------------------------------------------------------------
+# utils.last_stint_length_seconds
+# ---------------------------------------------------------------------------
+
+class LastStintLengthSecondsTests(SimpleTestCase):
+    """Tests for utils.last_stint_length_seconds()."""
+
+    def test_returns_none_when_required_fields_missing(self):
+        event = make_event(avg_lap_seconds=None, target_laps=None,
+                           fuel_capacity=None, fuel_per_lap=None,
+                           in_lap_seconds=None, out_lap_seconds=None)
+        self.assertIsNone(last_stint_length_seconds(event))
+
+    def test_last_stint_shorter_than_standard_when_race_does_not_divide_evenly(self):
+        # Default event: 6h / 3615s → 6 stints, last is shorter
+        event = make_event()
+        last = last_stint_length_seconds(event)
+        standard = stint_length_seconds(event)
+        self.assertLess(last, standard)
+
+    def test_last_stint_non_negative(self):
+        event = make_event()
+        self.assertGreaterEqual(last_stint_length_seconds(event), 0)
+
+    def test_falls_back_to_standard_when_remaining_laps_gte_target(self):
+        # 1-stint race: remaining laps == target_laps → last == standard
+        event = make_event(length_seconds=3615)
+        standard = stint_length_seconds(event)
+        last = last_stint_length_seconds(event)
+        self.assertEqual(last, standard)
+
+    def test_result_is_float_or_int(self):
+        event = make_event()
+        result = last_stint_length_seconds(event)
+        self.assertIsInstance(result, (int, float))
+
+    def test_shorter_than_or_equal_to_race_length(self):
+        event = make_event()
+        self.assertLessEqual(last_stint_length_seconds(event), event.length_seconds)
+
+
+# ---------------------------------------------------------------------------
+# views.normalize_iso
+# ---------------------------------------------------------------------------
+
+class NormalizeIsoTests(SimpleTestCase):
+    """Tests for views.normalize_iso() — formats a UTC datetime as ISO with Z suffix."""
+
+    def setUp(self):
+        from .views import normalize_iso
+        self.normalize_iso = normalize_iso
+
+    def test_formats_with_z_suffix(self):
+        dt_val = dt.datetime(2026, 6, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
+        self.assertTrue(self.normalize_iso(dt_val).endswith('Z'))
+
+    def test_format_matches_expected_pattern(self):
+        dt_val = dt.datetime(2026, 6, 1, 12, 30, 45, tzinfo=dt.timezone.utc)
+        self.assertEqual(self.normalize_iso(dt_val), '2026-06-01T12:30:45Z')
+
+    def test_omits_microseconds(self):
+        dt_val = dt.datetime(2026, 6, 1, 12, 0, 0, 999999, tzinfo=dt.timezone.utc)
+        result = self.normalize_iso(dt_val)
+        self.assertNotIn('.', result)
+        self.assertEqual(result, '2026-06-01T12:00:00Z')
+
+    def test_midnight_utc(self):
+        dt_val = dt.datetime(2026, 1, 1, 0, 0, 0, tzinfo=dt.timezone.utc)
+        self.assertEqual(self.normalize_iso(dt_val), '2026-01-01T00:00:00Z')
+
+    def test_converts_non_utc_aware_datetime_to_utc(self):
+        from zoneinfo import ZoneInfo
+        eastern = ZoneInfo('America/New_York')
+        # 2026-06-01 08:00 Eastern = 12:00 UTC (EDT = UTC-4)
+        dt_val = dt.datetime(2026, 6, 1, 8, 0, 0, tzinfo=eastern)
+        self.assertEqual(self.normalize_iso(dt_val), '2026-06-01T12:00:00Z')
+
+    def test_end_of_day(self):
+        dt_val = dt.datetime(2026, 6, 1, 23, 59, 59, tzinfo=dt.timezone.utc)
+        self.assertEqual(self.normalize_iso(dt_val), '2026-06-01T23:59:59Z')
+
+    def test_leading_zeros_in_time_components(self):
+        dt_val = dt.datetime(2026, 6, 1, 1, 2, 3, tzinfo=dt.timezone.utc)
+        self.assertEqual(self.normalize_iso(dt_val), '2026-06-01T01:02:03Z')
+
+
+# ---------------------------------------------------------------------------
+# Home view 2-week date cutoff (admin_events and driver_events)
+# ---------------------------------------------------------------------------
+
+class HomeViewDateCutoffTests(TestCase):
+    """The home view filters admin_events and driver_events with date__gte cutoff.
+
+    Events whose date is more than 2 weeks in the past must not appear in
+    either context list. This test class specifically exercises the cutoff
+    boundary — 'HomeViewAuthenticatedTests' only uses far-future dates.
+    """
+
+    def setUp(self):
+        self.url = reverse('home')
+        self.user = _make_auth_user()
+        self.today = dt.date.today()
+
+    def _event_on_date(self, target_date, created_by=None, **overrides):
+        """Save an event with the given date, defaulting to a 12:00 UTC start."""
+        return save_event(
+            name=f'Event on {target_date}',
+            date=target_date,
+            start_time_utc=dt.time(12, 0, 0),
+            created_by=created_by,
+            **overrides,
+        )
+
+    # ---- admin_events cutoff ------------------------------------------------
+
+    def test_admin_event_exactly_14_days_ago_is_included(self):
+        # The cutoff is date__gte = today - 14 days, so 14 days ago is included.
+        cutoff_date = self.today - dt.timedelta(days=14)
+        event = self._event_on_date(cutoff_date, created_by=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertIn(event.id, admin_ids)
+
+    def test_admin_event_15_days_ago_is_excluded(self):
+        # 15 days ago is before the cutoff — must not appear.
+        old_date = self.today - dt.timedelta(days=15)
+        event = self._event_on_date(old_date, created_by=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertNotIn(event.id, admin_ids)
+
+    def test_admin_event_yesterday_is_included(self):
+        yesterday = self.today - dt.timedelta(days=1)
+        event = self._event_on_date(yesterday, created_by=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertIn(event.id, admin_ids)
+
+    def test_admin_event_today_is_included(self):
+        event = self._event_on_date(self.today, created_by=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertIn(event.id, admin_ids)
+
+    def test_recent_and_old_admin_events_mixed(self):
+        # One event within the window, one outside — only the recent one shows.
+        recent = self._event_on_date(
+            self.today - dt.timedelta(days=7), created_by=self.user
+        )
+        old = self._event_on_date(
+            self.today - dt.timedelta(days=30), created_by=self.user
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        admin_ids = [e.id for e in response.context['admin_events']]
+        self.assertIn(recent.id, admin_ids)
+        self.assertNotIn(old.id, admin_ids)
+
+    # ---- driver_events cutoff -----------------------------------------------
+
+    def test_driver_event_exactly_14_days_ago_is_included(self):
+        other_user = _make_auth_user()
+        cutoff_date = self.today - dt.timedelta(days=14)
+        event = self._event_on_date(cutoff_date, created_by=other_user)
+        Driver.objects.create(event=event, name='Me', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        driver_ids = [e.id for e in response.context['driver_events']]
+        self.assertIn(event.id, driver_ids)
+
+    def test_driver_event_15_days_ago_is_excluded(self):
+        other_user = _make_auth_user()
+        old_date = self.today - dt.timedelta(days=15)
+        event = self._event_on_date(old_date, created_by=other_user)
+        Driver.objects.create(event=event, name='Me', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        driver_ids = [e.id for e in response.context['driver_events']]
+        self.assertNotIn(event.id, driver_ids)
+
+    def test_driver_event_today_is_included(self):
+        other_user = _make_auth_user()
+        event = self._event_on_date(self.today, created_by=other_user)
+        Driver.objects.create(event=event, name='Me', timezone='UTC', user=self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        driver_ids = [e.id for e in response.context['driver_events']]
+        self.assertIn(event.id, driver_ids)
+
+    def test_driver_events_list_absent_for_unauthenticated_user(self):
+        # Sanity check: unauthenticated → no driver_events key at all
+        response = self.client.get(self.url)
+        self.assertNotIn('driver_events', response.context)

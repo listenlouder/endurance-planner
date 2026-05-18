@@ -3,7 +3,7 @@ import json
 import time
 import logging
 from collections import Counter
-from datetime import date, datetime, time as time_type, timezone as dt_utc
+from datetime import date, datetime, time as time_type, timedelta, timezone as dt_utc
 from zoneinfo import ZoneInfo
 
 from django.contrib import messages
@@ -467,13 +467,17 @@ def home(request):
             event=OuterRef('pk'), user=request.user
         ).values('name')[:1]
 
+        cutoff_date = (now_utc - timedelta(weeks=2)).date()
+
         context['admin_events'] = Event.objects.filter(
-            created_by=request.user
+            created_by=request.user,
+            date__gte=cutoff_date,
         ).order_by('-date')[:10]
 
         # Exclude events the user created — those already appear in admin_events
         context['driver_events'] = Event.objects.filter(
-            drivers__user=request.user
+            drivers__user=request.user,
+            date__gte=cutoff_date,
         ).exclude(
             created_by=request.user
         ).annotate(
