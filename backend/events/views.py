@@ -1151,7 +1151,7 @@ def _build_admin_context(request, event):
         'conditions': conditions,
         'existing_assignments_json': _safe_json({str(k): str(v) for k, v in existing_assignments.items()}),
         'existing_conditions_json': _safe_json({str(k): v for k, v in conditions.items()}),
-        'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name} for d in drivers]),
+        'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name, 'timezone': d.timezone or 'UTC'} for d in drivers]),
         'availability_json': _safe_json(availability_json),
         'stint_meta': stint_meta,
         'has_assignments': bool(all_sa),

@@ -1625,11 +1625,11 @@ th.col-divider, td.col-divider {
 }
 tr.row-assigned   { background: var(--assigned-bg); }
 tr.row-unassigned { background: var(--unassigned-bg); }
-td.s-num  { color: var(--text-dim); font-size: 10px; width: 36px; white-space: nowrap; }
-td.s-time { color: var(--text); font-size: 12px; width: 80px; white-space: nowrap; }
+td.s-num  { color: var(--text-dim); font-size: 10px; width: 24px; white-space: nowrap; }
+td.s-time { color: var(--text); font-size: 12px; width: 92px; white-space: nowrap; }
 td.s-dur  { color: var(--text-dim); font-size: 10px; width: 80px; white-space: nowrap; }
 td.s-laps { width: 70px; text-align: center; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
-td.s-driver { width: 180px; }
+td.s-driver { width: 220px; }
 .unified-table th.col-laps-left { text-align: center; width: 70px; }
 .finish-label {
   color: var(--secondary) !important;

@@ -786,11 +786,11 @@
             </th>
           </tr>
           <tr class="avail-driver-header-row">
-            <th style="width: 36px;">#</th>
-            <th style="width: 80px;">Start</th>
+            <th style="width: 24px;">#</th>
+            <th style="width: 92px;">Start</th>
             <th style="width: 80px;">Dur.</th>
             <th class="col-laps-left" style="width: 70px;">Laps left</th>
-            <th style="width: 180px;">Driver</th>
+            <th style="width: 220px;">Driver</th>
             <th style="width: 90px; text-align: center;">Conditions</th>
             <th class="avail-divider"></th>
             {% for driver in drivers %}
@@ -819,20 +819,24 @@
           <tr :class="rowClass({{ sw.stint_number }})"
               data-stint="{{ sw.stint_number }}">
             <td class="s-num">#{{ sw.stint_number }}</td>
-            <td class="s-time">
+            <td class="s-time"
+                x-data="{
+                  get driverTime() {
+                    return driverLocalTime(
+                      {{ sw.stint_number }},
+                      '{{ sw.start_utc|to_utc_z }}'
+                    );
+                  }
+                }">
               {% with meta=stint_meta|dict_get:sw.stint_number %}
-              <div style="display: flex; align-items: center; gap: 0;">
-                <div style="width: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 3px; padding-right: 4px;">
-                  {% if meta.has_conflict %}
-                  <span style="color: #f59e0b; font-size: 9px; cursor: help;"
-                        title="Driver may be outside their availability window for this adjusted start time">⚠</span>
-                  {% endif %}
-                  {% if meta.is_overridden %}
-                  <span style="color: var(--primary); font-size: 9px;"
-                        title="Start time manually adjusted">✎</span>
-                  {% endif %}
+              <div>
+                <div style="font-size: 12px; white-space: nowrap;{% if meta.is_overridden %} color: var(--primary);{% endif %}">
+                  {% if meta.has_conflict %}<span style="color: #f59e0b; font-size: 9px; cursor: help;" title="Driver may be outside their availability window for this adjusted start time">⚠</span> {% endif %}{% if meta.is_overridden %}<span style="color: var(--primary); font-size: 9px;" title="Start time manually adjusted">✎</span> {% endif %}{{ sw.start_local }}
                 </div>
-                <span style="font-size: 12px; white-space: nowrap;{% if meta.is_overridden %} color: var(--primary);{% endif %}">{{ sw.start_local }}</span>
+                <div x-show="!!driverTime"
+                     x-text="driverTime ? driverTime.time + ' ' + driverTime.abbr : ''"
+                     style="font-size: 10px; color: var(--text-dim); white-space: nowrap; letter-spacing: 0.03em;">
+                </div>
               </div>
               {% endwith %}
             </td>
@@ -852,7 +856,7 @@
             <td class="s-driver">
               <div style="display:flex;align-items:center;gap:4px;">
 
-                <div x-data="driverDropdown({{ sw.stint_number }}, assignments[{{ sw.stint_number }}] || null)"
+                <div x-data="driverDropdown({{ sw.stint_number }}, assignments[{{ sw.stint_number }}] || null, '{{ sw.start_utc|to_utc_z }}')"
                      @driver-selected.window="
                        if ($event.detail.stintNumber === {{ sw.stint_number }}) {
                          selectedId = $event.detail.driverId || null;
@@ -871,7 +875,7 @@
                               ? 'background:var(--assigned-bg);border:1px solid var(--primary);color:var(--assigned-text);'
                               : 'background:var(--bg);border:1px solid var(--border-mid);color:var(--text-dim);'"
                           :title="hasConflict ? '⚠ Driver not available for this stint' : ''"
-                          style="width:160px;min-width:160px;max-width:160px;display:flex;align-items:center;justify-content:space-between;
+                          style="width:200px;min-width:200px;max-width:200px;display:flex;align-items:center;justify-content:space-between;
                                  padding:6px 8px;font-family:'DM Mono',monospace;font-size:11px;
                                  letter-spacing:0.04em;cursor:pointer;border-radius:0;gap:4px;
                                  white-space:nowrap;overflow:hidden;">
@@ -893,8 +897,12 @@
                     {% for driver in drivers %}
                     <div class="dd-option"
                          :class="selectedId === '{{ driver.id }}' ? 'dd-selected' : ''"
-                         @click="select('{{ driver.id }}')">
-                      {{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} <span class="dd-avail-tag">partial</span>{% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} <span class="dd-avail-tag dd-unavail">unavail</span>{% endif %}
+                         @click="select('{{ driver.id }}')"
+                         style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                      <span>{{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} <span class="dd-avail-tag">partial</span>{% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} <span class="dd-avail-tag dd-unavail">unavail</span>{% endif %}</span>
+                      <span x-text="driverStintTime('{{ driver.timezone }}')"
+                            style="font-size:10px;color:var(--text-dim);white-space:nowrap;flex-shrink:0;">
+                      </span>
                     </div>
                     {% endfor %}
 
@@ -1240,11 +1248,37 @@
     return false;
   }
 
-  function driverDropdown(stintNumber, initialDriverId) {
+  function formatTimeInTz(utcString, ianaTimezone) {
+    if (!utcString || !ianaTimezone) return null;
+    try {
+      const d = new Date(utcString);
+      const time = d.toLocaleTimeString('en-GB', {
+        timeZone: ianaTimezone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
+      const abbr = d.toLocaleTimeString('en-US', {
+        timeZone: ianaTimezone,
+        timeZoneName: 'short'
+      }).split(' ').pop();
+      return { time, abbr };
+    } catch(e) {
+      return null;
+    }
+  }
+
+  function driverDropdown(stintNumber, initialDriverId, stintStartUtc) {
     return {
       open: false,
       selectedId: initialDriverId || null,
+      stintStartUtc: stintStartUtc || null,
       dropStyle: {},
+
+      driverStintTime(driverTimezone) {
+        const result = formatTimeInTz(this.stintStartUtc, driverTimezone);
+        return result ? `${result.time} ${result.abbr}` : '';
+      },
 
       get selectedName() {
         if (!this.selectedId) return '— unassigned —';
@@ -1269,7 +1303,7 @@
                 bottom: (window.innerHeight - Math.round(rect.top) + 2) + 'px',
                 top: 'auto',
                 left: Math.round(rect.left) + 'px',
-                width: '160px',
+                width: '200px',
                 zIndex: 9999,
               }
             : {
@@ -1277,7 +1311,7 @@
                 top: Math.round(rect.bottom + 2) + 'px',
                 bottom: 'auto',
                 left: Math.round(rect.left) + 'px',
-                width: '160px',
+                width: '200px',
                 zIndex: 9999,
               };
           this.open = true;
@@ -1411,6 +1445,20 @@
         return new Date(utcString).toLocaleDateString('en-GB', {
           timeZone: adminTz, month: 'short', day: 'numeric',
         });
+      },
+
+      driverTimezone(driverId) {
+        if (!driverId) return null;
+        const d = driversData.find(d => d.id === driverId);
+        return d ? d.timezone : null;
+      },
+
+      driverLocalTime(stintNumber, startUtc) {
+        const driverId = this.assignments[stintNumber];
+        if (!driverId) return null;
+        const driverTz = this.driverTimezone(driverId);
+        if (driverTz === adminTz) return null;
+        return formatTimeInTz(startUtc, driverTz);
       },
 
       isNewDay(index) {

@@ -6316,3 +6316,121 @@ class HomeViewDateCutoffTests(TestCase):
         # Sanity check: unauthenticated → no driver_events key at all
         response = self.client.get(self.url)
         self.assertNotIn('driver_events', response.context)
+
+
+# ---------------------------------------------------------------------------
+# _build_admin_context — drivers_json timezone serialisation
+# ---------------------------------------------------------------------------
+
+
+class AdminContextDriversJsonTimezoneTests(TestCase):
+    """
+    Tests for the timezone field in drivers_json produced by
+    _build_admin_context.
+
+    The serialisation rule is:
+        {'id': str(d.id), 'name': d.name, 'timezone': d.timezone or 'UTC'}
+
+    An empty-string timezone falls back to 'UTC'; a populated IANA string
+    is preserved verbatim.
+    """
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def _set_admin_session(self):
+        session = self.client.session
+        session[f'admin_{self.event.id}'] = True
+        session.save()
+
+    def _get_drivers_json(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        return _json.loads(response.context['drivers_json'])
+
+    # --- timezone key presence ---
+
+    def test_drivers_json_entry_has_timezone_key(self):
+        Driver.objects.create(event=self.event, name='Alice', timezone='UTC')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        self.assertIn('timezone', drivers[0])
+
+    # --- IANA timezone preserved verbatim ---
+
+    def test_drivers_json_timezone_matches_stored_iana_string(self):
+        Driver.objects.create(event=self.event, name='Bob', timezone='America/New_York')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        self.assertEqual(drivers[0]['timezone'], 'America/New_York')
+
+    def test_drivers_json_europe_timezone_preserved(self):
+        Driver.objects.create(event=self.event, name='Eva', timezone='Europe/Berlin')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        self.assertEqual(drivers[0]['timezone'], 'Europe/Berlin')
+
+    def test_drivers_json_utc_timezone_preserved(self):
+        Driver.objects.create(event=self.event, name='Sam', timezone='UTC')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        self.assertEqual(drivers[0]['timezone'], 'UTC')
+
+    # --- empty-string fallback to 'UTC' ---
+
+    def test_drivers_json_empty_string_timezone_falls_back_to_utc(self):
+        # CharField default is 'UTC', but it can be set to '' programmatically.
+        # The `d.timezone or 'UTC'` guard must return 'UTC' in that case.
+        driver = Driver.objects.create(event=self.event, name='Chris', timezone='UTC')
+        Driver.objects.filter(pk=driver.pk).update(timezone='')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        chris = next(d for d in drivers if d['name'] == 'Chris')
+        self.assertEqual(chris['timezone'], 'UTC')
+
+    # --- multiple drivers — each gets its own timezone ---
+
+    def test_drivers_json_each_driver_has_independent_timezone(self):
+        Driver.objects.create(event=self.event, name='Alice', timezone='America/Chicago')
+        Driver.objects.create(event=self.event, name='Bob', timezone='Asia/Tokyo')
+        Driver.objects.create(event=self.event, name='Cara', timezone='Europe/London')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        by_name = {d['name']: d['timezone'] for d in drivers}
+        self.assertEqual(by_name['Alice'], 'America/Chicago')
+        self.assertEqual(by_name['Bob'], 'Asia/Tokyo')
+        self.assertEqual(by_name['Cara'], 'Europe/London')
+
+    # --- id and name keys still present (no regression) ---
+
+    def test_drivers_json_entry_still_contains_id_and_name_keys(self):
+        driver = Driver.objects.create(event=self.event, name='Dana', timezone='UTC')
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        self.assertEqual(len(drivers), 1)
+        self.assertEqual(drivers[0]['id'], str(driver.id))
+        self.assertEqual(drivers[0]['name'], 'Dana')
+
+    # --- no drivers — empty list ---
+
+    def test_drivers_json_is_empty_list_when_no_drivers_exist(self):
+        self._set_admin_session()
+
+        drivers = self._get_drivers_json()
+
+        self.assertEqual(drivers, [])
