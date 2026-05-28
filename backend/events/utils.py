@@ -250,7 +250,7 @@ def get_stint_windows(event, assignment_overrides=None):
 
     for n in range(1, ts + 1):
         is_last = (n == ts)
-        duration = last_duration if is_last else standard_duration
+        duration = (last_duration or standard_duration) if is_last else standard_duration
 
         assignment = overrides.get(n)
         is_overridden = bool(assignment and assignment.actual_start_utc)

@@ -26,6 +26,7 @@ Test groups:
 """
 
 import datetime as dt
+import json
 import uuid
 from datetime import timezone
 from unittest.mock import patch
@@ -2685,7 +2686,7 @@ class AdminSaveDetailsTests(TestCase):
 
         response = self.client.post(self.url, self._valid_post())
 
-        self.assertEqual(response['HX-Trigger'], 'show-toast')
+        self.assertIn('show-toast', json.loads(response['HX-Trigger']))
 
     def test_valid_post_saves_name(self):
         self._set_admin_session()
@@ -2895,7 +2896,7 @@ class AdminSaveCalcTests(TestCase):
         # Post only some fields so event still lacks required stint fields
         response = self.client.post(self.url, {'avg_lap': '2:00'})
 
-        self.assertEqual(response['HX-Trigger'], 'show-toast')
+        self.assertIn('show-toast', json.loads(response['HX-Trigger']))
         self.assertNotIn('HX-Refresh', response)
 
     def test_mmss_value_correctly_converted_to_seconds(self):
@@ -3062,7 +3063,7 @@ class AdminSaveAssignmentsTests(TestCase):
 
         response = self.client.post(self.url, {'stint_1': str(self.driver_a.id)})
 
-        self.assertEqual(response['HX-Trigger'], 'show-toast')
+        self.assertIn('show-toast', json.loads(response['HX-Trigger']))
 
     def test_valid_post_creates_stint_assignment_row(self):
         self._set_admin_session()
@@ -5421,7 +5422,7 @@ class AdminSaveCalcRaceStartTests(TestCase):
 
         response = self.client.post(self.url, {'race_start_time_utc': '13:00'})
 
-        self.assertEqual(response['HX-Trigger'], 'show-toast')
+        self.assertIn('show-toast', json.loads(response['HX-Trigger']))
 
 
 # ---------------------------------------------------------------------------

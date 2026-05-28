@@ -184,7 +184,7 @@
      id="adminToast"
      x-data
      @show-toast.window="
-       $el.textContent = 'Changes saved.';
+       $el.textContent = ($event.detail && $event.detail.message) ? $event.detail.message : 'Changes saved.';
        $el.classList.add('visible');
        setTimeout(() => $el.classList.remove('visible'), 2500)
      ">
@@ -237,11 +237,7 @@
 
   <form hx-post="{% url 'admin_save_details' event.id %}"
         hx-target="#admin-details-errors"
-        hx-swap="innerHTML"
-        hx-on::after-request="
-          if(event.detail.xhr.status === 200)
-            htmx.trigger(window, 'show-toast')
-        ">
+        hx-swap="innerHTML">
     {% csrf_token %}
 
     <div class="details-grid">

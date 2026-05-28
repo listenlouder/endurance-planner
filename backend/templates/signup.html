@@ -79,6 +79,8 @@
         });
       },
 
+      get selectedCount() { return this.checked.filter(Boolean).length; },
+
       selectAll() { this.checked = this.checked.map(() => true); },
       clearAll()  { this.checked = this.checked.map(() => false); },
     };

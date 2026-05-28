@@ -317,39 +317,6 @@ textarea::placeholder {
 }
 
 /* ============================================================
-   TABLES
-   1-2px row gap (not border-collapse).
-   Header row: --bg-raised, --text-dim, DM Mono 10px uppercase.
-   Data rows: --bg-card.
-============================================================ */
-.wac-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0 2px;
-}
-.wac-table th {
-  background: var(--bg-raised);
-  color: var(--text-dim);
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  padding: 7px 10px;
-  text-align: left;
-}
-.wac-table td {
-  background: var(--bg-card);
-  padding: 7px 10px;
-  font-family: 'DM Mono', monospace;
-  font-size: 12px;
-  color: var(--text);
-}
-.wac-table tbody tr:hover td {
-  background: var(--bg-raised);
-}
-
-/* ============================================================
    THEME TOGGLE BUTTON
 ============================================================ */
 .theme-toggle {
@@ -363,7 +330,7 @@ textarea::placeholder {
   align-items: center;
   justify-content: center;
   font-size: 14px;
-  border-radius: 2px;
+  border-radius: 0;
   transition: border-color 0.2s, color 0.2s, background 0.2s;
 }
 .theme-toggle:hover {
@@ -555,17 +522,6 @@ main {
   opacity: 0.6;
 }
 
-/* ============================================================
-   ACTION SECTION
-============================================================ */
-.action-section {
-  padding: 56px 32px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  max-width: 900px;
-}
-
 .action-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -642,100 +598,6 @@ main {
   color: var(--text-dim);
   letter-spacing: 0.04em;
   line-height: 1.6;
-}
-
-/* ============================================================
-   RECRUITING / RECENT SECTION
-============================================================ */
-.recent-section {
-  padding: 0 32px 64px;
-}
-
-.recent-label {
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.recent-label::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-  max-width: 200px;
-}
-
-.recent-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.recent-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  transition: border-color 0.15s, background 0.15s;
-  text-decoration: none;
-  color: inherit;
-}
-
-.recent-item:hover {
-  border-color: var(--border-mid);
-  background: var(--bg-raised);
-}
-
-.recent-item-left {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.recent-item-name {
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  color: var(--text);
-}
-
-.recent-item-meta {
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  color: var(--text-mid);
-  letter-spacing: 0.06em;
-}
-
-.recent-item-arrow {
-  font-size: 12px;
-  color: var(--text-dim);
-  transition: color 0.15s, transform 0.15s;
-  flex-shrink: 0;
-  margin-left: 12px;
-}
-
-.recent-item:hover .recent-item-arrow {
-  color: var(--primary);
-  transform: translateX(4px);
-}
-
-.recent-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--secondary);
-  margin-right: 6px;
-  vertical-align: middle;
 }
 
 /* ============================================================
@@ -1023,8 +885,6 @@ main {
   .rule { margin: 0 16px; }
   .content-grid { padding: 28px 16px 40px; grid-template-columns: 1fr; }
   .action-cards { grid-template-columns: 1fr; }
-  .action-section { padding: 40px 16px; grid-template-columns: 1fr; }
-  .recent-section { padding: 0 16px 48px; }
 }
 
 /* ============================================================
@@ -1593,7 +1453,8 @@ main {
   background: var(--bg-raised);
   font-family: 'DM Mono', monospace;
 }
-th.avail-divider, td.avail-divider {
+th.avail-divider, td.avail-divider,
+th.col-divider, td.col-divider {
   width: 16px;
   background: var(--bg) !important;
   border: none !important;
@@ -1608,12 +1469,6 @@ th.avail-group-header {
   text-align: center;
   vertical-align: bottom;
   padding-bottom: 6px;
-}
-th.col-divider, td.col-divider {
-  width: 16px;
-  background: var(--bg) !important;
-  border: none !important;
-  padding: 0 !important;
 }
 .unified-table tbody tr { background: var(--bg-card); }
 .unified-table tbody td {
@@ -1908,77 +1763,6 @@ td.s-condition {
 }
 .page-sub {
   font-size: 11px;
-  color: var(--text-mid);
-  letter-spacing: 0.04em;
-  font-family: 'DM Mono', monospace;
-}
-
-/* ============================================================
-   TZ BANNER (signup page)
-============================================================ */
-.tz-banner {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-mid);
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.tz-banner-label {
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  font-family: 'DM Mono', monospace;
-}
-.tz-banner-value {
-  font-size: 12px;
-  color: var(--text);
-  letter-spacing: 0.04em;
-  font-family: 'DM Mono', monospace;
-}
-.tz-banner-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-shrink: 0;
-}
-.btn-tz-confirm {
-  padding: 6px 14px;
-  background: var(--secondary);
-  color: var(--bg);
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  border: none;
-  cursor: pointer;
-  transition: opacity 0.15s;
-  border-radius: 0;
-}
-.btn-tz-confirm:hover { opacity: 0.85; }
-.btn-tz-change {
-  padding: 6px 14px;
-  background: transparent;
-  color: var(--text-mid);
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  border: 1px solid var(--border-mid);
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-  border-radius: 0;
-}
-.btn-tz-change:hover {
-  border-color: var(--text-mid);
-  color: var(--text);
-}
-.tz-banner-question {
-  font-size: 10px;
   color: var(--text-mid);
   letter-spacing: 0.04em;
   font-family: 'DM Mono', monospace;

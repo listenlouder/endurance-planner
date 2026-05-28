@@ -1,24 +1,24 @@
 import hmac
 import json
-import time
 import logging
+import time
 from collections import Counter
 from datetime import date, datetime, time as time_type, timedelta, timezone as dt_utc
 from zoneinfo import ZoneInfo
 
+from django.conf import settings as django_settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Count, Q, Subquery, OuterRef
-
-logger = logging.getLogger(__name__)
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 
 from .forms import EventCreateForm
-from django.conf import settings as django_settings
+
+logger = logging.getLogger(__name__)
 
 from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .utils import (
@@ -122,11 +122,12 @@ VALID_TIMEZONES = frozenset(
     for zone in group['zones']
 )
 
-SORTED_TIMEZONES = [
-    zone[1]
-    for group in CURATED_TIMEZONES
-    for zone in group['zones']
-]
+def _driver_has_conflict(driver, start_utc, driver_availability):
+    """True if the driver has no availability slot covering start_utc's 30-min block."""
+    slot_minute = (start_utc.minute // 30) * 30
+    slot_key = start_utc.replace(minute=slot_minute, second=0, microsecond=0).astimezone(dt_utc.utc)
+    return slot_key not in driver_availability.get(driver.id, set())
+
 
 def _safe_json(data, **kwargs):
     """json.dumps safe for embedding in <script> blocks; prevents XSS via </script> injection."""
@@ -179,9 +180,6 @@ _REQUIRED_FOR_STINTS = [
     'avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds',
     'target_laps', 'fuel_capacity', 'fuel_per_lap',
 ]
-
-_MINUTES_CHOICES = [(0, '00'), (15, '15'), (30, '30'), (45, '45')]
-
 
 def _check_admin_key(event, admin_key):
     return hmac.compare_digest(str(admin_key), str(event.admin_key))
@@ -394,20 +392,14 @@ def get_signup_context(event):
     slots = get_availability_slots(event)
     return {
         'slots': slots,
-        'slot_timestamps_json': _safe_json([
-            s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
-            for s in slots
-        ]),
+        'slot_timestamps_json': _safe_json([normalize_iso(s) for s in slots]),
         'timezone_list_json': _TIMEZONE_LIST_JSON,
     }
 
 
 def _save_availability(driver, slots_raw, event):
     """Create Availability records for a driver from a list of ISO timestamp strings."""
-    valid_slot_set = {
-        s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
-        for s in get_availability_slots(event)
-    }
+    valid_slot_set = {normalize_iso(s) for s in get_availability_slots(event)}
     objects = []
     for slot_str in slots_raw:
         if slot_str in valid_slot_set:
@@ -488,9 +480,6 @@ def home(request):
 
 
 def event_create(request):
-    def _create_ctx(form):
-        return {'form': form}
-
     if request.method == 'POST':
         form = EventCreateForm(request.POST)
         if form.is_valid():
@@ -522,10 +511,10 @@ def event_create(request):
                 return render(request, 'partials/event_create_success.html', success_ctx)
             return render(request, 'event_create.html', success_ctx)
         if request.htmx:
-            return render(request, 'partials/event_create_form.html', _create_ctx(form))
+            return render(request, 'partials/event_create_form.html', {'form': form})
     else:
         form = EventCreateForm()
-    return render(request, 'event_create.html', _create_ctx(form))
+    return render(request, 'event_create.html', {'form': form})
 
 
 def event_search(request):
@@ -594,12 +583,10 @@ def view_event(request, event_id):
         sa = assignment_objs.get(n)
         driver = sa.driver if sa else None
 
-        has_conflict = False
-        if driver and sw.get('is_overridden'):
-            start_utc = sw['start_utc']
-            slot_minute = (start_utc.minute // 30) * 30
-            slot_key = start_utc.replace(minute=slot_minute, second=0, microsecond=0).astimezone(dt_utc.utc)
-            has_conflict = slot_key not in driver_availability.get(driver.id, set())
+        has_conflict = (
+            driver and sw.get('is_overridden') and
+            _driver_has_conflict(driver, sw['start_utc'], driver_availability)
+        )
 
         stint_rows.append({
             'stint_number':     n,
@@ -728,12 +715,10 @@ def _build_stint_rows_response(request, event):
         sa = assignment_objs.get(n)
         driver = sa.driver if sa else None
 
-        has_conflict = False
-        if driver and sw.get('is_overridden'):
-            start_utc = sw['start_utc']
-            slot_minute = (start_utc.minute // 30) * 30
-            slot_key = start_utc.replace(minute=slot_minute, second=0, microsecond=0).astimezone(dt_utc.utc)
-            has_conflict = slot_key not in driver_availability.get(driver.id, set())
+        has_conflict = (
+            driver and sw.get('is_overridden') and
+            _driver_has_conflict(driver, sw['start_utc'], driver_availability)
+        )
 
         rows.append({
             'stint_number':     n,
@@ -813,6 +798,7 @@ def reset_stint_start(request, event_id, stint_number):
 def signup(request, event_id):
     """GET: render signup form. POST: validate and save driver + availability."""
     event = get_object_or_404(Event, id=event_id)
+    prefill_name = request.user.discord_username or request.user.username if request.user.is_authenticated else ''
 
     if request.method == 'POST':
         cleaned, errors = _validate_signup_post(request.POST)
@@ -837,9 +823,6 @@ def signup(request, event_id):
                 return response
             return redirect('signup_success', event_id=event_id, driver_id=driver.id)
 
-        prefill_name = ''
-        if request.user.is_authenticated:
-            prefill_name = request.user.discord_username or request.user.username
         ctx = get_signup_context(event)
         ctx.update({
             'event': event,
@@ -854,9 +837,6 @@ def signup(request, event_id):
         return render(request, 'signup.html', ctx)
 
     ctx = get_signup_context(event)
-    prefill_name = ''
-    if request.user.is_authenticated:
-        prefill_name = request.user.discord_username or request.user.username
     ctx.update({'event': event, 'submitted_slot_timestamps': [], 'prefill_name': prefill_name})
     return render(request, 'signup.html', ctx)
 
@@ -865,13 +845,10 @@ def signup_edit(request, event_id, driver_id):
     """GET: edit form pre-populated. POST: replace availability."""
     event = get_object_or_404(Event, id=event_id)
     driver = get_object_or_404(Driver.objects.prefetch_related('availability'), id=driver_id, event=event)
+    from_admin = request.GET.get('from') == 'admin'
 
     def _existing_timestamps():
-        return [
-            a.slot_utc.isoformat().replace('+00:00', 'Z')
-            if a.slot_utc.tzinfo else a.slot_utc.isoformat() + 'Z'
-            for a in driver.availability.all()
-        ]
+        return [normalize_iso(a.slot_utc) for a in driver.availability.all()]
 
     if request.method == 'POST':
         cleaned, errors = _validate_signup_post(request.POST)
@@ -887,7 +864,6 @@ def signup_edit(request, event_id, driver_id):
                 driver.availability.all().delete()
                 _save_availability(driver, cleaned['slots_raw'], event)
 
-            from_admin = request.GET.get('from') == 'admin'
             if from_admin:
                 redirect_url = reverse('admin_dashboard', kwargs={'event_id': event_id})
             else:
@@ -898,7 +874,6 @@ def signup_edit(request, event_id, driver_id):
                 return response
             return redirect(redirect_url)
 
-        from_admin = request.GET.get('from') == 'admin'
         ctx = get_signup_context(event)
         ctx.update({
             'event': event,
@@ -913,7 +888,6 @@ def signup_edit(request, event_id, driver_id):
             return render(request, 'partials/signup_edit_form.html', ctx)
         return render(request, 'signup_edit.html', ctx)
 
-    from_admin = request.GET.get('from') == 'admin'
     ctx = get_signup_context(event)
     ctx.update({
         'event': event,
@@ -1047,10 +1021,7 @@ def _build_admin_context(request, event):
         if getattr(event, f) is None
     ]
 
-    slot_timestamps_json = _safe_json([
-        s.isoformat().replace('+00:00', 'Z') if s.tzinfo else s.isoformat() + 'Z'
-        for s in slots
-    ])
+    slot_timestamps_json = _safe_json([normalize_iso(s) for s in slots])
 
     total_seconds = event.length_seconds or 0
 
@@ -1100,14 +1071,10 @@ def _build_admin_context(request, event):
             n = sw['stint_number']
             sa = assignment_objs_for_windows.get(n)
             driver = sa.driver if sa else None
-            has_conflict = False
-            if driver and sw.get('is_overridden'):
-                start_utc = sw['start_utc']
-                slot_minute = (start_utc.minute // 30) * 30
-                slot_key = start_utc.replace(
-                    minute=slot_minute, second=0, microsecond=0
-                ).astimezone(dt_utc.utc)
-                has_conflict = slot_key not in driver_avail_sets.get(driver.id, set())
+            has_conflict = (
+                driver and sw.get('is_overridden') and
+                _driver_has_conflict(driver, sw['start_utc'], driver_avail_sets)
+            )
             stint_meta[n] = {
                 'is_overridden': sw.get('is_overridden', False),
                 'has_conflict': has_conflict,
@@ -1305,7 +1272,7 @@ def admin_add_driver(request, event_id):
         response['HX-Refresh'] = 'true'
         return response
 
-    # Refresh driver list after creation (stints not yet configured)
+    # Driver list update (stints not yet configured — no full page refresh)
     drivers_qs = (
         Driver.objects.filter(event=event)
         .prefetch_related('availability')
@@ -1326,7 +1293,9 @@ def admin_add_driver(request, event_id):
         },
         request=request,
     )
-    return HttpResponse(driver_list_html)
+    response = HttpResponse(driver_list_html)
+    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Driver added.'}})
+    return response
 
 
 def admin_save_details(request, event_id):
@@ -1384,7 +1353,7 @@ def admin_save_details(request, event_id):
     event.save()
 
     response = HttpResponse(status=200)
-    response['HX-Trigger'] = 'show-toast'
+    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Event details saved.'}})
     return response
 
 
@@ -1463,7 +1432,7 @@ def admin_save_calc(request, event_id):
         response['HX-Refresh'] = 'true'
         return response
     response = HttpResponse(status=200)
-    response['HX-Trigger'] = 'show-toast'
+    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Stint calc saved.'}})
     return response
 
 
@@ -1547,7 +1516,7 @@ def admin_save_assignments(request, event_id):
         StintAssignment.objects.bulk_create(assignments_to_create)
 
     response = HttpResponse(status=200)
-    response['HX-Trigger'] = 'show-toast'
+    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Assignments saved.'}})
     return response
 
 
