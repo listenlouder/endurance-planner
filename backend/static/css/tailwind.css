@@ -1555,11 +1555,59 @@ th.avail-group-header {
   color: var(--secondary) !important;
   text-align: center;
 }
-.avail-driver-th {
+/* Driver name column headers in the availability matrix.
+   Names run to 50 characters. `.unified-table thead th` sets
+   white-space: nowrap and the table is table-layout: fixed, so without an
+   explicit width these overflowed their cell and collided with the
+   neighbouring driver's name. Give the column a real width and let the name
+   wrap inside it. */
+/* Selector must outrank `.unified-table thead th`, which sets 12px side
+   padding — that alone consumed 24px of an 86px column. */
+.unified-table thead th.avail-driver-th {
   color: var(--secondary) !important;
   text-align: center;
   vertical-align: bottom;
-  padding-bottom: 6px;
+  width: 86px;
+  padding: 8px 5px 6px;
+}
+.avail-driver-th-inner {
+  display: flex;
+  flex-direction: column;
+  /* stretch, not center: a centered flex item shrinks to fit, which left the
+     name wrapping inside ~70% of the column and clipping earlier than it
+     needed to. Text stays centred via text-align on the th. */
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+.avail-driver-name {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  /* `anywhere` rather than `break-word`: a single unbroken 50-character
+     handle must still be forced to wrap instead of overflowing. */
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+  /* tighter than the 0.15em the other headers use — these are proper nouns
+     read at a glance, and the extra tracking cost a character per line */
+  letter-spacing: 0.02em;
+  /* Cap at three lines. Wrapping alone is unbounded — a name of several short
+     words puts each on its own line and pushes the header past 120px tall.
+     The full name stays available via the th's title attribute and the
+     assignment dropdown. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.avail-driver-stints {
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 400;
+  white-space: nowrap;
 }
 .unified-table tbody tr { background: var(--bg-card); }
 .unified-table tbody td {
