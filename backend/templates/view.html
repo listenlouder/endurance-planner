@@ -744,29 +744,77 @@
         this.editValue = '';
       },
 
+      csrfToken() {
+        return document.cookie.split(';')
+          .find(c => c.trim().startsWith('csrftoken='))
+          ?.split('=')[1] || '';
+      },
+
+      toast(message, isError) {
+        window.dispatchEvent(new CustomEvent('show-toast', {
+          detail: { message: message, error: !!isError }
+        }));
+      },
+
+      // A failed stint edit used to be swallowed silently — the row simply did
+      // not move and nothing said why. Report it instead.
+      failureMessage(status) {
+        if (status === 403) {
+          return 'Your session expired — reload the page and log in again.';
+        }
+        if (status === 400) {
+          return 'That time could not be applied to this stint.';
+        }
+        return 'Could not reach the server. Check your connection.';
+      },
+
+      // Returns the updated stint rows, or null after reporting the failure.
+      // Only the fetch itself is guarded: a rejection there really is a
+      // transport problem, whereas letting the JSON parse share the same catch
+      // would report a malformed 2xx body as "could not reach the server".
+      async postStint(row, action, extraFields) {
+        const formData = new FormData();
+        formData.append('csrfmiddlewaretoken', this.csrfToken());
+        for (const [key, value] of Object.entries(extraFields || {})) {
+          formData.append(key, value);
+        }
+
+        let res;
+        try {
+          res = await fetch(
+            `/${eventId}/stints/${row.stint_number}/${action}/`,
+            { method: 'POST', body: formData }
+          );
+        } catch (e) {
+          this.toast(this.failureMessage(0), true);
+          return null;
+        }
+
+        if (!res.ok) {
+          this.toast(this.failureMessage(res.status), true);
+          return null;
+        }
+
+        try {
+          return (await res.json()).stint_rows;
+        } catch (e) {
+          this.toast('The server sent back something unreadable.', true);
+          return null;
+        }
+      },
+
       async saveEdit(row) {
         if (!this.editValue) return;
         this.saving = true;
         try {
           const utcIso = this.localTimeToUtc(this.editValue, row.start_utc);
-          const formData = new FormData();
-          formData.append('actual_start_utc', utcIso);
-          formData.append(
-            'csrfmiddlewaretoken',
-            document.cookie.split(';')
-              .find(c => c.trim().startsWith('csrftoken='))
-              ?.split('=')[1] || ''
-          );
-          const res = await fetch(
-            `/${eventId}/stints/${row.stint_number}/set-start/`,
-            { method: 'POST', body: formData }
-          );
-          if (res.ok) {
-            const data = await res.json();
-            this.stintRows = data.stint_rows;
-            this.editingStint = null;
-            this.editValue = '';
-          }
+          const rows = await this.postStint(row, 'set-start', {
+            actual_start_utc: utcIso,
+          });
+          if (!rows) return;
+          this.stintRows = rows;
+          this.editingStint = null;
+          this.editValue = '';
         } finally {
           this.saving = false;
         }
@@ -775,21 +823,8 @@
       async resetStint(row) {
         this.saving = true;
         try {
-          const formData = new FormData();
-          formData.append(
-            'csrfmiddlewaretoken',
-            document.cookie.split(';')
-              .find(c => c.trim().startsWith('csrftoken='))
-              ?.split('=')[1] || ''
-          );
-          const res = await fetch(
-            `/${eventId}/stints/${row.stint_number}/reset-start/`,
-            { method: 'POST', body: formData }
-          );
-          if (res.ok) {
-            const data = await res.json();
-            this.stintRows = data.stint_rows;
-          }
+          const rows = await this.postStint(row, 'reset-start');
+          if (rows) this.stintRows = rows;
         } finally {
           this.saving = false;
         }

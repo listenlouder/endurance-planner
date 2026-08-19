@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+{% block title %}Login Failed — WeAreChecking{% endblock %}
+
+{% comment %}
+Overrides allauth's stock (unstyled, unbranded) third-party login error page.
+
+The usual cause is that Discord could not complete a silent authorization —
+SOCIALACCOUNT_PROVIDERS sends prompt=none so returning users skip the consent
+screen, and Discord answers with an error rather than a consent screen when it
+cannot do that (first authorization, revoked access, expired Discord session).
+The retry below overrides prompt=none with prompt=consent via allauth's
+?auth_params= query parameter, which forces the interactive Discord screen.
+{% endcomment %}
+
+{% block content %}
+<div style="display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: calc(100vh - 56px);">
+
+  <div style="width: 100%; max-width: 400px; padding: 0 16px;">
+
+    <div style="background: var(--bg-card);
+                border: 1px solid var(--border);
+                border-top: 2px solid var(--danger);
+                padding: 32px;">
+
+      <div class="page-eyebrow" style="color: var(--danger); margin-bottom: 10px;">
+        Login failed
+      </div>
+
+      <h1 style="font-family: 'Rajdhani', sans-serif;
+                 font-size: 22px;
+                 font-weight: 700;
+                 letter-spacing: 0.04em;
+                 text-transform: uppercase;
+                 color: var(--text);
+                 margin-bottom: 12px;">
+        Discord didn't sign you in
+      </h1>
+
+      <p style="font-size: 11px;
+                color: var(--text-mid);
+                letter-spacing: 0.04em;
+                line-height: 1.7;
+                margin-bottom: 8px;">
+        This usually means Discord needs you to approve access before we can
+        continue — most often the first time you sign in, or after you've
+        revoked the app.
+      </p>
+      <p style="font-size: 11px;
+                color: var(--text-mid);
+                letter-spacing: 0.04em;
+                line-height: 1.7;
+                margin-bottom: 24px;">
+        Try again below. Discord will show its authorize screen this time.
+      </p>
+
+      <form method="post" action="{% url 'discord_login' %}?auth_params=prompt%3Dconsent">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="/">
+        <button type="submit" class="btn-discord">
+          {% include 'partials/discord_icon.html' with w=18 h=14 %}
+          Authorize with Discord
+        </button>
+      </form>
+
+      <div style="margin-top: 20px; text-align: center;">
+        <a href="{% url 'home' %}"
+           style="font-size: 10px;
+                  color: var(--text-dim);
+                  letter-spacing: 0.08em;
+                  text-decoration: none;
+                  transition: color 0.15s;"
+           onmouseenter="this.style.color='var(--text)'"
+           onmouseleave="this.style.color='var(--text-dim)'">
+          ← Back to home
+        </a>
+      </div>
+
+    </div>
+
+    <p style="font-size: 10px;
+              color: var(--text-dim);
+              letter-spacing: 0.04em;
+              line-height: 1.7;
+              margin-top: 16px;
+              text-align: center;">
+      Still stuck? You can always reach an event through its shareable link
+      without logging in.
+    </p>
+
+  </div>
+</div>
+{% endblock %}

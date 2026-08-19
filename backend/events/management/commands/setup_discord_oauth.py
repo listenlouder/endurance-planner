@@ -19,11 +19,27 @@ class Command(BaseCommand):
             )
             return
 
-        domain = (
-            settings.ALLOWED_HOSTS[0]
-            if settings.ALLOWED_HOSTS and settings.ALLOWED_HOSTS[0] != '*'
-            else 'localhost:8000'
-        )
+        # allauth resolves the SocialApp by SITE_ID rather than by matching
+        # this domain against the request host, and it builds the Discord
+        # callback from the request — so this value does not steer the OAuth
+        # round-trip. It is still what absolute URLs built without a request
+        # use, so pin it explicitly rather than inheriting ALLOWED_HOSTS order.
+        domain = settings.SITE_DOMAIN
+        if not domain:
+            domain = (
+                settings.ALLOWED_HOSTS[0]
+                if settings.ALLOWED_HOSTS and settings.ALLOWED_HOSTS[0] != '*'
+                else 'localhost:8000'
+            )
+            self.stdout.write(
+                self.style.WARNING(
+                    f'SITE_DOMAIN is not set — falling back to the first '
+                    f'ALLOWED_HOSTS entry ({domain}). Set SITE_DOMAIN '
+                    f'explicitly so reordering ALLOWED_HOSTS cannot silently '
+                    f'change the recorded site domain.'
+                )
+            )
+
         site, _ = Site.objects.update_or_create(
             id=settings.SITE_ID,
             defaults={'domain': domain, 'name': 'WeAreChecking'},

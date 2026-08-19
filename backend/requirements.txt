@@ -1,14 +1,46 @@
-asgiref==3.11.1
-django-allauth>=0.61.0
-requests>=2.32.0
+# WeAreChecking — Python dependencies
+#
+# Everything is exact-pinned. Railway rebuilds on every push, so a floating
+# version means a deploy can change application behaviour with no code change
+# — which is exactly how an unexplained Discord login regression happens.
+# Bump these deliberately: change the pin, test, then push.
+#
+# Regenerate the transitive section after any bump with:
+#   pip install -r requirements.txt && pip list --format=freeze
+
+# --- Framework ---
 Django==6.0.3
-django-debug-toolbar==6.2.0
-django-htmx==1.27.0
-gunicorn==25.3.0
+
+# --- Direct dependencies (imported or configured by this project) ---
+django-allauth==65.16.1     # Discord OAuth (config/settings.py, events/adapters.py)
+django-htmx==1.27.0         # request.htmx, used throughout events/views.py
+gunicorn==25.3.0            # production WSGI server (railpack.json)
+whitenoise==6.12.0          # static file serving in production
+python-dotenv==1.2.2        # loads backend/.env in config/settings.py
+
+# --- Database drivers ---
+# config/__init__.py prefers MySQLdb (mysqlclient) and falls back to PyMySQL.
+# mysqlclient now ships wheels for both Linux and Windows, so the PyMySQL
+# fallback is unused in practice but kept as a safety net for environments
+# where the wheel is unavailable.
 mysqlclient==2.2.8
-packaging==26.0
 PyMySQL==1.1.2
-python-dotenv==1.2.2
-sqlparse==0.5.5
-tzdata==2025.3
-whitenoise==6.12.0
+
+# --- Transitive dependencies ---
+# Pinned so the resolver cannot drift between builds. The comment names what
+# pulls each one in.
+asgiref==3.11.1             # Django, django-allauth, django-htmx
+sqlparse==0.5.5             # Django
+tzdata==2025.3              # Django — zoneinfo database
+packaging==26.0             # gunicorn
+
+# django-allauth imports requests in its socialaccount code path
+# (allauth/socialaccount/providers/oauth2/client.py) but only declares it under
+# its optional `socialaccount` extra, which is not installed. Discord OAuth
+# therefore depends on requests being pinned here explicitly — do not remove it
+# without switching to django-allauth[socialaccount].
+requests==2.33.1
+certifi==2026.2.25          # requests
+charset-normalizer==3.4.7   # requests
+idna==3.11                  # requests
+urllib3==2.6.3              # requests

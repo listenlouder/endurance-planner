@@ -39,6 +39,46 @@
     '; path=/; SameSite=Lax';
 </script>
 
+<!-- Warns before a schedule edit strands driver availability -->
+<script>
+  function scheduleWatch(initial) {
+    return {
+      date: initial.date,
+      startTime: initial.startTime,
+      savedDate: initial.date,
+      savedStartTime: initial.startTime,
+      driversWithAvailability: initial.driversWithAvailability || 0,
+
+      get dateChanged() { return this.date !== this.savedDate; },
+      get timeChanged() { return this.startTime !== this.savedStartTime; },
+
+      get changedFields() {
+        if (this.dateChanged && this.timeChanged) return 'date and start time';
+        return this.dateChanged ? 'date' : 'start time';
+      },
+
+      // Deliberately does not try to predict how much survives. Slots sit on
+      // wall-clock half hours, so a sub-30-minute edit costs nothing, while a
+      // date move on a race longer than a day can still overlap — any rule
+      // simple enough to state here would be wrong in one direction or the
+      // other. This is a heads-up; admin_save_details reports the exact
+      // casualties after saving.
+      get warnsAboutAvailability() {
+        if (!this.driversWithAvailability) return false;
+        return this.dateChanged || this.timeChanged;
+      },
+
+      // Re-baseline after a successful save. The saved values are what the
+      // server now holds, so the warning should fall silent until the admin
+      // changes something again.
+      acceptSaved() {
+        this.savedDate = this.date;
+        this.savedStartTime = this.startTime;
+      },
+    };
+  }
+</script>
+
 <!-- Alpine data for stint calculation live preview -->
 <script>
   function stintCalc(initial) {
@@ -179,16 +219,7 @@
 
 {% block content %}
 
-<!-- Toast notification -->
-<div class="toast"
-     id="adminToast"
-     x-data
-     @show-toast.window="
-       $el.textContent = ($event.detail && $event.detail.message) ? $event.detail.message : 'Changes saved.';
-       $el.classList.add('visible');
-       setTimeout(() => $el.classList.remove('visible'), 2500)
-     ">
-</div>
+<!-- Toast lives in base.html — shared by every page. -->
 
 <!-- ============================================================
      PAGE HEADER
@@ -237,7 +268,19 @@
 
   <form hx-post="{% url 'admin_save_details' event.id %}"
         hx-target="#admin-details-errors"
-        hx-swap="innerHTML">
+        hx-swap="innerHTML"
+        x-data="scheduleWatch({
+          date: '{{ event.date|date:'Y-m-d' }}',
+          startTime: '{{ event.start_time_utc|time:'H:i' }}',
+          driversWithAvailability: {{ drivers_with_availability_count }}
+        })"
+        @htmx:after-request="if ($event.detail.successful) acceptSaved()">
+    {% comment %}
+    The response swaps #admin-details-errors, which lives outside this form, so
+    the form's Alpine state survives the save. Without re-baselining, the
+    pre-save warning would sit there permanently describing a move that already
+    happened.
+    {% endcomment %}
     {% csrf_token %}
 
     <div class="details-grid">
@@ -274,6 +317,7 @@
         <input class="detail-input"
                type="date"
                name="date"
+               x-model="date"
                value="{{ event.date|date:'Y-m-d' }}">
       </div>
 
@@ -283,6 +327,7 @@
         <input class="detail-input"
                type="time"
                name="start_time_utc"
+               x-model="startTime"
                value="{{ event.start_time_utc|time:'H:i' }}">
       </div>
 
@@ -349,6 +394,36 @@
         </label>
       </div>
 
+    </div>
+
+    <!-- Pre-save warning: stored availability is keyed to absolute UTC slots,
+         so moving the date or start time can strand it. Say so before saving,
+         not after. -->
+    <div x-show="warnsAboutAvailability"
+         x-cloak
+         style="margin-top: 12px;
+                padding: 12px 16px;
+                border: 1px solid var(--primary);
+                background: var(--primary-dim);
+                border-left: 3px solid var(--primary);">
+      <p style="font-size: 10px;
+                color: var(--primary);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                font-weight: 500;
+                margin-bottom: 6px;">
+        Schedule change affects availability
+      </p>
+      <p style="font-size: 11px;
+                color: var(--text-mid);
+                letter-spacing: 0.04em;
+                line-height: 1.6;">
+        <span x-text="driversWithAvailability"></span>
+        driver<span x-text="driversWithAvailability === 1 ? '' : 's'"></span>
+        entered availability against the current schedule. Moving the
+        <span x-text="changedFields"></span> keeps only what still falls inside
+        the new window — anything outside it is lost and will need re-entering.
+      </p>
     </div>
 
     <div class="details-actions">
@@ -592,22 +667,43 @@
 <section class="admin-section fade-up-delay-2">
   <div class="section-heading">Drivers Signed Up</div>
 
-  {% if drivers_missing_end_coverage %}
+  {% comment %}
+  Gaps where NO driver is available, measured against the race itself.
+  Deliberately not per-driver: partial availability is normal and expected, so
+  warning about an individual not covering the whole race is pure noise. What
+  an admin can act on is a stretch of the race nobody has claimed.
+  {% endcomment %}
+  {% if uncovered_race_windows %}
   <div style="padding: 10px 16px;
-               border: 1px solid var(--border);
-               background: var(--bg-raised);
-               border-left: 3px solid var(--text-dim);
+               border: 1px solid var(--primary);
+               background: var(--primary-dim);
+               border-left: 3px solid var(--primary);
                margin-bottom: 12px;
                max-width: 700px;">
     <p style="font-size: 10px;
-                color: var(--text-dim);
-                letter-spacing: 0.06em;
-                line-height: 1.6;
+                color: var(--primary);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                font-weight: 500;
+                margin-bottom: 6px;
                 font-family: 'DM Mono', monospace;">
-      ℹ Some drivers' availability doesn't cover the full race window:
-      <strong style="color: var(--text);">{{ drivers_missing_end_coverage|join:", " }}</strong>.
-      This may be because they signed up before the race end time was updated.
-      Ask them to update their availability, or assign them manually.
+      ⚠ {{ uncovered_race_seconds|seconds_to_hours_display }} of the race has no driver available
+    </p>
+    <p style="font-size: 11px;
+                color: var(--text-mid);
+                letter-spacing: 0.04em;
+                line-height: 1.7;
+                font-family: 'DM Mono', monospace;">
+      {% for window in uncovered_race_windows %}<span style="color: var(--text);">{{ window.label }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% if uncovered_race_windows_extra %}, and {{ uncovered_race_windows_extra }} more{% endif %}
+    </p>
+    <p style="font-size: 10px;
+                color: var(--text-dim);
+                letter-spacing: 0.04em;
+                line-height: 1.6;
+                margin-top: 8px;
+                font-family: 'DM Mono', monospace;">
+      Times shown in {{ admin_tz }}. Ask drivers to extend their availability,
+      or assign those stints manually.
     </p>
   </div>
   {% endif %}
@@ -790,11 +886,11 @@
             <th style="width: 90px; text-align: center;">Conditions</th>
             <th class="avail-divider"></th>
             {% for driver in drivers %}
-            <th class="avail-driver-th">
-              <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;">
-                <span>{{ driver.name }}</span>
-                <span x-text="driverStintCount('{{ driver.id }}') + ' stints'"
-                      style="font-size: 9px; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 400;"></span>
+            <th class="avail-driver-th" title="{{ driver.name }}">
+              <div class="avail-driver-th-inner">
+                <span class="avail-driver-name">{{ driver.name }}</span>
+                <span class="avail-driver-stints"
+                      x-text="driverStintCount('{{ driver.id }}') + ' stints'"></span>
               </div>
             </th>
             {% endfor %}
@@ -1216,8 +1312,12 @@
   const existingAssignments = {{ existing_assignments_json|safe }};
   const existingConditionsData = {{ existing_conditions_json|safe }};
   const driversData       = {{ drivers_json|safe }};
-  // Session start (not race start) — availability slots are always anchored here
-  const sessionStartUtc = '{{ event.start_datetime_utc|to_utc_z }}';
+  // Origin of the availability slot grid: derived from the session start (not
+  // the race start) and floored to a wall-clock :00/:30 boundary. Must stay in
+  // step with utils.slot_grid_anchor() — the helpers below snap stint times
+  // onto this grid and look the results up in availabilityData, so an
+  // unfloored origin probes timestamps that no slot can ever occupy.
+  const slotGridAnchorUtc = '{{ slot_grid_anchor|to_utc_z }}';
 
   function checkDriverConflict(stintNumber, driverId) {
     if (!driverId) return false;
@@ -1225,7 +1325,7 @@
     const sw = stintWindows.find(w => w.stint_number === stintNumber);
     if (!sw) return false;
     const slotMs = 30 * 60 * 1000;
-    const gridAnchorMs = new Date(sessionStartUtc).getTime();
+    const gridAnchorMs = new Date(slotGridAnchorUtc).getTime();
     const startMs = new Date(sw.start_utc).getTime();
     const endMs   = new Date(sw.end_utc).getTime();
     const snappedStartMs = gridAnchorMs + Math.ceil((startMs - gridAnchorMs) / slotMs) * slotMs;
@@ -1404,13 +1504,23 @@
         if (!sw) return '';
         const driverAvailSet = new Set(driverAvail);
         const slotMs = 30 * 60 * 1000;
-        const gridAnchorMs = new Date(sessionStartUtc).getTime();
+        const gridAnchorMs = new Date(slotGridAnchorUtc).getTime();
         const startMs = new Date(sw.start_utc).getTime();
         const endMs   = new Date(sw.end_utc).getTime();
-        const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
-        let currentMs = gridAnchorMs + offsetSlots * slotMs;
+        const snappedStartMs = gridAnchorMs
+          + Math.ceil((startMs - gridAnchorMs) / slotMs) * slotMs;
         let hasMissing = false;
-        while (currentMs < endMs) {
+        // Mirror build_stint_availability_matrix() and checkDriverConflict():
+        // when the stint starts before the first grid boundary, the slot
+        // covering that pre-grid portion counts too. Without this the dropdown
+        // left a driver undimmed while the conflict marker and the server
+        // matrix beside it both flagged them.
+        if (startMs < snappedStartMs) {
+          const preSlot = new Date(snappedStartMs - slotMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+          if (!driverAvailSet.has(preSlot)) hasMissing = true;
+        }
+        let currentMs = snappedStartMs;
+        while (!hasMissing && currentMs < endMs) {
           const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
           if (!driverAvailSet.has(isoStr)) { hasMissing = true; break; }
           currentMs += slotMs;

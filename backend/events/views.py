@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings as django_settings
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Count, Q, Subquery, OuterRef
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotAllowed, JsonResponse
@@ -23,11 +23,13 @@ logger = logging.getLogger(__name__)
 from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .utils import (
     build_stint_availability_matrix,
+    collapse_slot_ranges,
     format_stint_duration,
     get_availability_slots,
     get_stint_windows,
     laps_remaining_after_stint,
     seconds_to_mmss,
+    slot_grid_anchor,
     stint_length_seconds,
     total_race_laps,
     total_stints,
@@ -127,6 +129,41 @@ def _driver_has_conflict(driver, start_utc, driver_availability):
     slot_minute = (start_utc.minute // 30) * 30
     slot_key = start_utc.replace(minute=slot_minute, second=0, microsecond=0).astimezone(dt_utc.utc)
     return slot_key not in driver_availability.get(driver.id, set())
+
+
+def _drivers_with_stale_availability(event):
+    """
+    Drivers whose recorded availability no longer fits the event's slot grid,
+    and how much of it was stranded.
+
+    Availability rows hold absolute UTC datetimes, so moving the event's date,
+    start time or length can push them outside the new window.
+
+    Reports any driver who lost at least one slot, not only those who lost
+    everything: a driver left with one usable slot out of forty needs to
+    re-enter just as much as one left with none. No threshold is applied —
+    losing a single edge slot to a 30-minute nudge and losing the lot to a date
+    change are both real, and only the admin knows which matters, so the counts
+    are reported and the judgement left to them.
+
+    Drivers who never entered availability are skipped; they have nothing to
+    lose. Ordered by most lost first.
+    """
+    grid = {s.astimezone(dt_utc.utc) for s in get_availability_slots(event)}
+    stale = []
+    for driver in Driver.objects.filter(event=event).prefetch_related('availability'):
+        stored = {a.slot_utc.astimezone(dt_utc.utc) for a in driver.availability.all()}
+        if not stored:
+            continue
+        lost = stored - grid
+        if lost:
+            stale.append({
+                'name': driver.name,
+                'lost': len(lost),
+                'total': len(stored),
+            })
+    stale.sort(key=lambda entry: (-entry['lost'], entry['name']))
+    return stale
 
 
 def _safe_json(data, **kwargs):
@@ -234,27 +271,51 @@ def _build_availability_matrix(drivers, slots):
     return matrix, uncovered
 
 
-def _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz):
-    """Build the table_data list for the availability table partial."""
-    safe_tz = admin_tz if admin_tz in VALID_TIMEZONES else 'UTC'
-    admin_tz_zone = ZoneInfo(safe_tz)
+MAX_UNCOVERED_WINDOWS_SHOWN = 6
 
-    def _fmt_slot(slot):
-        local = slot.astimezone(admin_tz_zone)
-        return f"{local.strftime('%a')} {local.month}/{local.day} {local.strftime('%H:%M')}"
 
-    return [
-        {
-            'slot_utc': slot,
-            'slot_local_str': _fmt_slot(slot),
-            'is_uncovered': slot in uncovered_slots,
-            'driver_availability': {
-                driver.id: slot in availability_matrix[driver.id]
-                for driver in drivers
-            },
-        }
-        for slot in slots
+def _uncovered_race_windows(event, slots, uncovered_slots, admin_tz):
+    """
+    Stretches of the race that no driver has marked themselves available for.
+
+    Only the race itself counts. The slot grid also spans warmup and qualifying
+    before the green flag, and an hour of buffer past it for races that run
+    long — nobody has to be signed up for those, so gaps there are not gaps.
+
+    Returns (windows, total_seconds). Each window is a dict with a `label`
+    already rendered in admin_tz.
+    """
+    race_start = event.effective_start_datetime_utc
+    race_end = event.effective_end_datetime_utc
+
+    gaps = [
+        slot for slot in slots
+        if slot in uncovered_slots and race_start <= slot < race_end
     ]
+    if not gaps:
+        return [], 0
+
+    safe_tz = admin_tz if admin_tz in VALID_TIMEZONES else 'UTC'
+    zone = ZoneInfo(safe_tz)
+
+    def _fmt(moment, with_day):
+        local = moment.astimezone(zone)
+        if with_day:
+            return f"{local.strftime('%a')} {local.month}/{local.day} {local.strftime('%H:%M')}"
+        return local.strftime('%H:%M')
+
+    windows = []
+    total_seconds = 0
+    for start, end in collapse_slot_ranges(gaps):
+        # Repeat the date on the end only when the window crosses midnight.
+        crosses_day = start.astimezone(zone).date() != end.astimezone(zone).date()
+        windows.append({
+            'label': f"{_fmt(start, True)} – {_fmt(end, crosses_day)}",
+            'seconds': int((end - start).total_seconds()),
+        })
+        total_seconds += int((end - start).total_seconds())
+
+    return windows, total_seconds
 
 
 def _make_field_ctx(event, field_name):
@@ -973,17 +1034,9 @@ def _build_admin_context(request, event):
     if admin_tz not in VALID_TIMEZONES:
         admin_tz = 'UTC'
 
-    table_data = _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz)
-
-    if slots:
-        last_slot = slots[-1]
-        drivers_missing_end_coverage = [
-            driver.name
-            for driver in drivers
-            if last_slot not in {a.slot_utc for a in driver.availability.all()}
-        ]
-    else:
-        drivers_missing_end_coverage = []
+    uncovered_windows, uncovered_seconds = _uncovered_race_windows(
+        event, slots, uncovered_slots, admin_tz
+    )
 
     field_groups = [
         {
@@ -1021,6 +1074,12 @@ def _build_admin_context(request, event):
         if getattr(event, f) is None
     ]
 
+    # Drives the pre-save warning when the admin edits date or start time.
+    # `drivers` is already prefetched, so this costs no extra query.
+    drivers_with_availability_count = sum(
+        1 for d in drivers if d.availability.all()
+    )
+
     slot_timestamps_json = _safe_json([normalize_iso(s) for s in slots])
 
     total_seconds = event.length_seconds or 0
@@ -1053,7 +1112,7 @@ def _build_admin_context(request, event):
         }
         conditions = {sa.stint_number: sa.condition for sa in all_sa}
         stint_availability_matrix = build_stint_availability_matrix(
-            drivers, stint_windows, event.start_datetime_utc
+            drivers, stint_windows, slot_grid_anchor(event)
         )
         availability_json = {
             str(driver.id): [normalize_iso(a.slot_utc) for a in driver.availability.all()]
@@ -1090,13 +1149,19 @@ def _build_admin_context(request, event):
         'required_fields': _REQUIRED_FOR_STINTS,
         'missing_required_fields': missing_required_fields,
         'availability_matrix': availability_matrix,
-        'table_data': table_data,
         'sanity_warnings': validate_stint_sanity(event),
+        'drivers_with_availability_count': drivers_with_availability_count,
+        # The client-side conflict and dimming helpers snap stint times onto the
+        # availability grid themselves, so they must start from the same floored
+        # origin the server uses — not event.start_datetime_utc.
+        'slot_grid_anchor': slot_grid_anchor(event),
+        'uncovered_race_windows': uncovered_windows[:MAX_UNCOVERED_WINDOWS_SHOWN],
+        'uncovered_race_windows_extra': max(0, len(uncovered_windows) - MAX_UNCOVERED_WINDOWS_SHOWN),
+        'uncovered_race_seconds': uncovered_seconds,
         'timezone_list_json': _TIMEZONE_LIST_JSON,
         'slot_timestamps_json': slot_timestamps_json,
         'slots': slots,
         'signup_url': signup_url,
-        'drivers_missing_end_coverage': drivers_missing_end_coverage,
         'length_hours_display': total_seconds // 3600,
         'length_minutes_display': (total_seconds % 3600) // 60,
         'has_required_stint_fields': has_required_stint_fields,
@@ -1130,15 +1195,30 @@ def _build_admin_context(request, event):
     }
 
 
+def _grant_admin_session(request, event_id):
+    """
+    Mark the session as admin for this event, rotating the session ID on the
+    transition to guard against session fixation.
+
+    Only rotates when the flag is not already set. cycle_key() deletes the old
+    session row, so calling it on every request breaks any other request or tab
+    still holding the previous key — which reads to the user as being randomly
+    logged out.
+    """
+    session_key = f'admin_{event_id}'
+    if request.session.get(session_key):
+        return
+    request.session.cycle_key()
+    request.session[session_key] = True
+
+
 def admin_page(request, event_id, admin_key):
     event = get_object_or_404(Event, id=event_id)
 
     if not _check_admin_key(event, admin_key):
         return render(request, 'admin_error.html', {'error': 'Invalid admin key supplied.'})
 
-    # Rotate session ID on promotion to prevent session fixation
-    request.session.cycle_key()
-    request.session[f'admin_{event_id}'] = True
+    _grant_admin_session(request, event_id)
 
     # Redirect to key-less URL so the admin key only appears in logs
     # once (as this 302) rather than on every subsequent page visit.
@@ -1150,8 +1230,7 @@ def admin_dashboard(request, event_id):
     if request.user.is_authenticated:
         event = get_object_or_404(Event, id=event_id)
         if event.created_by == request.user:
-            request.session.cycle_key()
-            request.session[f'admin_{event_id}'] = True
+            _grant_admin_session(request, event_id)
             return render(request, 'admin.html', _build_admin_context(request, event))
         # Authenticated as non-owner — fall back to session
         if request.session.get(f'admin_{event_id}'):
@@ -1252,12 +1331,12 @@ def admin_add_driver(request, event_id):
         errors['timezone'] = 'A valid timezone is required.'
 
     if errors:
-        error_html = ''.join(
-            f'<p style="color: var(--danger); font-size: 10px;'
-            f' letter-spacing: 0.06em; margin-bottom: 4px;">{msg}</p>'
-            for msg in errors.values()
-        )
-        return HttpResponse(error_html, status=422)
+        # The form's success target is the driver list, so retarget the error
+        # swap at the form's own error slot instead of replacing that list.
+        response = render(request, 'partials/form_errors.html', {'errors': errors}, status=422)
+        response['HX-Retarget'] = '#add-driver-errors'
+        response['HX-Reswap'] = 'innerHTML'
+        return response
 
     admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
     if admin_tz not in VALID_TIMEZONES:
@@ -1304,6 +1383,10 @@ def admin_save_details(request, event_id):
     if request.method != 'POST':
         return HttpResponseBadRequest()
 
+    original_date = event.date
+    original_start_time = event.start_time_utc
+    original_length_seconds = event.length_seconds
+
     errors = {}
 
     name = request.POST.get('name', '').strip()
@@ -1335,7 +1418,7 @@ def admin_save_details(request, event_id):
         length_seconds = None
 
     if errors:
-        return render(request, 'partials/admin_details_errors.html', {'errors': errors}, status=422)
+        return render(request, 'partials/form_errors.html', {'errors': errors}, status=422)
 
     event.name = name
     if parsed_date:
@@ -1350,7 +1433,33 @@ def admin_save_details(request, event_id):
     event.track = request.POST.get('track', '').strip()
     event.setup = request.POST.get('setup', '').strip()
     event.recruiting = (request.POST.get('recruiting') == 'on')
+
+    # Length counts too: shortening a race truncates the tail of the slot grid
+    # and strands availability just as surely as moving the start.
+    schedule_moved = (
+        event.date != original_date
+        or event.start_time_utc != original_start_time
+        or event.length_seconds != original_length_seconds
+    )
     event.save()
+
+    # Availability is stored as absolute UTC slots, so moving the event's date
+    # or start time can leave a driver's answers outside the new window
+    # entirely. That is intended — they need to re-enter it — but it must not
+    # happen silently.
+    stale_drivers = _drivers_with_stale_availability(event) if schedule_moved else []
+
+    if stale_drivers:
+        response = render(
+            request,
+            'partials/availability_warning.html',
+            {'stale_drivers': stale_drivers, 'event': event},
+        )
+        response['HX-Trigger'] = json.dumps({'show-toast': {
+            'message': f'Saved — {len(stale_drivers)} driver(s) lost availability slots.',
+            'error': True,
+        }})
+        return response
 
     response = HttpResponse(status=200)
     response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Event details saved.'}})
@@ -1422,7 +1531,7 @@ def admin_save_calc(request, event_id):
             errors['race_start_time_utc'] = 'Invalid race start time.'
 
     if errors:
-        return render(request, 'partials/admin_calc_errors.html', {'errors': errors})
+        return render(request, 'partials/form_errors.html', {'errors': errors}, status=422)
 
     if race_start_submitted:
         event.race_start_time_utc = parsed_race_start
@@ -1558,7 +1667,10 @@ def feedback_submit(request):
     )
 
     response = HttpResponse('')
-    response['HX-Trigger'] = 'feedbackSuccess'
+    # Kebab-case to match the listener. HTML attribute names are lowercased by
+    # the parser, so an Alpine @feedbackSuccess.window listener could never
+    # match a camelCase event name.
+    response['HX-Trigger'] = 'feedback-success'
     return response
 
 

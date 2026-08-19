@@ -37,25 +37,18 @@ from django.urls import reverse
 from .forms import EventCreateForm
 from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .templatetags.tz_filters import (
-    datetime_in_tz,
     dict_get,
-    get_item,
     seconds_to_hours_display,
-    time_in_tz,
-    to_tz,
     to_utc_z,
 )
 from .utils import (
     build_stint_availability_matrix,
-    check_driver_conflict,
     format_stint_duration,
     get_availability_slots,
     get_stint_windows,
     last_stint_length_seconds,
     seconds_to_mmss,
-    stint_end_time,
     stint_length_seconds,
-    stint_start_time,
     total_stints,
     validate_stint_sanity,
 )
@@ -209,100 +202,6 @@ class TotalStintsTests(SimpleTestCase):
         self.assertEqual(total_stints(event), 24)
 
 
-class StintStartTimeTests(SimpleTestCase):
-    """Tests for utils.stint_start_time()."""
-
-    def test_stint_1_starts_at_event_start(self):
-        event = make_event()
-        start = stint_start_time(event, 1)
-        self.assertEqual(start, event.effective_start_datetime_utc)
-
-    def test_stint_1_is_utc_aware(self):
-        event = make_event()
-        start = stint_start_time(event, 1)
-        self.assertIsNotNone(start.tzinfo)
-        self.assertEqual(start.utcoffset(), dt.timedelta(0))
-
-    def test_stint_2_offset_by_one_stint(self):
-        event = make_event()
-        sl = stint_length_seconds(event)
-        expected = event.start_datetime_utc + dt.timedelta(seconds=sl)
-        self.assertEqual(stint_start_time(event, 2), expected)
-
-    def test_stint_3_offset_by_two_stints(self):
-        event = make_event()
-        sl = stint_length_seconds(event)
-        expected = event.start_datetime_utc + dt.timedelta(seconds=2 * sl)
-        self.assertEqual(stint_start_time(event, 3), expected)
-
-    def test_start_times_are_equally_spaced(self):
-        event = make_event()
-        sl = stint_length_seconds(event)
-        n = total_stints(event)
-        for i in range(2, n + 1):
-            gap = stint_start_time(event, i) - stint_start_time(event, i - 1)
-            self.assertAlmostEqual(gap.total_seconds(), sl, places=3)
-
-    def test_start_time_midnight_utc(self):
-        event = make_event(date=dt.date(2026, 1, 1), start_time_utc=dt.time(0, 0, 0))
-        start = stint_start_time(event, 1)
-        self.assertEqual(start, utc(2026, 1, 1, 0, 0, 0))
-
-    def test_start_time_crosses_midnight(self):
-        # Start at 23:00, stint = 3615 s (60 min 15 s) → stint 2 crosses midnight
-        event = make_event(date=dt.date(2026, 6, 1), start_time_utc=dt.time(23, 0, 0))
-        s2 = stint_start_time(event, 2)
-        self.assertEqual(s2.date(), dt.date(2026, 6, 2))
-
-
-class StintEndTimeTests(SimpleTestCase):
-    """Tests for utils.stint_end_time()."""
-
-    def test_intermediate_stint_ends_at_next_start(self):
-        event = make_event()
-        n = total_stints(event)
-        for i in range(1, n):  # all but last
-            self.assertEqual(stint_end_time(event, i), stint_start_time(event, i + 1))
-
-    def test_final_stint_ends_at_event_end(self):
-        event = make_event()
-        n = total_stints(event)
-        self.assertEqual(stint_end_time(event, n), event.end_datetime_utc)
-
-    def test_last_stint_may_be_shorter_than_others(self):
-        # When race doesn't divide evenly the final stint is truncated
-        event = make_event()   # 21600 / 3615 = 5.976 → last stint is partial
-        n = total_stints(event)
-        sl = stint_length_seconds(event)
-        last_duration = (stint_end_time(event, n) - stint_start_time(event, n)).total_seconds()
-        # The last stint duration must be ≤ full stint length
-        self.assertLessEqual(last_duration, sl)
-        # And it must be positive
-        self.assertGreater(last_duration, 0)
-
-    def test_when_race_divides_evenly_all_stints_equal_length(self):
-        event = make_event(
-            avg_lap_seconds=120.0, in_lap_seconds=120.0, out_lap_seconds=120.0,
-            target_laps=30, length_seconds=7_200,   # exactly 2 stints of 3600 s
-        )
-        n = total_stints(event)
-        sl = stint_length_seconds(event)
-        for i in range(1, n + 1):
-            duration = (stint_end_time(event, i) - stint_start_time(event, i)).total_seconds()
-            self.assertAlmostEqual(duration, sl, places=3)
-
-    def test_end_time_is_utc_aware(self):
-        event = make_event()
-        end = stint_end_time(event, 1)
-        self.assertIsNotNone(end.tzinfo)
-
-    def test_stint_end_time_for_number_beyond_total_treated_as_final(self):
-        # Calling with number >= total_stints returns event.end_datetime_utc
-        event = make_event()
-        n = total_stints(event)
-        self.assertEqual(stint_end_time(event, n + 5), event.end_datetime_utc)
-
-
 class GetStintWindowsTests(SimpleTestCase):
     """Tests for utils.get_stint_windows()."""
 
@@ -355,11 +254,17 @@ class GetStintWindowsTests(SimpleTestCase):
         for i in range(len(windows) - 1):
             self.assertEqual(windows[i]['end_utc'], windows[i + 1]['start_utc'])
 
-    def test_start_utc_matches_stint_start_time_helper(self):
+    def test_start_utc_is_the_effective_start_plus_whole_stints(self):
+        # Previously cross-checked against a stint_start_time() helper; that
+        # helper had no callers and no override support, so the expectation is
+        # computed here instead.
         event = make_event()
-        windows = get_stint_windows(event)
-        for w in windows:
-            expected = stint_start_time(event, w['stint_number'])
+        stint_length = stint_length_seconds(event)
+
+        for w in get_stint_windows(event):
+            expected = event.effective_start_datetime_utc + dt.timedelta(
+                seconds=(w['stint_number'] - 1) * stint_length
+            )
             self.assertEqual(w['start_utc'], expected)
 
     def test_all_datetimes_are_utc_aware(self):
@@ -448,101 +353,6 @@ class GetAvailabilitySlotsTests(SimpleTestCase):
         slots = get_availability_slots(event)
         self.assertEqual(len(slots), 3)
         self.assertEqual(slots[0], event.start_datetime_utc)
-
-
-class CheckDriverConflictTests(TestCase):
-    """Tests for utils.check_driver_conflict().
-
-    Requires the database because Availability uses a ForeignKey through Driver.
-    """
-
-    def setUp(self):
-        self.event = save_event()
-        self.driver = Driver.objects.create(
-            event=self.event,
-            name='Alice',
-            timezone='UTC',
-        )
-
-    def _add_slots(self, start_utc, count):
-        """Add `count` consecutive 30-min availability slots for self.driver."""
-        for i in range(count):
-            slot = start_utc + dt.timedelta(minutes=30 * i)
-            Availability.objects.create(driver=self.driver, slot_utc=slot)
-
-    def _make_window(self, start_utc, end_utc):
-        return {'start_utc': start_utc, 'end_utc': end_utc}
-
-    # --- No conflict scenarios ---
-
-    def test_full_coverage_no_conflict(self):
-        # Driver covers every 30-min slot in the window
-        start = utc(2026, 6, 1, 12, 0)
-        end = utc(2026, 6, 1, 14, 0)   # 2-hour window → 4 slots
-        self._add_slots(start, 4)
-        window = self._make_window(start, end)
-        self.assertFalse(check_driver_conflict(self.driver, window))
-
-    def test_single_slot_window_driver_available(self):
-        slot = utc(2026, 6, 1, 12, 0)
-        Availability.objects.create(driver=self.driver, slot_utc=slot)
-        window = self._make_window(slot, slot + dt.timedelta(minutes=30))
-        self.assertFalse(check_driver_conflict(self.driver, window))
-
-    # --- Conflict scenarios ---
-
-    def test_no_availability_at_all_is_conflict(self):
-        window = self._make_window(
-            utc(2026, 6, 1, 12, 0),
-            utc(2026, 6, 1, 13, 0),
-        )
-        self.assertTrue(check_driver_conflict(self.driver, window))
-
-    def test_partial_coverage_is_conflict(self):
-        # Driver has first slot but not second
-        start = utc(2026, 6, 1, 12, 0)
-        Availability.objects.create(driver=self.driver, slot_utc=start)
-        window = self._make_window(start, start + dt.timedelta(hours=1))
-        self.assertTrue(check_driver_conflict(self.driver, window))
-
-    def test_gap_in_middle_is_conflict(self):
-        # Slots at 12:00, 13:00 but missing 12:30
-        Availability.objects.create(driver=self.driver, slot_utc=utc(2026, 6, 1, 12, 0))
-        Availability.objects.create(driver=self.driver, slot_utc=utc(2026, 6, 1, 13, 0))
-        window = self._make_window(
-            utc(2026, 6, 1, 12, 0),
-            utc(2026, 6, 1, 13, 30),
-        )
-        self.assertTrue(check_driver_conflict(self.driver, window))
-
-    def test_availability_outside_window_does_not_help(self):
-        # Driver available from 14:00 onwards, but window is 12:00–13:00
-        self._add_slots(utc(2026, 6, 1, 14, 0), 4)
-        window = self._make_window(
-            utc(2026, 6, 1, 12, 0),
-            utc(2026, 6, 1, 13, 0),
-        )
-        self.assertTrue(check_driver_conflict(self.driver, window))
-
-    def test_coverage_extends_beyond_window_still_no_conflict(self):
-        # Driver covers more slots than the window requires
-        start = utc(2026, 6, 1, 12, 0)
-        self._add_slots(start, 10)   # 5 hours of availability
-        window = self._make_window(start, start + dt.timedelta(hours=1))
-        self.assertFalse(check_driver_conflict(self.driver, window))
-
-    def test_different_driver_availability_does_not_affect_result(self):
-        # A second driver is available; self.driver is not
-        other = Driver.objects.create(event=self.event, name='Bob', timezone='UTC')
-        self._add_slots(utc(2026, 6, 1, 12, 0), 4)  # slots for self.driver
-        window = self._make_window(
-            utc(2026, 6, 1, 12, 0),
-            utc(2026, 6, 1, 14, 0),
-        )
-        # Check conflict for `other` — he has no availability
-        self.assertTrue(check_driver_conflict(other, window))
-        # self.driver still has no conflict
-        self.assertFalse(check_driver_conflict(self.driver, window))
 
 
 # ---------------------------------------------------------------------------
@@ -652,157 +462,6 @@ class EventModelPropertyTests(TestCase):
 # ---------------------------------------------------------------------------
 # Priority 2: Timezone template filters
 # ---------------------------------------------------------------------------
-
-class ToTzFilterTests(SimpleTestCase):
-    """Tests for templatetags.tz_filters.to_tz."""
-
-    def _utc_dt(self, hour=12, minute=0):
-        return dt.datetime(2026, 6, 15, hour, minute, 0, tzinfo=timezone.utc)
-
-    def test_utc_to_eastern_standard(self):
-        # UTC 12:00 → America/New_York is EDT (UTC-4) in June → 08:00
-        result = to_tz(self._utc_dt(12), 'America/New_York')
-        self.assertEqual(result.hour, 8)
-        self.assertEqual(result.minute, 0)
-
-    def test_utc_to_pacific_standard(self):
-        # UTC 12:00 → America/Los_Angeles is PDT (UTC-7) in June → 05:00
-        result = to_tz(self._utc_dt(12), 'America/Los_Angeles')
-        self.assertEqual(result.hour, 5)
-
-    def test_utc_to_london_bst(self):
-        # UTC 12:00 → Europe/London is BST (UTC+1) in June → 13:00
-        result = to_tz(self._utc_dt(12), 'Europe/London')
-        self.assertEqual(result.hour, 13)
-
-    def test_utc_to_tokyo(self):
-        # UTC 12:00 → Asia/Tokyo is JST (UTC+9) always → 21:00
-        result = to_tz(self._utc_dt(12), 'Asia/Tokyo')
-        self.assertEqual(result.hour, 21)
-
-    def test_utc_to_utc_unchanged(self):
-        original = self._utc_dt(15, 30)
-        result = to_tz(original, 'UTC')
-        self.assertEqual(result.hour, 15)
-        self.assertEqual(result.minute, 30)
-
-    def test_invalid_timezone_returns_original_datetime(self):
-        original = self._utc_dt(10)
-        result = to_tz(original, 'Not/ATimezone')
-        # Falls back to returning the original dt unchanged
-        self.assertEqual(result, original)
-
-    def test_result_is_timezone_aware(self):
-        result = to_tz(self._utc_dt(12), 'America/New_York')
-        self.assertIsNotNone(result.tzinfo)
-
-    def test_dst_transition_march_us(self):
-        # 2026-03-08 06:30 UTC → before and after DST transition in New York
-        # America/New_York goes to EDT at 02:00 local on 2026-03-08
-        # 06:30 UTC = 01:30 EST (before switch) - but the switch happens at 2am local
-        # Actually: DST 2026 is March 8. At 2am EST = 7am UTC.
-        # So 6:30 UTC = 1:30 AM EST (still standard time)
-        before_dst = dt.datetime(2026, 3, 8, 6, 30, 0, tzinfo=timezone.utc)
-        result = to_tz(before_dst, 'America/New_York')
-        # 6:30 UTC - 5h = 1:30 EST
-        self.assertEqual(result.hour, 1)
-        self.assertEqual(result.minute, 30)
-
-    def test_dst_transition_march_us_after(self):
-        # 8:00 UTC on March 8 = 4:00 AM EDT (after DST switch at 7 AM UTC)
-        after_dst = dt.datetime(2026, 3, 8, 8, 0, 0, tzinfo=timezone.utc)
-        result = to_tz(after_dst, 'America/New_York')
-        self.assertEqual(result.hour, 4)
-
-
-class DatetimeInTzFilterTests(SimpleTestCase):
-    """Tests for templatetags.tz_filters.datetime_in_tz."""
-
-    def test_output_format_eastern(self):
-        # 2026-06-15 16:00 UTC → America/New_York EDT (UTC-4) → 12:00
-        source = dt.datetime(2026, 6, 15, 16, 0, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'America/New_York')
-        # Expected format: "Jun 15 2026, 12:00"
-        self.assertEqual(result, 'Jun 15 2026, 12:00')
-
-    def test_output_format_utc(self):
-        source = dt.datetime(2026, 3, 1, 9, 5, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'UTC')
-        # Day 1 with no leading zero: "Mar 1 2026, 09:05"
-        self.assertEqual(result, 'Mar 1 2026, 09:05')
-
-    def test_no_leading_zero_on_day(self):
-        source = dt.datetime(2026, 4, 5, 14, 0, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'UTC')
-        self.assertIn('Apr 5 ', result)
-        # Should NOT have 'Apr 05'
-        self.assertNotIn('Apr 05', result)
-
-    def test_double_digit_day(self):
-        source = dt.datetime(2026, 11, 23, 10, 0, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'UTC')
-        self.assertIn('Nov 23 ', result)
-
-    def test_invalid_timezone_returns_str_of_dt(self):
-        source = dt.datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'Bad/Zone')
-        # Falls back to str(dt)
-        self.assertEqual(result, str(source))
-
-    def test_tokyo_conversion(self):
-        # UTC 15:00 → JST 00:00 next day
-        source = dt.datetime(2026, 6, 15, 15, 0, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'Asia/Tokyo')
-        self.assertEqual(result, 'Jun 16 2026, 00:00')
-
-    def test_contains_correct_year(self):
-        source = dt.datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-        result = datetime_in_tz(source, 'UTC')
-        self.assertIn('2026', result)
-
-
-class TimeInTzFilterTests(SimpleTestCase):
-    """Tests for templatetags.tz_filters.time_in_tz."""
-
-    def test_utc_to_eastern_time_portion(self):
-        # UTC 12:00 → America/New_York EDT (UTC-4) → 08:00
-        source = dt.datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'America/New_York')
-        self.assertEqual(result, '08:00')
-
-    def test_utc_to_tokyo_time_portion(self):
-        source = dt.datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'Asia/Tokyo')
-        self.assertEqual(result, '21:00')
-
-    def test_output_format_is_hhmm(self):
-        source = dt.datetime(2026, 6, 15, 9, 5, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'UTC')
-        self.assertEqual(result, '09:05')
-
-    def test_midnight_utc(self):
-        source = dt.datetime(2026, 6, 15, 0, 0, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'UTC')
-        self.assertEqual(result, '00:00')
-
-    def test_invalid_timezone_returns_utc_time(self):
-        source = dt.datetime(2026, 6, 15, 14, 30, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'Garbage/Zone')
-        # Falls back to dt.strftime('%H:%M') of the original UTC dt
-        self.assertEqual(result, '14:30')
-
-    def test_london_bst_summer(self):
-        # UTC 12:00 → Europe/London BST (UTC+1) → 13:00
-        source = dt.datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'Europe/London')
-        self.assertEqual(result, '13:00')
-
-    def test_london_gmt_winter(self):
-        # UTC 12:00 → Europe/London GMT (UTC+0) in January → 12:00
-        source = dt.datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-        result = time_in_tz(source, 'Europe/London')
-        self.assertEqual(result, '12:00')
-
 
 class ToUtcZFilterTests(SimpleTestCase):
     """Tests for templatetags.tz_filters.to_utc_z."""
@@ -1649,7 +1308,6 @@ class DictGetFilterTests(SimpleTestCase):
         self.assertEqual(result, 'three')
 
 
-
 # ---------------------------------------------------------------------------
 # feedback_submit view
 # ---------------------------------------------------------------------------
@@ -1731,7 +1389,10 @@ class FeedbackSubmitTests(TestCase):
         response = self.client.post(self.url, {'text': 'Nice work'})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['HX-Trigger'], 'feedbackSuccess')
+        # Must be kebab-case: the Alpine listener in base.html is an HTML
+        # attribute, and attribute names are lowercased by the parser, so a
+        # camelCase event name can never be listened for.
+        self.assertEqual(response['HX-Trigger'], 'feedback-success')
 
     def test_valid_submission_returns_empty_body(self):
         response = self.client.post(self.url, {'text': 'Nice work'})
@@ -1931,12 +1592,21 @@ class SecondsToHoursDisplayFilterTests(SimpleTestCase):
         self.assertEqual(seconds_to_hours_display(23400), '6h 30m')
 
     def test_one_minute_only(self):
-        # 60 s = 0 h 1 m
-        self.assertEqual(seconds_to_hours_display(60), '0h 1m')
+        # Sub-hour durations omit the hours part: "0h 1m" reads as a bug.
+        self.assertEqual(seconds_to_hours_display(60), '1m')
 
     def test_fifty_nine_minutes(self):
-        # 3540 s = 0 h 59 m
-        self.assertEqual(seconds_to_hours_display(3540), '0h 59m')
+        self.assertEqual(seconds_to_hours_display(3540), '59m')
+
+    def test_half_an_hour(self):
+        # The uncovered-window banner routinely reports gaps under an hour.
+        self.assertEqual(seconds_to_hours_display(1800), '30m')
+
+    def test_whole_hours_keep_the_hours_only_form(self):
+        self.assertEqual(seconds_to_hours_display(7200), '2h')
+
+    def test_hours_and_minutes_keep_both(self):
+        self.assertEqual(seconds_to_hours_display(23400), '6h 30m')
 
     def test_zero_returns_em_dash(self):
         # 0 is falsy — the filter returns the sentinel
@@ -1957,32 +1627,6 @@ class SecondsToHoursDisplayFilterTests(SimpleTestCase):
 # ---------------------------------------------------------------------------
 # get_item filter (Phase A)
 # ---------------------------------------------------------------------------
-
-class GetItemFilterTests(SimpleTestCase):
-    """Tests for templatetags.tz_filters.get_item.
-
-    get_item is a simple dict.get() wrapper for template use.
-    Unlike dict_get it does NOT fall back to str(key) coercion.
-    """
-
-    def test_string_key_present_returns_value(self):
-        self.assertEqual(get_item({'a': 1}, 'a'), 1)
-
-    def test_string_key_absent_returns_none(self):
-        self.assertIsNone(get_item({'a': 1}, 'b'))
-
-    def test_integer_key_present_returns_value(self):
-        self.assertEqual(get_item({1: 'one'}, 1), 'one')
-
-    def test_key_with_falsy_value_returns_falsy_value(self):
-        # Must distinguish "missing key" from "key with falsy value"
-        self.assertEqual(get_item({'x': 0}, 'x'), 0)
-        self.assertEqual(get_item({'x': False}, 'x'), False)
-        self.assertEqual(get_item({'x': ''}, 'x'), '')
-
-    def test_empty_dict_returns_none(self):
-        self.assertIsNone(get_item({}, 'anything'))
-
 
 # ---------------------------------------------------------------------------
 # Home view — recruiting_events context (Phase C)
@@ -2742,7 +2386,7 @@ class AdminSaveDetailsTests(TestCase):
         response = self.client.post(self.url, self._valid_post(name=''))
 
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_details_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_invalid_date_format_returns_error_partial(self):
         self._set_admin_session()
@@ -2752,7 +2396,7 @@ class AdminSaveDetailsTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertNotIn('HX-Trigger', response)
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_details_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_invalid_start_time_returns_error_partial(self):
         self._set_admin_session()
@@ -2762,7 +2406,7 @@ class AdminSaveDetailsTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertNotIn('HX-Trigger', response)
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_details_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_zero_length_race_returns_error_partial(self):
         self._set_admin_session()
@@ -2775,7 +2419,7 @@ class AdminSaveDetailsTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertNotIn('HX-Trigger', response)
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_details_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_zero_length_race_does_not_update_event(self):
         self._set_admin_session()
@@ -2928,19 +2572,23 @@ class AdminSaveCalcTests(TestCase):
 
         response = self.client.post(self.url, {'avg_lap': 'not-a-time'})
 
-        self.assertEqual(response.status_code, 200)
+        # 422 signals a validation error; base.html opts 422 into being
+        # swapped so the partial actually renders.
+        self.assertEqual(response.status_code, 422)
         self.assertNotIn('HX-Trigger', response)
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_calc_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_mmss_with_seconds_gte_60_returns_error_partial(self):
         self._set_admin_session()
 
         response = self.client.post(self.url, {'avg_lap': '2:60'})
 
-        self.assertEqual(response.status_code, 200)
+        # 422 signals a validation error; base.html opts 422 into being
+        # swapped so the partial actually renders.
+        self.assertEqual(response.status_code, 422)
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_calc_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_fuel_capacity_saved(self):
         self._set_admin_session()
@@ -3000,9 +2648,11 @@ class AdminSaveCalcTests(TestCase):
 
         response = self.client.post(self.url, {'fuel_capacity': 'abc'})
 
-        self.assertEqual(response.status_code, 200)
+        # 422 signals a validation error; base.html opts 422 into being
+        # swapped so the partial actually renders.
+        self.assertEqual(response.status_code, 422)
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_calc_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
 
 # ---------------------------------------------------------------------------
@@ -5403,7 +5053,7 @@ class AdminSaveCalcRaceStartTests(TestCase):
         response = self.client.post(self.url, {'race_start_time_utc': 'not-a-time'})
 
         template_names = [t.name for t in response.templates]
-        self.assertIn('partials/admin_calc_errors.html', template_names)
+        self.assertIn('partials/form_errors.html', template_names)
 
     def test_posting_invalid_race_start_time_does_not_save(self):
         self.event.race_start_time_utc = dt.time(10, 0, 0)
@@ -6435,3 +6085,1615 @@ class AdminContextDriversJsonTimezoneTests(TestCase):
         drivers = self._get_drivers_json()
 
         self.assertEqual(drivers, [])
+
+
+# ---------------------------------------------------------------------------
+# Auth and session hardening
+#
+# Covers the three login/session defects fixed together:
+#   1. Discord OAuth failures landing on allauth's unbranded error page
+#   2. Sessions dropped (host pinning, over-eager key cycling, non-rolling expiry)
+#   3. The login modal existing only on the home page
+# ---------------------------------------------------------------------------
+
+from django.conf import settings as django_conf
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.sites.models import Site
+from django.core.exceptions import MiddlewareNotUsed
+from django.core.management import call_command
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+from django.test import RequestFactory
+
+from config.middleware import CanonicalHostMiddleware
+from .context_processors import _login_next, auth_context
+
+
+class LoginNextTests(SimpleTestCase):
+    """login_next sends the user back where they came from after Discord login."""
+
+    def _next_for(self, path):
+        return _login_next(RequestFactory().get(path))
+
+    def test_returns_current_path(self):
+        self.assertEqual(self._next_for('/create/'), '/create/')
+
+    def test_preserves_query_string(self):
+        self.assertEqual(
+            self._next_for('/abc/view/?from=recruiting'),
+            '/abc/view/?from=recruiting',
+        )
+
+    def test_accounts_paths_fall_back_to_home(self):
+        # Bouncing back into the auth machinery would restart or re-fail the flow.
+        self.assertEqual(self._next_for('/accounts/discord/login/callback/'), '/')
+
+    def test_accounts_error_path_falls_back_to_home(self):
+        self.assertEqual(self._next_for('/accounts/3rdparty/login/error/'), '/')
+
+    def test_home_path_returns_home(self):
+        self.assertEqual(self._next_for('/'), '/')
+
+
+class AuthContextLoginNextTests(TestCase):
+    """
+    auth_context gained login_next alongside discord_user.
+    discord_user itself is covered by AuthContextProcessorTests above.
+    """
+
+    def test_anonymous_request_gets_a_next(self):
+        request = RequestFactory().get('/create/')
+        request.user = AnonymousUser()
+
+        context = auth_context(request)
+
+        self.assertIsNone(context['discord_user'])
+        self.assertEqual(context['login_next'], '/create/')
+
+    def test_authenticated_request_also_gets_a_next(self):
+        request = RequestFactory().get('/create/')
+        request.user = _make_auth_user()
+
+        context = auth_context(request)
+
+        self.assertIsNotNone(context['discord_user'])
+        self.assertEqual(context['login_next'], '/create/')
+
+
+class LoginModalOnEveryPageTests(TestCase):
+    """The login modal lives in base.html, so every page can open it."""
+
+    DISPATCH = "$dispatch('open-login')"
+    LISTENER = '@open-login.window'
+
+    def setUp(self):
+        self.event = save_event()
+
+    def _assert_modal_present(self, response):
+        html = response.content.decode()
+        # The header button dispatches the event; the modal listens for it.
+        # Both halves must be on the page or the button silently does nothing.
+        self.assertIn(self.DISPATCH, html)
+        self.assertIn(self.LISTENER, html)
+
+    def test_home_page_has_modal(self):
+        self._assert_modal_present(self.client.get(reverse('home')))
+
+    def test_view_event_page_has_modal(self):
+        response = self.client.get(
+            reverse('view_event', kwargs={'event_id': self.event.id})
+        )
+        self._assert_modal_present(response)
+
+    def test_signup_page_has_modal(self):
+        response = self.client.get(
+            reverse('signup', kwargs={'event_id': self.event.id})
+        )
+        self._assert_modal_present(response)
+
+    def test_create_page_has_modal(self):
+        self._assert_modal_present(self.client.get(reverse('event_create')))
+
+    def test_modal_next_points_at_current_page(self):
+        url = reverse('view_event', kwargs={'event_id': self.event.id})
+        response = self.client.get(url)
+
+        self.assertContains(response, 'name="next" value="%s"' % url)
+
+    def test_modal_next_is_not_hardcoded_to_home_off_home(self):
+        url = reverse('event_create')
+        response = self.client.get(url)
+
+        self.assertNotContains(response, 'name="next" value="/"')
+        self.assertContains(response, 'name="next" value="%s"' % url)
+
+    def test_logged_in_user_sees_no_login_button(self):
+        self.client.force_login(_make_auth_user())
+
+        response = self.client.get(reverse('home'))
+
+        self.assertNotIn(self.DISPATCH, response.content.decode())
+
+
+class AdminSessionCyclingTests(TestCase):
+    """
+    cycle_key() deletes the old session row, so calling it on every admin
+    request logs out any other tab or in-flight request. It must only fire on
+    the transition into an admin session.
+    """
+
+    def setUp(self):
+        self.event = save_event()
+        self.key_url = reverse(
+            'admin_page',
+            kwargs={'event_id': self.event.id, 'admin_key': self.event.admin_key},
+        )
+        self.dashboard_url = reverse(
+            'admin_dashboard', kwargs={'event_id': self.event.id}
+        )
+
+    def test_first_key_visit_still_cycles_the_session(self):
+        session = self.client.session
+        session['warmup'] = True
+        session.save()
+        key_before = self.client.session.session_key
+
+        self.client.get(self.key_url)
+
+        self.assertNotEqual(self.client.session.session_key, key_before)
+
+    def test_second_key_visit_does_not_cycle_again(self):
+        self.client.get(self.key_url)
+        key_after_first = self.client.session.session_key
+
+        self.client.get(self.key_url)
+
+        self.assertEqual(self.client.session.session_key, key_after_first)
+
+    def test_repeated_dashboard_loads_keep_the_same_session(self):
+        self.client.get(self.key_url)
+        key_after_grant = self.client.session.session_key
+
+        for _ in range(3):
+            response = self.client.get(self.dashboard_url)
+            self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(self.client.session.session_key, key_after_grant)
+
+    def test_owner_dashboard_loads_keep_the_same_session(self):
+        owner = _make_auth_user()
+        self.event.created_by = owner
+        self.event.save(update_fields=['created_by'])
+        self.client.force_login(owner)
+
+        self.client.get(self.dashboard_url)
+        key_after_first = self.client.session.session_key
+
+        self.client.get(self.dashboard_url)
+        self.client.get(self.dashboard_url)
+
+        self.assertEqual(self.client.session.session_key, key_after_first)
+
+    def test_owner_stays_logged_in_across_repeated_dashboard_loads(self):
+        owner = _make_auth_user()
+        self.event.created_by = owner
+        self.event.save(update_fields=['created_by'])
+        self.client.force_login(owner)
+
+        for _ in range(3):
+            response = self.client.get(self.dashboard_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['user'].is_authenticated)
+
+    def test_admin_session_flag_survives_repeated_loads(self):
+        self.client.get(self.key_url)
+
+        self.client.get(self.dashboard_url)
+        self.client.get(self.dashboard_url)
+
+        self.assertTrue(self.client.session.get('admin_%s' % self.event.id))
+
+
+class RollingSessionSettingTests(SimpleTestCase):
+    """SESSION_COOKIE_AGE must count from last activity, not from login."""
+
+    def test_session_save_every_request_is_enabled(self):
+        self.assertTrue(django_conf.SESSION_SAVE_EVERY_REQUEST)
+
+
+class CanonicalHostMiddlewareTests(SimpleTestCase):
+    """
+    Session cookies are host-only, so the site must resolve to exactly one
+    hostname or logins silently fail to carry between them.
+    """
+
+    HOSTS = ['wearechecking.gg', 'www.wearechecking.gg']
+
+    def _build(self, **setting_overrides):
+        """Instantiate the middleware under the given settings, or return None
+        if it opted out via MiddlewareNotUsed."""
+        with override_settings(**setting_overrides):
+            try:
+                return CanonicalHostMiddleware(lambda r: HttpResponse('ok'))
+            except MiddlewareNotUsed:
+                return None
+
+    def _call(self, server_name, path='/create/', data=None):
+        overrides = dict(CANONICAL_HOST='wearechecking.gg', ALLOWED_HOSTS=self.HOSTS)
+        middleware = self._build(**overrides)
+        with override_settings(**overrides):
+            request = RequestFactory(SERVER_NAME=server_name).get(path, data or {})
+            return middleware(request)
+
+    def test_disabled_when_canonical_host_unset(self):
+        self.assertIsNone(self._build(CANONICAL_HOST=''))
+
+    def test_disabled_when_canonical_host_not_in_allowed_hosts(self):
+        # A canonical host Django would reject can only cause a redirect loop.
+        self.assertIsNone(
+            self._build(
+                CANONICAL_HOST='wearechecking.gg',
+                ALLOWED_HOSTS=['example.com'],
+            )
+        )
+
+    def test_enabled_when_canonical_host_in_allowed_hosts(self):
+        self.assertIsNotNone(
+            self._build(CANONICAL_HOST='wearechecking.gg', ALLOWED_HOSTS=self.HOSTS)
+        )
+
+    def test_redirects_www_to_apex(self):
+        response = self._call('www.wearechecking.gg')
+
+        self.assertEqual(response.status_code, 301)
+        self.assertEqual(response['Location'], 'http://wearechecking.gg/create/')
+
+    def test_redirect_preserves_path_and_query_string(self):
+        response = self._call(
+            'www.wearechecking.gg', path='/abc/view/', data={'from': 'recruiting'}
+        )
+
+        self.assertEqual(
+            response['Location'],
+            'http://wearechecking.gg/abc/view/?from=recruiting',
+        )
+
+    def test_canonical_host_passes_through_untouched(self):
+        response = self._call('wearechecking.gg')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'ok')
+
+
+class SetupDiscordOAuthSiteDomainTests(TestCase):
+    """
+    The Site domain is pinned by SITE_DOMAIN rather than inherited from
+    ALLOWED_HOSTS ordering, so reordering that env var cannot silently change
+    the recorded domain.
+    """
+
+    def _current_domain(self):
+        return Site.objects.get(id=django_conf.SITE_ID).domain
+
+    @override_settings(
+        DISCORD_CLIENT_ID='cid',
+        DISCORD_CLIENT_SECRET='secret',
+        SITE_DOMAIN='wearechecking.gg',
+        ALLOWED_HOSTS=['some-internal-host.railway.app', 'wearechecking.gg'],
+    )
+    def test_site_domain_wins_over_allowed_hosts_ordering(self):
+        call_command('setup_discord_oauth')
+
+        self.assertEqual(self._current_domain(), 'wearechecking.gg')
+
+    @override_settings(
+        DISCORD_CLIENT_ID='cid',
+        DISCORD_CLIENT_SECRET='secret',
+        SITE_DOMAIN='',
+        ALLOWED_HOSTS=['fallback.example.com', 'other.example.com'],
+    )
+    def test_falls_back_to_first_allowed_host_when_unset(self):
+        call_command('setup_discord_oauth')
+
+        self.assertEqual(self._current_domain(), 'fallback.example.com')
+
+    @override_settings(DISCORD_CLIENT_ID='')
+    def test_skips_entirely_without_client_id(self):
+        from allauth.socialaccount.models import SocialApp
+
+        call_command('setup_discord_oauth')
+
+        self.assertFalse(SocialApp.objects.filter(provider='discord').exists())
+
+
+class AuthenticationErrorTemplateTests(TestCase):
+    """
+    prompt=none means Discord answers with an error rather than a consent
+    screen when it cannot authorize silently. That must land somewhere branded
+    with a way forward, not on allauth's stock page.
+    """
+
+    def _render(self):
+        request = RequestFactory().get('/accounts/3rdparty/login/error/')
+        request.user = AnonymousUser()
+        return render_to_string(
+            'socialaccount/authentication_error.html', request=request
+        )
+
+    def test_extends_site_base_template(self):
+        # The site chrome (wordmark) only appears via base.html.
+        self.assertIn('WeAreChecking', self._render())
+
+    def test_offers_a_consent_retry(self):
+        # Overrides the settings-level prompt=none for this one attempt.
+        self.assertIn('auth_params=prompt%3Dconsent', self._render())
+
+    def test_retry_posts_to_discord_login(self):
+        self.assertIn(reverse('discord_login'), self._render())
+
+    def test_offers_a_route_home(self):
+        self.assertIn(reverse('home'), self._render())
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure fixes
+#
+# Covers the four defects where an action failed (or succeeded) with no
+# feedback at all:
+#   4. Feedback success panel never shown (event name mismatch)
+#   5. Admin validation errors never rendered (422 not swapped by HTMX)
+#   6. django.contrib.messages never rendered anywhere
+#   7. Live stint edits swallowing every error
+# ---------------------------------------------------------------------------
+
+def _read_template(*parts):
+    """Read a template's raw source. Some behaviour lives in the markup itself
+    (event names, htmx swap opt-ins) and is only assertable against the file."""
+    return django_conf.BASE_DIR.joinpath('templates', *parts).read_text(encoding='utf-8')
+
+
+class FeedbackSuccessEventNameTests(TestCase):
+    """The HX-Trigger name and the Alpine listener have to actually match."""
+
+    def test_trigger_name_matches_the_listener_in_base_template(self):
+        response = self.client.post(
+            reverse('feedback_submit'), {'text': 'Looks good'}
+        )
+        trigger = response['HX-Trigger']
+
+        base = _read_template('base.html')
+        self.assertIn('@%s.window' % trigger, base)
+
+    def test_trigger_name_has_no_uppercase(self):
+        # HTML lowercases attribute names, so a camelCase event can never be
+        # listened for via an Alpine attribute binding.
+        response = self.client.post(
+            reverse('feedback_submit'), {'text': 'Looks good'}
+        )
+
+        trigger = response['HX-Trigger']
+        self.assertEqual(trigger, trigger.lower())
+
+
+class HtmxErrorSwapTests(TestCase):
+    """
+    HTMX drops non-2xx bodies by default. base.html opts 422 in, so views may
+    return validation errors with a correct status and still have them render.
+    """
+
+    def test_base_template_opts_422_into_being_swapped(self):
+        base = _read_template('base.html')
+
+        self.assertIn('htmx:beforeSwap', base)
+        self.assertIn('shouldSwap', base)
+
+    def test_base_template_does_not_clear_is_error(self):
+        # Clearing isError would make htmx report a validation failure as a
+        # successful request, and forms would reset and close on error.
+        base = _read_template('base.html')
+
+        self.assertNotIn('isError = false', base)
+
+
+class AdminValidationErrorRenderingTests(TestCase):
+    """Admin forms must show why a save was rejected."""
+
+    def setUp(self):
+        self.event = save_event()
+        self._grant_admin()
+
+    def _grant_admin(self):
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+
+    def test_save_details_returns_422_with_the_error_partial(self):
+        response = self.client.post(
+            reverse('admin_save_details', kwargs={'event_id': self.event.id}),
+            {'name': '', 'date': '2026-06-01', 'start_time_utc': '12:00',
+             'length_hours': '6', 'length_minutes': '0'},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn(
+            'partials/form_errors.html', [t.name for t in response.templates]
+        )
+
+    def test_save_details_error_body_names_the_problem(self):
+        response = self.client.post(
+            reverse('admin_save_details', kwargs={'event_id': self.event.id}),
+            {'name': '', 'date': '2026-06-01', 'start_time_utc': '12:00',
+             'length_hours': '6', 'length_minutes': '0'},
+        )
+
+        self.assertIn(b'Event name is required', response.content)
+
+    def test_save_calc_returns_422_with_the_error_partial(self):
+        response = self.client.post(
+            reverse('admin_save_calc', kwargs={'event_id': self.event.id}),
+            {'avg_lap': 'nonsense'},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn(
+            'partials/form_errors.html', [t.name for t in response.templates]
+        )
+
+    def test_add_driver_error_retargets_away_from_the_driver_list(self):
+        # The form's success target is the driver list; without a retarget the
+        # error partial would replace every driver on the page.
+        response = self.client.post(
+            reverse('admin_add_driver', kwargs={'event_id': self.event.id}),
+            {'driver_name': '', 'timezone': 'UTC'},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response['HX-Retarget'], '#add-driver-errors')
+        self.assertEqual(response['HX-Reswap'], 'innerHTML')
+
+    def test_add_driver_error_uses_the_shared_error_partial(self):
+        response = self.client.post(
+            reverse('admin_add_driver', kwargs={'event_id': self.event.id}),
+            {'driver_name': '', 'timezone': 'UTC'},
+        )
+
+        self.assertIn(
+            'partials/form_errors.html', [t.name for t in response.templates]
+        )
+        self.assertIn(b'Driver name is required', response.content)
+
+    def test_add_driver_error_target_exists_in_the_form(self):
+        markup = _read_template('partials', 'admin_add_driver.html')
+
+        self.assertIn('id="add-driver-errors"', markup)
+
+    def test_valid_save_details_still_succeeds_with_a_toast(self):
+        response = self.client.post(
+            reverse('admin_save_details', kwargs={'event_id': self.event.id}),
+            {'name': 'Renamed', 'date': '2026-06-01', 'start_time_utc': '12:00',
+             'length_hours': '6', 'length_minutes': '0'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('show-toast', json.loads(response['HX-Trigger']))
+
+
+class MessagesRenderingTests(TestCase):
+    """
+    django.contrib.messages was configured but never rendered, so event
+    deletion and its confirmation mismatch both gave no feedback at all.
+    """
+
+    def setUp(self):
+        self.event = save_event()
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.delete_url = reverse(
+            'admin_delete_event', kwargs={'event_id': self.event.id}
+        )
+
+    def test_base_template_renders_the_messages_block(self):
+        base = _read_template('base.html')
+
+        self.assertIn('{% for message in messages %}', base)
+
+    def test_successful_delete_message_reaches_the_page(self):
+        response = self.client.post(
+            self.delete_url, {'confirm_name': 'DELETE'}, follow=True
+        )
+
+        self.assertContains(response, 'has been permanently deleted')
+
+    def test_successful_delete_message_names_the_event(self):
+        response = self.client.post(
+            self.delete_url, {'confirm_name': 'DELETE'}, follow=True
+        )
+
+        self.assertContains(response, self.event.name)
+
+    def test_wrong_confirmation_message_reaches_the_page(self):
+        response = self.client.post(
+            self.delete_url, {'confirm_name': 'delete'}, follow=True
+        )
+
+        self.assertContains(response, 'Confirmation did not match')
+
+    def test_wrong_confirmation_does_not_delete_the_event(self):
+        self.client.post(self.delete_url, {'confirm_name': 'nope'}, follow=True)
+
+        self.assertTrue(Event.objects.filter(id=self.event.id).exists())
+
+    def test_error_message_uses_the_error_banner_style(self):
+        response = self.client.post(
+            self.delete_url, {'confirm_name': 'nope'}, follow=True
+        )
+
+        self.assertContains(response, 'message-error')
+
+    def test_success_message_uses_the_success_banner_style(self):
+        response = self.client.post(
+            self.delete_url, {'confirm_name': 'DELETE'}, follow=True
+        )
+
+        self.assertContains(response, 'message-success')
+
+    def test_pages_without_messages_render_no_banner_region(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertNotContains(response, 'message-region')
+
+
+class SharedToastTests(TestCase):
+    """One toast in base.html, so every page can report success and failure."""
+
+    def setUp(self):
+        self.event = save_event()
+
+    def test_base_template_defines_the_toast(self):
+        base = _read_template('base.html')
+
+        self.assertIn('@show-toast.window', base)
+
+    def test_admin_template_no_longer_defines_its_own(self):
+        admin = _read_template('admin.html')
+
+        self.assertNotIn('@show-toast.window', admin)
+
+    def test_toast_is_present_on_a_non_admin_page(self):
+        response = self.client.get(
+            reverse('view_event', kwargs={'event_id': self.event.id})
+        )
+
+        self.assertContains(response, 'show-toast')
+
+    def test_toast_appears_exactly_once_on_the_admin_page(self):
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        html = response.content.decode()
+        self.assertEqual(html.count('@show-toast.window'), 1)
+
+
+class StintEditFailureFeedbackTests(TestCase):
+    """
+    A rejected stint edit used to leave the row unchanged with no explanation.
+    The endpoints still reject; the page now says so.
+    """
+
+    def setUp(self):
+        self.event = save_event()
+        self.set_url = reverse(
+            'set_stint_start',
+            kwargs={'event_id': self.event.id, 'stint_number': 1},
+        )
+        self.reset_url = reverse(
+            'reset_stint_start',
+            kwargs={'event_id': self.event.id, 'stint_number': 1},
+        )
+
+    def test_anonymous_set_start_is_still_forbidden(self):
+        response = self.client.post(
+            self.set_url, {'actual_start_utc': '2026-06-01T12:00:00Z'}
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_anonymous_reset_start_is_still_forbidden(self):
+        response = self.client.post(self.reset_url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_template_reports_failures_instead_of_ignoring_them(self):
+        view_tpl = _read_template('view.html')
+
+        self.assertIn('failureMessage', view_tpl)
+        self.assertIn('show-toast', view_tpl)
+
+    def test_view_template_explains_an_expired_session(self):
+        view_tpl = _read_template('view.html')
+
+        self.assertIn('Your session expired', view_tpl)
+
+    def test_view_template_no_longer_silently_ignores_non_ok(self):
+        # The old shape was `if (res.ok) { ...apply... }` with no else branch.
+        view_tpl = _read_template('view.html')
+
+        self.assertIn('if (!res.ok)', view_tpl)
+
+
+# ---------------------------------------------------------------------------
+# Phase-stable availability grid (#8)
+#
+# Availability rows are absolute UTC datetimes. The grid used to be anchored to
+# an event's exact start time, so its phase moved with the event's minutes and a
+# 15-minute correction orphaned every stored slot while a 1-hour move cost
+# almost nothing. The grid is now anchored to wall-clock half hours.
+# ---------------------------------------------------------------------------
+
+import importlib
+
+from events.utils import slot_grid_anchor
+from events.views import _driver_has_conflict, _drivers_with_stale_availability
+
+
+def _fill_availability(event, driver):
+    """Mark the driver available for every slot in the event's current grid."""
+    Availability.objects.bulk_create([
+        Availability(driver=driver, slot_utc=s)
+        for s in get_availability_slots(event)
+    ])
+
+
+def _slots_surviving(event, driver):
+    """How many stored slots still land on the event's current grid."""
+    grid = {s.astimezone(timezone.utc) for s in get_availability_slots(event)}
+    stored = {a.slot_utc.astimezone(timezone.utc) for a in driver.availability.all()}
+    return len(stored & grid)
+
+
+class SlotGridAnchorTests(SimpleTestCase):
+    """The grid origin is floored to a wall-clock half hour."""
+
+    def test_on_the_hour_start_is_unchanged(self):
+        event = make_event(start_time_utc=dt.time(12, 0))
+
+        self.assertEqual(slot_grid_anchor(event), utc(2026, 6, 1, 12, 0))
+
+    def test_half_past_start_is_unchanged(self):
+        event = make_event(start_time_utc=dt.time(12, 30))
+
+        self.assertEqual(slot_grid_anchor(event), utc(2026, 6, 1, 12, 30))
+
+    def test_quarter_past_floors_to_the_hour(self):
+        event = make_event(start_time_utc=dt.time(12, 15))
+
+        self.assertEqual(slot_grid_anchor(event), utc(2026, 6, 1, 12, 0))
+
+    def test_quarter_to_floors_to_the_half_hour(self):
+        event = make_event(start_time_utc=dt.time(12, 45))
+
+        self.assertEqual(slot_grid_anchor(event), utc(2026, 6, 1, 12, 30))
+
+    def test_seconds_are_discarded(self):
+        event = make_event(start_time_utc=dt.time(12, 15, 40))
+
+        self.assertEqual(slot_grid_anchor(event), utc(2026, 6, 1, 12, 0))
+
+    def test_every_generated_slot_sits_on_a_half_hour_boundary(self):
+        event = make_event(start_time_utc=dt.time(12, 15))
+
+        minutes = {s.minute for s in get_availability_slots(event)}
+
+        self.assertEqual(minutes, {0, 30})
+
+
+class SubHalfHourEditPreservesAvailabilityTests(TestCase):
+    """
+    The wart this fixes: a 15-minute correction used to invalidate everything
+    while a 1-hour move cost almost nothing.
+    """
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0))
+        self.driver = Driver.objects.create(
+            event=self.event, name='Probe', timezone='UTC'
+        )
+        _fill_availability(self.event, self.driver)
+        self.original = self.driver.availability.count()
+
+    def _move_start_to(self, hour, minute):
+        self.event.start_time_utc = dt.time(hour, minute)
+        self.event.save(update_fields=['start_time_utc'])
+        self.event.refresh_from_db()
+
+    def test_baseline_all_slots_valid(self):
+        self.assertEqual(_slots_surviving(self.event, self.driver), self.original)
+
+    def test_fifteen_minute_shift_keeps_every_slot(self):
+        self._move_start_to(12, 15)
+
+        self.assertEqual(_slots_surviving(self.event, self.driver), self.original)
+
+    def test_forty_five_minute_shift_keeps_every_slot(self):
+        # 12:45 floors to 12:30, so the grid origin moves half an hour; the
+        # earliest slot falls out of the window but the rest survive.
+        self._move_start_to(12, 45)
+
+        self.assertGreater(_slots_surviving(self.event, self.driver), 0)
+
+    def test_fifteen_minute_shift_leaves_no_driver_stale(self):
+        self._move_start_to(12, 15)
+
+        self.assertEqual(_drivers_with_stale_availability(self.event), [])
+
+    def test_hour_shift_still_mostly_preserved(self):
+        self._move_start_to(13, 0)
+
+        self.assertGreater(_slots_surviving(self.event, self.driver), 0)
+
+    def test_date_change_still_invalidates_everything(self):
+        # Intended behaviour — drivers must re-enter availability for a new day.
+        self.event.date = dt.date(2026, 6, 8)
+        self.event.save(update_fields=['date'])
+        self.event.refresh_from_db()
+
+        self.assertEqual(_slots_surviving(self.event, self.driver), 0)
+
+    def test_date_change_reports_the_driver_as_stale(self):
+        self.event.date = dt.date(2026, 6, 8)
+        self.event.save(update_fields=['date'])
+        self.event.refresh_from_db()
+
+        stale = _drivers_with_stale_availability(self.event)
+
+        self.assertEqual([e['name'] for e in stale], ['Probe'])
+        self.assertEqual(stale[0]['lost'], stale[0]['total'])
+
+
+class OffGridEventConflictDetectionTests(TestCase):
+    """
+    _driver_has_conflict already floored to wall-clock half hours, so for an
+    event starting off the half hour it looked for slots the grid could never
+    contain and reported a conflict for everyone. Now the two agree.
+    """
+
+    def test_available_driver_has_no_conflict_on_an_off_grid_event(self):
+        event = save_event(start_time_utc=dt.time(12, 15))
+        driver = Driver.objects.create(event=event, name='Probe', timezone='UTC')
+        _fill_availability(event, driver)
+
+        driver_availability = {
+            driver.id: {a.slot_utc.astimezone(timezone.utc)
+                        for a in driver.availability.all()}
+        }
+        first_slot = get_availability_slots(event)[0]
+
+        self.assertFalse(
+            _driver_has_conflict(driver, first_slot, driver_availability)
+        )
+
+
+class StaleAvailabilityDetectionTests(TestCase):
+    """Which drivers actually lost their availability."""
+
+    def setUp(self):
+        self.event = save_event()
+
+    def test_driver_with_no_availability_is_not_reported(self):
+        Driver.objects.create(event=self.event, name='Never Entered', timezone='UTC')
+
+        self.assertEqual(_drivers_with_stale_availability(self.event), [])
+
+    def test_driver_with_valid_availability_is_not_reported(self):
+        driver = Driver.objects.create(event=self.event, name='Fine', timezone='UTC')
+        _fill_availability(self.event, driver)
+
+        self.assertEqual(_drivers_with_stale_availability(self.event), [])
+
+    def test_driver_with_only_orphaned_slots_is_reported(self):
+        driver = Driver.objects.create(event=self.event, name='Stranded', timezone='UTC')
+        Availability.objects.create(driver=driver, slot_utc=utc(2020, 1, 1, 0, 0))
+
+        self.assertEqual(
+            _drivers_with_stale_availability(self.event),
+            [{'name': 'Stranded', 'lost': 1, 'total': 1}],
+        )
+
+    def test_driver_keeping_one_usable_slot_is_still_reported(self):
+        # Previously silent unless EVERY slot was stranded, so a driver left
+        # with one usable slot out of forty went unmentioned.
+        driver = Driver.objects.create(event=self.event, name='Partial', timezone='UTC')
+        Availability.objects.create(driver=driver, slot_utc=utc(2020, 1, 1, 0, 0))
+        Availability.objects.create(
+            driver=driver, slot_utc=get_availability_slots(self.event)[0]
+        )
+
+        self.assertEqual(
+            _drivers_with_stale_availability(self.event),
+            [{'name': 'Partial', 'lost': 1, 'total': 2}],
+        )
+
+    def test_driver_losing_nothing_is_not_reported(self):
+        driver = Driver.objects.create(event=self.event, name='Intact', timezone='UTC')
+        Availability.objects.create(
+            driver=driver, slot_utc=get_availability_slots(self.event)[0]
+        )
+
+        self.assertEqual(_drivers_with_stale_availability(self.event), [])
+
+    def test_worst_affected_driver_is_listed_first(self):
+        slots = get_availability_slots(self.event)
+        light = Driver.objects.create(event=self.event, name='Light', timezone='UTC')
+        Availability.objects.create(driver=light, slot_utc=utc(2020, 1, 1, 0, 0))
+        Availability.objects.create(driver=light, slot_utc=slots[0])
+
+        heavy = Driver.objects.create(event=self.event, name='Heavy', timezone='UTC')
+        Availability.objects.bulk_create([
+            Availability(driver=heavy, slot_utc=utc(2020, 1, 1, 0, 30 * i))
+            for i in range(2)
+        ] + [Availability(driver=heavy, slot_utc=utc(2020, 1, 2, 0, 0))])
+
+        names = [e['name'] for e in _drivers_with_stale_availability(self.event)]
+
+        self.assertEqual(names, ['Heavy', 'Light'])
+
+
+class ScheduleMoveWarningTests(TestCase):
+    """Moving the schedule must not silently discard availability."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0))
+        self.driver = Driver.objects.create(
+            event=self.event, name='Stranded', timezone='UTC'
+        )
+        _fill_availability(self.event, self.driver)
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_save_details', kwargs={'event_id': self.event.id})
+
+    def _post(self, **overrides):
+        payload = {
+            'name': self.event.name,
+            'date': '2026-06-01',
+            'start_time_utc': '12:00',
+            'length_hours': '6',
+            'length_minutes': '0',
+        }
+        payload.update(overrides)
+        return self.client.post(self.url, payload)
+
+    def test_unchanged_schedule_gives_the_plain_toast(self):
+        response = self._post()
+
+        trigger = json.loads(response['HX-Trigger'])
+        self.assertEqual(trigger['show-toast']['message'], 'Event details saved.')
+
+    def test_unchanged_schedule_renders_no_warning(self):
+        response = self._post()
+
+        self.assertEqual(response.content, b'')
+
+    def test_date_move_warns_and_names_the_driver(self):
+        response = self._post(date='2026-06-08')
+
+        self.assertIn(
+            'partials/availability_warning.html',
+            [t.name for t in response.templates],
+        )
+        self.assertContains(response, 'Stranded')
+
+    def test_date_move_toast_reports_the_count_as_an_error(self):
+        response = self._post(date='2026-06-08')
+
+        toast = json.loads(response['HX-Trigger'])['show-toast']
+        self.assertIn('1 driver(s)', toast['message'])
+        self.assertTrue(toast['error'])
+
+    def test_date_move_still_saves_the_event(self):
+        self._post(date='2026-06-08')
+
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.date, dt.date(2026, 6, 8))
+
+    def test_sub_half_hour_move_does_not_warn(self):
+        # The whole point of the phase-stable grid: nothing was lost.
+        response = self._post(start_time_utc='12:15')
+
+        trigger = json.loads(response['HX-Trigger'])
+        self.assertEqual(trigger['show-toast']['message'], 'Event details saved.')
+
+    def test_schedule_move_with_no_availability_does_not_warn(self):
+        Availability.objects.all().delete()
+
+        response = self._post(date='2026-06-08')
+
+        trigger = json.loads(response['HX-Trigger'])
+        self.assertEqual(trigger['show-toast']['message'], 'Event details saved.')
+
+    def test_admin_page_exposes_the_driver_count_for_the_live_warning(self):
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        self.assertEqual(response.context['drivers_with_availability_count'], 1)
+
+    def test_driver_count_excludes_drivers_without_availability(self):
+        Driver.objects.create(event=self.event, name='No Availability', timezone='UTC')
+
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        self.assertEqual(response.context['drivers_with_availability_count'], 1)
+
+
+class RealignAvailabilityMigrationTests(TestCase):
+    """
+    Migration 0009 shifts availability stored against the old exact-start grid
+    onto the wall-clock half-hour grid, so nobody loses availability on deploy.
+    """
+
+    class _FakeApps:
+        """Stands in for the migration's historical model registry."""
+        def get_model(self, app_label, model_name):
+            return {'Event': Event, 'Availability': Availability}[model_name]
+
+    def _run(self, forwards=True):
+        # The module name starts with a digit, so it is not importable by name.
+        module = importlib.import_module(
+            'events.migrations.0009_realign_availability_to_half_hour_grid'
+        )
+        fn = module.realign if forwards else module.unrealign
+        fn(self._FakeApps(), None)
+
+    def _make_legacy_event(self, minute):
+        """Event plus availability laid out on the OLD exact-start grid."""
+        event = save_event(start_time_utc=dt.time(12, minute))
+        driver = Driver.objects.create(event=event, name='Legacy', timezone='UTC')
+        start = event.start_datetime_utc          # un-floored, as it used to be
+        Availability.objects.bulk_create([
+            Availability(driver=driver, slot_utc=start + dt.timedelta(minutes=30 * i))
+            for i in range(6)
+        ])
+        return event, driver
+
+    def test_legacy_slots_are_orphaned_before_the_migration(self):
+        event, driver = self._make_legacy_event(15)
+
+        self.assertEqual(_slots_surviving(event, driver), 0)
+
+    def test_migration_puts_them_back_on_the_grid(self):
+        event, driver = self._make_legacy_event(15)
+
+        self._run()
+
+        self.assertEqual(_slots_surviving(event, driver), 6)
+
+    def test_migration_reports_no_stale_drivers_afterwards(self):
+        event, driver = self._make_legacy_event(15)
+
+        self._run()
+
+        self.assertEqual(_drivers_with_stale_availability(event), [])
+
+    def test_migration_preserves_the_row_count(self):
+        event, driver = self._make_legacy_event(15)
+
+        self._run()
+
+        self.assertEqual(driver.availability.count(), 6)
+
+    def test_events_already_on_the_half_hour_are_untouched(self):
+        event, driver = self._make_legacy_event(30)
+        before = sorted(a.slot_utc for a in driver.availability.all())
+
+        self._run()
+
+        after = sorted(a.slot_utc for a in driver.availability.all())
+        self.assertEqual(before, after)
+
+    def test_migration_is_reversible(self):
+        event, driver = self._make_legacy_event(15)
+        before = sorted(a.slot_utc for a in driver.availability.all())
+
+        self._run()
+        self._run(forwards=False)
+
+        after = sorted(a.slot_utc for a in driver.availability.all())
+        self.assertEqual(before, after)
+
+
+# ---------------------------------------------------------------------------
+# Dependency pinning (#9, #10)
+#
+# Railway rebuilds on every push, so a floating version lets a deploy change
+# application behaviour with no code change — the likeliest explanation for an
+# unexplained Discord login regression.
+# ---------------------------------------------------------------------------
+
+def _requirement_lines():
+    """Non-empty, non-comment lines from requirements.txt, comments stripped."""
+    text = django_conf.BASE_DIR.joinpath('requirements.txt').read_text(encoding='utf-8')
+    lines = []
+    for raw in text.splitlines():
+        line = raw.split('#')[0].strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+class RequirementsPinningTests(SimpleTestCase):
+    """Every dependency is exact-pinned."""
+
+    def test_requirements_file_is_not_empty(self):
+        self.assertGreater(len(_requirement_lines()), 0)
+
+    def test_every_requirement_uses_an_exact_pin(self):
+        unpinned = [line for line in _requirement_lines() if '==' not in line]
+
+        self.assertEqual(unpinned, [], f'unpinned requirements: {unpinned}')
+
+    def test_no_requirement_uses_a_floor_only_specifier(self):
+        # `pkg>=x` is what let django-allauth drift from 0.61 to 65.x unnoticed.
+        floors = [
+            line for line in _requirement_lines()
+            if '>=' in line and '==' not in line
+        ]
+
+        self.assertEqual(floors, [], f'floor-only requirements: {floors}')
+
+    def test_each_requirement_pins_exactly_one_version(self):
+        for line in _requirement_lines():
+            with self.subTest(requirement=line):
+                self.assertEqual(line.count('=='), 1)
+
+
+class RequirementsContentTests(SimpleTestCase):
+    """What is and is not shipped."""
+
+    def _names(self):
+        return {
+            line.split('==')[0].strip().lower()
+            for line in _requirement_lines()
+        }
+
+    def test_debug_toolbar_is_not_shipped(self):
+        # Never appeared in INSTALLED_APPS or MIDDLEWARE — dead weight in the
+        # production image.
+        self.assertNotIn('django-debug-toolbar', self._names())
+
+    def test_debug_toolbar_is_not_importable(self):
+        with self.assertRaises(ImportError):
+            __import__('debug_toolbar')
+
+    def test_requests_is_pinned(self):
+        # django-allauth imports requests in its socialaccount OAuth2 client but
+        # only declares it under an optional extra that is not installed, so
+        # Discord login depends on this pin being present.
+        self.assertIn('requests', self._names())
+
+    def test_allauth_is_pinned(self):
+        self.assertIn('django-allauth', self._names())
+
+    def test_core_runtime_dependencies_are_declared(self):
+        expected = {
+            'django', 'django-allauth', 'django-htmx',
+            'gunicorn', 'whitenoise', 'python-dotenv',
+        }
+
+        self.assertTrue(expected.issubset(self._names()))
+
+
+class RequirementsMatchInstalledTests(SimpleTestCase):
+    """The pins describe the environment the tests actually ran against."""
+
+    def test_pinned_versions_match_the_installed_distributions(self):
+        from importlib.metadata import PackageNotFoundError, version
+
+        mismatches = []
+        for line in _requirement_lines():
+            name, _, pinned = line.partition('==')
+            name = name.strip()
+            try:
+                installed = version(name)
+            except PackageNotFoundError:
+                mismatches.append(f'{name}: not installed')
+                continue
+            if installed != pinned.strip():
+                mismatches.append(f'{name}: pinned {pinned.strip()}, installed {installed}')
+
+        self.assertEqual(mismatches, [], f'requirements drift: {mismatches}')
+
+
+# ---------------------------------------------------------------------------
+# Uncovered race windows
+#
+# The old warning asked whether each driver had slots[-1]. That slot sits up to
+# an hour PAST the chequered flag, because get_availability_slots() pads the
+# grid as a buffer for races that run long. So a driver available for 100% of
+# the race was warned about, while one missing half of it was not.
+#
+# Coverage is now measured across the roster and against the race itself.
+# ---------------------------------------------------------------------------
+
+from events.utils import collapse_slot_ranges
+from events.views import _build_availability_matrix, _uncovered_race_windows
+
+
+def _cover(event, driver, slots):
+    Availability.objects.bulk_create([
+        Availability(driver=driver, slot_utc=s) for s in slots
+    ])
+
+
+def _windows_for(event, tz='UTC'):
+    slots = get_availability_slots(event)
+    drivers = list(Driver.objects.filter(event=event).prefetch_related('availability'))
+    _, uncovered = _build_availability_matrix(drivers, slots)
+    return _uncovered_race_windows(event, slots, uncovered, tz)
+
+
+class CollapseSlotRangesTests(SimpleTestCase):
+    """Contiguous half-hour slots collapse into ranges; end is exclusive."""
+
+    def test_empty_input_gives_no_ranges(self):
+        self.assertEqual(collapse_slot_ranges([]), [])
+
+    def test_single_slot_spans_its_own_duration(self):
+        result = collapse_slot_ranges([utc(2026, 6, 1, 10, 0)])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30))])
+
+    def test_consecutive_slots_merge_into_one_range(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30), utc(2026, 6, 1, 11, 0),
+        ])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 11, 30))])
+
+    def test_a_gap_starts_a_new_range(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30), utc(2026, 6, 1, 13, 0),
+        ])
+
+        self.assertEqual(result, [
+            (utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 11, 0)),
+            (utc(2026, 6, 1, 13, 0), utc(2026, 6, 1, 13, 30)),
+        ])
+
+    def test_unsorted_input_is_ordered_first(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 11, 0), utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30),
+        ])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 11, 30))])
+
+    def test_ranges_span_midnight_without_splitting(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 23, 30), utc(2026, 6, 2, 0, 0), utc(2026, 6, 2, 0, 30),
+        ])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 23, 30), utc(2026, 6, 2, 1, 0))])
+
+
+class UncoveredRaceWindowTests(TestCase):
+    """Only gaps inside the race itself count."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        self.slots = get_availability_slots(self.event)
+        self.race_start = self.event.effective_start_datetime_utc
+        self.race_end = self.event.effective_end_datetime_utc
+
+    def _driver(self, name='D'):
+        return Driver.objects.create(event=self.event, name=name, timezone='UTC')
+
+    def test_no_drivers_means_the_whole_race_is_uncovered(self):
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(seconds, 6 * 3600)
+        self.assertEqual(len(windows), 1)
+
+    def test_full_race_coverage_reports_nothing(self):
+        _cover(self.event, self._driver(),
+               [s for s in self.slots if self.race_start <= s < self.race_end])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(windows, [])
+        self.assertEqual(seconds, 0)
+
+    def test_unticked_post_race_buffer_is_not_a_gap(self):
+        # The exact false positive the old check produced: a driver available
+        # for the entire race but not the hour of padding after it.
+        _cover(self.event, self._driver(),
+               [s for s in self.slots if self.race_start <= s < self.race_end])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(seconds, 0)
+
+    def test_unticked_pre_race_warmup_is_not_a_gap(self):
+        # The grid starts at the session, not the green flag, so warmup and
+        # qualifying slots exist but need no driver.
+        event = save_event(
+            start_time_utc=dt.time(12, 0),
+            race_start_time_utc=dt.time(14, 0),
+            length_seconds=6 * 3600,
+        )
+        driver = Driver.objects.create(event=event, name='D', timezone='UTC')
+        _cover(event, driver, [
+            s for s in get_availability_slots(event)
+            if event.effective_start_datetime_utc <= s < event.effective_end_datetime_utc
+        ])
+
+        windows, seconds = _windows_for(event)
+
+        self.assertEqual(seconds, 0)
+
+    def test_two_drivers_splitting_the_race_leaves_no_gap(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        _cover(self.event, self._driver('Early'), race[:len(race) // 2])
+        _cover(self.event, self._driver('Late'), race[len(race) // 2:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(windows, [])
+        self.assertEqual(seconds, 0)
+
+    def test_a_hole_in_the_middle_is_reported(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        # drop four consecutive slots (2 hours) from the middle
+        _cover(self.event, self._driver(), race[:4] + race[8:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(seconds, 2 * 3600)
+        self.assertEqual(len(windows), 1)
+
+    def test_two_separate_holes_give_two_windows(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        _cover(self.event, self._driver(), race[:2] + race[4:6] + race[8:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(len(windows), 2)
+        self.assertEqual(seconds, 2 * 3600)
+
+    def test_window_seconds_sum_to_the_total(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        _cover(self.event, self._driver(), race[:2] + race[6:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(sum(w['seconds'] for w in windows), seconds)
+
+    def test_label_is_rendered_in_the_admin_timezone(self):
+        windows_utc, _ = _windows_for(self.event, 'UTC')
+        windows_ny, _ = _windows_for(self.event, 'America/New_York')
+
+        self.assertNotEqual(windows_utc[0]['label'], windows_ny[0]['label'])
+
+    def test_invalid_admin_timezone_falls_back_to_utc(self):
+        windows_bad, _ = _windows_for(self.event, 'Not/AZone')
+        windows_utc, _ = _windows_for(self.event, 'UTC')
+
+        self.assertEqual(windows_bad[0]['label'], windows_utc[0]['label'])
+
+    def test_label_repeats_the_date_only_when_crossing_midnight(self):
+        # 6h race from 12:00 stays inside one day.
+        windows, _ = _windows_for(self.event)
+
+        # "Mon 6/1 12:00 – 18:00" — one date, one bare time
+        self.assertEqual(windows[0]['label'].count('/'), 1)
+
+    def test_label_carries_the_date_on_both_sides_across_midnight(self):
+        event = save_event(start_time_utc=dt.time(22, 0), length_seconds=6 * 3600)
+
+        windows, _ = _windows_for(event)
+
+        self.assertEqual(windows[0]['label'].count('/'), 2)
+
+
+class UncoveredRaceWindowAdminContextTests(TestCase):
+    """The admin page surfaces the gaps, capped to a readable number."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def test_context_exposes_windows_and_total(self):
+        response = self.client.get(self.url)
+
+        self.assertIn('uncovered_race_windows', response.context)
+        self.assertIn('uncovered_race_seconds', response.context)
+
+    def test_warning_renders_when_the_race_is_uncovered(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'no driver available')
+
+    def test_no_warning_when_every_race_slot_is_covered(self):
+        driver = Driver.objects.create(event=self.event, name='D', timezone='UTC')
+        _cover(self.event, driver, [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ])
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context['uncovered_race_windows'], [])
+        self.assertNotContains(response, 'no driver available')
+
+    def test_driver_covering_the_whole_race_is_never_named_in_a_warning(self):
+        # Regression: the old warning named exactly this driver.
+        driver = Driver.objects.create(event=self.event, name='Perfect Attendance', timezone='UTC')
+        _cover(self.event, driver, [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ])
+
+        response = self.client.get(self.url)
+
+        self.assertNotContains(response, "Perfect Attendance</strong>")
+
+    def test_window_list_is_capped(self):
+        from events.views import MAX_UNCOVERED_WINDOWS_SHOWN
+        # Alternate covered/uncovered slots to manufacture many separate gaps.
+        driver = Driver.objects.create(event=self.event, name='Patchy', timezone='UTC')
+        race = [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ]
+        _cover(self.event, driver, race[::2])
+
+        response = self.client.get(self.url)
+
+        self.assertLessEqual(
+            len(response.context['uncovered_race_windows']),
+            MAX_UNCOVERED_WINDOWS_SHOWN,
+        )
+
+    def test_capped_list_reports_how_many_were_hidden(self):
+        from events.views import MAX_UNCOVERED_WINDOWS_SHOWN
+        driver = Driver.objects.create(event=self.event, name='Patchy', timezone='UTC')
+        race = [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ]
+        _cover(self.event, driver, race[::2])
+
+        response = self.client.get(self.url)
+
+        shown = len(response.context['uncovered_race_windows'])
+        extra = response.context['uncovered_race_windows_extra']
+        if extra:
+            self.assertEqual(shown, MAX_UNCOVERED_WINDOWS_SHOWN)
+        self.assertGreaterEqual(extra, 0)
+
+
+# ---------------------------------------------------------------------------
+# PR review follow-ups
+# ---------------------------------------------------------------------------
+
+class ClientSideGridAnchorTests(TestCase):
+    """
+    The admin page's JS snaps stint times onto the availability grid itself and
+    looks the results up in availabilityData. It therefore needs the same
+    floored origin the server uses — an unfloored one probes timestamps no slot
+    can occupy, so on any event not starting on a half hour every assigned
+    driver renders as conflicted and every dropdown option is dimmed.
+    """
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 15))
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def test_context_exposes_the_floored_anchor(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(
+            response.context['slot_grid_anchor'], slot_grid_anchor(self.event)
+        )
+
+    def test_anchor_in_context_is_floored_not_the_session_start(self):
+        response = self.client.get(self.url)
+
+        self.assertNotEqual(
+            response.context['slot_grid_anchor'], self.event.start_datetime_utc
+        )
+        self.assertEqual(response.context['slot_grid_anchor'].minute, 0)
+
+    def test_rendered_anchor_matches_the_first_real_slot(self):
+        response = self.client.get(self.url)
+
+        first_slot = get_availability_slots(self.event)[0]
+        self.assertContains(response, first_slot.strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+    def test_template_does_not_use_the_unfloored_session_start(self):
+        markup = _read_template('admin.html')
+
+        self.assertNotIn("event.start_datetime_utc|to_utc_z", markup)
+
+    def test_both_js_helpers_read_the_same_anchor(self):
+        markup = _read_template('admin.html')
+
+        self.assertEqual(markup.count('new Date(slotGridAnchorUtc).getTime()'), 2)
+
+
+class AvailStylePreGridSlotTests(SimpleTestCase):
+    """
+    availStyle() must mirror build_stint_availability_matrix() and
+    checkDriverConflict(), which both count the slot covering a stint's
+    pre-grid portion. Without it the dropdown left a driver undimmed while the
+    conflict marker beside it flagged them.
+    """
+
+    def test_avail_style_checks_the_pre_grid_slot(self):
+        markup = _read_template('admin.html')
+        avail_style = markup[markup.index('availStyle(stintNumber, driverId)'):]
+        avail_style = avail_style[:avail_style.index('availCellClass')]
+
+        self.assertIn('snappedStartMs', avail_style)
+        self.assertIn('preSlot', avail_style)
+
+    def test_conflict_check_still_has_its_pre_grid_branch(self):
+        markup = _read_template('admin.html')
+        fn = markup[markup.index('function checkDriverConflict'):]
+        fn = fn[:fn.index('function formatTimeInTz')]
+
+        self.assertIn('preSlot', fn)
+
+
+class ScheduleWarningResetTests(SimpleTestCase):
+    """
+    The save response swaps #admin-details-errors, which sits outside the form,
+    so the form's Alpine state survives. Without re-baselining, the pre-save
+    warning stayed on screen describing a move that already happened.
+    """
+
+    def test_component_can_re_baseline(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn('acceptSaved()', markup)
+
+    def test_form_re_baselines_after_a_successful_save(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn(
+            "@htmx:after-request=\"if ($event.detail.successful) acceptSaved()\"",
+            markup,
+        )
+
+
+class ScheduleMovedWatchesLengthTests(TestCase):
+    """Shortening a race truncates the slot grid tail just like moving it."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        self.driver = Driver.objects.create(
+            event=self.event, name='Trimmed', timezone='UTC'
+        )
+        Availability.objects.bulk_create([
+            Availability(driver=self.driver, slot_utc=s)
+            for s in get_availability_slots(self.event)
+        ])
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_save_details', kwargs={'event_id': self.event.id})
+
+    def _post(self, **overrides):
+        payload = {
+            'name': self.event.name,
+            'date': '2026-06-01',
+            'start_time_utc': '12:00',
+            'length_hours': '6',
+            'length_minutes': '0',
+        }
+        payload.update(overrides)
+        return self.client.post(self.url, payload)
+
+    def test_shortening_the_race_reports_stranded_availability(self):
+        response = self._post(length_hours='2')
+
+        self.assertIn(
+            'partials/availability_warning.html',
+            [t.name for t in response.templates],
+        )
+
+    def test_shortening_the_race_names_the_driver(self):
+        response = self._post(length_hours='2')
+
+        self.assertContains(response, 'Trimmed')
+
+    def test_unchanged_length_still_reports_nothing(self):
+        response = self._post()
+
+        self.assertEqual(response.content, b'')
+
+
+class StaleAvailabilityReportsScaleTests(TestCase):
+    """The warning carries how much each driver lost, not just who."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        self.driver = Driver.objects.create(event=self.event, name='Mover', timezone='UTC')
+        Availability.objects.bulk_create([
+            Availability(driver=self.driver, slot_utc=s)
+            for s in get_availability_slots(self.event)
+        ])
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+
+    def test_entries_carry_lost_and_total_counts(self):
+        self.event.date = dt.date(2026, 6, 8)
+        self.event.save(update_fields=['date'])
+
+        entry = _drivers_with_stale_availability(self.event)[0]
+
+        self.assertIn('lost', entry)
+        self.assertIn('total', entry)
+        self.assertGreater(entry['lost'], 0)
+
+    def test_warning_shows_the_scale_of_the_loss(self):
+        response = self.client.post(
+            reverse('admin_save_details', kwargs={'event_id': self.event.id}),
+            {'name': self.event.name, 'date': '2026-06-08', 'start_time_utc': '12:00',
+             'length_hours': '6', 'length_minutes': '0'},
+        )
+
+        self.assertContains(response, 'no longer apply')
+
+
+class CanonicalHostAllowedHostsTests(SimpleTestCase):
+    """
+    Documents the deployment trap: request.get_host() validates against
+    ALLOWED_HOSTS and raises DisallowedHost, which Django turns into a bare 400
+    BEFORE the middleware can redirect. Every host to be redirected must
+    therefore be in ALLOWED_HOSTS, not just the canonical one.
+    """
+
+    CANONICAL = 'wearechecking.gg'
+    OTHER = 'www.wearechecking.gg'
+
+    def _middleware(self, allowed):
+        with override_settings(CANONICAL_HOST=self.CANONICAL, ALLOWED_HOSTS=allowed):
+            return CanonicalHostMiddleware(lambda r: HttpResponse('ok'))
+
+    def test_redirect_works_when_the_other_host_is_allowed(self):
+        allowed = [self.CANONICAL, self.OTHER]
+        middleware = self._middleware(allowed)
+        with override_settings(CANONICAL_HOST=self.CANONICAL, ALLOWED_HOSTS=allowed):
+            response = middleware(RequestFactory(SERVER_NAME=self.OTHER).get('/create/'))
+
+        self.assertEqual(response.status_code, 301)
+
+    def test_host_missing_from_allowed_hosts_cannot_be_redirected(self):
+        from django.core.exceptions import DisallowedHost
+
+        allowed = [self.CANONICAL]
+        middleware = self._middleware(allowed)
+        with override_settings(CANONICAL_HOST=self.CANONICAL, ALLOWED_HOSTS=allowed):
+            with self.assertRaises(DisallowedHost):
+                middleware(RequestFactory(SERVER_NAME=self.OTHER).get('/create/'))
+
+    def test_env_example_documents_the_requirement(self):
+        env = django_conf.BASE_DIR.joinpath('.env.example').read_text(encoding='utf-8')
+
+        self.assertIn('every host you want redirected', env)
