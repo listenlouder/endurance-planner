@@ -7849,3 +7849,67 @@ class DriverDropdownTimezoneTests(TestCase):
 
         drivers = json.loads(response.context['drivers_json'])
         self.assertEqual(drivers[0]['timezone'], 'Europe/Berlin')
+
+
+# ---------------------------------------------------------------------------
+# Stint conditions on the view page
+#
+# Dry used to render as an empty cell, which read as "not set yet" rather than
+# "dry" — and disagreed with the admin page, which has always shown ○ Dry.
+# ---------------------------------------------------------------------------
+
+class ViewPageConditionLabelTests(SimpleTestCase):
+    """Every condition is labelled, including dry."""
+
+    def _condition_pill_body(self):
+        """Just the body of conditionPill(); it contains no nested braces."""
+        markup = _read_template('view.html')
+        start = markup.index('conditionPill(condition) {')
+        return markup[start:markup.index('}', start)]
+
+    def test_dry_has_a_label(self):
+        self.assertIn('○ Dry', self._condition_pill_body())
+
+    def test_no_condition_renders_as_empty_text(self):
+        # The old shape ended `return '';` for dry.
+        self.assertNotIn("return '';", self._condition_pill_body())
+
+    def test_wet_and_mixed_are_still_labelled(self):
+        body = self._condition_pill_body()
+
+        self.assertIn('⛆ Wet', body)
+        self.assertIn('◑ Mixed', body)
+
+    def test_dry_gets_its_own_pill_class(self):
+        markup = _read_template('view.html')
+
+        self.assertIn("'condition-pill condition-' + known", markup)
+
+    def test_stylesheet_defines_the_dry_pill(self):
+        css = django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('.condition-dry {', css)
+
+
+class ConditionLabelsMatchAcrossPagesTests(SimpleTestCase):
+    """
+    The admin picker and the public view describe the same stint, so they must
+    not use different words or symbols for the same condition.
+    """
+
+    def test_every_condition_uses_the_same_symbol_on_both_pages(self):
+        admin = _read_template('admin.html')
+        view = _read_template('view.html')
+
+        for label in ('○ Dry', '◑ Mixed', '⛆ Wet'):
+            with self.subTest(label=label):
+                self.assertIn(label, admin)
+                self.assertIn(label, view)
+
+    def test_model_choices_cover_exactly_the_labelled_conditions(self):
+        self.assertEqual(
+            {c[0] for c in StintAssignment.CONDITION_CHOICES},
+            {'dry', 'mixed', 'wet'},
+        )
