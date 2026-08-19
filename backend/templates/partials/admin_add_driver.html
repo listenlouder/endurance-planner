@@ -2,7 +2,6 @@
   tzSearch: '',
   timezone: 'UTC',
   showTzPicker: false,
-  dropStyle: {},
   checked: (typeof slotTimestamps !== 'undefined' ? slotTimestamps : []).map(() => false),
 
   get flatSlots() {
@@ -45,19 +44,11 @@
     })).filter(g => g.zones.length > 0);
   },
 
+  // The panel anchors itself in CSS — see .tz-panel. No measuring, so nothing
+  // to go stale on scroll and nothing to be thrown off by a transformed
+  // ancestor.
   openPicker() {
-    requestAnimationFrame(() => {
-      const r = this.$refs.tzBtn.getBoundingClientRect();
-      this.dropStyle = {
-        position: 'fixed',
-        top: Math.round(r.bottom + 2) + 'px',
-        bottom: 'auto',
-        left: Math.round(r.left) + 'px',
-        width: Math.round(r.width) + 'px',
-        zIndex: 9999
-      };
-      this.showTzPicker = true;
-    });
+    this.showTzPicker = true;
   },
 
   selectAll()  { this.checked = this.checked.map(() => true); },
@@ -109,11 +100,19 @@
       <span class="detail-label">Timezone</span>
       <input type="hidden" name="timezone" :value="timezone">
 
-      <div @click.outside="showTzPicker = false; tzSearch = ''"
-           @scroll.window="showTzPicker = false; tzSearch = ''">
+      {% comment %}
+      Anchored with position:absolute against this wrapper rather than being
+      positioned in script. It used to be position:fixed with coordinates read
+      from getBoundingClientRect(), which is only correct while no ancestor has
+      a transform — and .fade-up-delay-2 does while its entry animation runs,
+      so a fixed panel resolved against that section instead of the viewport
+      and landed somewhere else entirely. Nothing here clips overflow, so the
+      panel does not need to escape its container.
+      {% endcomment %}
+      <div class="tz-picker"
+           @click.outside="showTzPicker = false; tzSearch = ''">
         <!-- Trigger button -->
         <button type="button"
-                x-ref="tzBtn"
                 @click="showTzPicker ? (showTzPicker = false, tzSearch = '') : openPicker()"
                 class="detail-input"
                 style="display: flex;
@@ -130,10 +129,7 @@
         </button>
 
         <!-- Grouped picker -->
-        <div x-show="showTzPicker"
-             :style="dropStyle"
-             style="border: 1px solid var(--border-mid);
-                    background: var(--bg-card);">
+        <div x-show="showTzPicker" class="tz-panel">
 
           <!-- Search -->
           <div style="padding: 8px; border-bottom: 1px solid var(--border);">

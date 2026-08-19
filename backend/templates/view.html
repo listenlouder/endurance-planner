@@ -549,7 +549,7 @@
                 <td style="padding: 8px 14px;
                            text-align: center;
                            width: 90px;">
-                  <span :class="row.condition === 'wet' ? 'condition-pill condition-wet' : row.condition === 'mixed' ? 'condition-pill condition-mixed' : ''"
+                  <span :class="conditionClass(row.condition)"
                         x-text="conditionPill(row.condition)"></span>
                 </td>
                 <td style="padding: 8px 14px;
@@ -840,11 +840,20 @@
         return row.is_last_stint ? 'finish-label' : '';
       },
 
+      // Dry is labelled like any other condition. Leaving it blank read as
+      // "not set yet" rather than "dry", and the admin page has always shown
+      // it as ○ Dry — the two pages should not disagree about the same stint.
       conditionPill(condition) {
-        // Dry is intentionally unlabelled — no pill shown. Only wet/mixed need calling out.
         if (condition === 'wet') return '⛆ Wet';
         if (condition === 'mixed') return '◑ Mixed';
-        return '';
+        return '○ Dry';
+      },
+
+      conditionClass(condition) {
+        const known = (condition === 'wet' || condition === 'mixed')
+          ? condition
+          : 'dry';
+        return 'condition-pill condition-' + known;
       }
     }
   }

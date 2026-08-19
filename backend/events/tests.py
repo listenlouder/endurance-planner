@@ -7697,3 +7697,327 @@ class CanonicalHostAllowedHostsTests(SimpleTestCase):
         env = django_conf.BASE_DIR.joinpath('.env.example').read_text(encoding='utf-8')
 
         self.assertIn('every host you want redirected', env)
+
+
+# ---------------------------------------------------------------------------
+# Stint assignment driver dropdown
+#
+# The trigger was pinned to 200px inside a 220px column, so a long name pushed
+# the adjacent clear button out of reach; the panel was pinned to 200px too,
+# hiding each option's local start time behind a horizontal scrollbar. And the
+# table's declared column widths were ignored entirely: under
+# table-layout: fixed the widths come from the first row, which is all colspan
+# cells, so every column rendered the same width.
+# ---------------------------------------------------------------------------
+
+import re
+
+
+class StintTableColumnWidthTests(TestCase):
+    """A colgroup is the only place fixed table layout reads column widths."""
+
+    def setUp(self):
+        self.event = save_event()
+        for name in ('One', 'Two', 'Three'):
+            Driver.objects.create(event=self.event, name=name, timezone='UTC')
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def test_table_declares_a_colgroup(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '<colgroup>')
+
+    def test_colgroup_has_one_col_per_column(self):
+        response = self.client.get(self.url)
+        html = response.content.decode()
+        colgroup = html[html.index('<colgroup>'):html.index('</colgroup>')]
+
+        # 6 assignment columns + divider + one per driver
+        self.assertEqual(colgroup.count('<col '), 7 + 3)
+
+    def test_driver_column_is_wider_than_the_index_column(self):
+        response = self.client.get(self.url)
+        html = response.content.decode()
+        colgroup = html[html.index('<colgroup>'):html.index('</colgroup>')]
+        widths = [int(w) for w in re.findall(r'width:\s*(\d+)px', colgroup)]
+
+        self.assertGreater(widths[4], widths[0])
+
+
+class DriverDropdownSizingTests(SimpleTestCase):
+    """The trigger yields to its cell; the panel is free to exceed it."""
+
+    def test_trigger_has_no_hard_coded_width(self):
+        markup = _read_template('admin.html')
+
+        self.assertNotIn('width:200px;min-width:200px;max-width:200px', markup)
+
+    def test_trigger_uses_the_shared_class(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn('class="dd-trigger"', markup)
+
+    def test_panel_width_is_not_pinned_to_the_trigger(self):
+        markup = _read_template('admin.html')
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        self.assertNotIn("width: '200px'", toggle)
+        self.assertIn("width: 'max-content'", toggle)
+
+    def test_panel_is_kept_on_screen_from_either_edge(self):
+        markup = _read_template('admin.html')
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        # anchors by left OR right depending on available room
+        self.assertIn('roomToTheRight', toggle)
+
+    def test_option_rows_separate_name_from_time(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn('class="dd-option-name"', markup)
+        self.assertIn('class="dd-option-time"', markup)
+
+
+class DriverDropdownStylesheetTests(SimpleTestCase):
+    """Only the name yields; the start time must never be squeezed out."""
+
+    def _css(self):
+        return django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+
+    def _rule(self, selector):
+        css = self._css()
+        start = css.index(selector + ' {')
+        return css[start:css.index('}', start)]
+
+    def test_trigger_fills_its_cell_rather_than_a_fixed_width(self):
+        rule = self._rule('.dd-trigger')
+
+        self.assertIn('width: 100%', rule)
+        self.assertIn('min-width: 0', rule)
+
+    def test_trigger_name_truncates(self):
+        rule = self._rule('.dd-trigger-name')
+
+        self.assertIn('text-overflow: ellipsis', rule)
+
+    def test_panel_never_scrolls_sideways(self):
+        rule = self._rule('.dd-panel')
+
+        self.assertIn('overflow-x: hidden', rule)
+
+    def test_option_name_is_the_part_that_yields(self):
+        rule = self._rule('.dd-option-name')
+
+        self.assertIn('min-width: 0', rule)
+        self.assertIn('text-overflow: ellipsis', rule)
+
+    def test_option_time_never_shrinks(self):
+        rule = self._rule('.dd-option-time')
+
+        self.assertIn('flex-shrink: 0', rule)
+        self.assertIn('white-space: nowrap', rule)
+
+
+class DriverDropdownTimezoneTests(TestCase):
+    """Each option shows the stint start in that driver's own timezone."""
+
+    def setUp(self):
+        self.event = save_event()
+        Driver.objects.create(
+            event=self.event, name='Berliner', timezone='Europe/Berlin'
+        )
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+
+    def test_driver_timezone_reaches_the_dropdown(self):
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        self.assertContains(response, "driverStintTime('Europe/Berlin')")
+
+    def test_drivers_json_still_carries_timezones(self):
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        drivers = json.loads(response.context['drivers_json'])
+        self.assertEqual(drivers[0]['timezone'], 'Europe/Berlin')
+
+
+# ---------------------------------------------------------------------------
+# Stint conditions on the view page
+#
+# Dry used to render as an empty cell, which read as "not set yet" rather than
+# "dry" — and disagreed with the admin page, which has always shown ○ Dry.
+# ---------------------------------------------------------------------------
+
+class ViewPageConditionLabelTests(SimpleTestCase):
+    """Every condition is labelled, including dry."""
+
+    def _condition_pill_body(self):
+        """Just the body of conditionPill(); it contains no nested braces."""
+        markup = _read_template('view.html')
+        start = markup.index('conditionPill(condition) {')
+        return markup[start:markup.index('}', start)]
+
+    def test_dry_has_a_label(self):
+        self.assertIn('○ Dry', self._condition_pill_body())
+
+    def test_no_condition_renders_as_empty_text(self):
+        # The old shape ended `return '';` for dry.
+        self.assertNotIn("return '';", self._condition_pill_body())
+
+    def test_wet_and_mixed_are_still_labelled(self):
+        body = self._condition_pill_body()
+
+        self.assertIn('⛆ Wet', body)
+        self.assertIn('◑ Mixed', body)
+
+    def test_dry_gets_its_own_pill_class(self):
+        markup = _read_template('view.html')
+
+        self.assertIn("'condition-pill condition-' + known", markup)
+
+    def test_stylesheet_defines_the_dry_pill(self):
+        css = django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('.condition-dry {', css)
+
+
+class ConditionLabelsMatchAcrossPagesTests(SimpleTestCase):
+    """
+    The admin picker and the public view describe the same stint, so they must
+    not use different words or symbols for the same condition.
+    """
+
+    def test_every_condition_uses_the_same_symbol_on_both_pages(self):
+        admin = _read_template('admin.html')
+        view = _read_template('view.html')
+
+        for label in ('○ Dry', '◑ Mixed', '⛆ Wet'):
+            with self.subTest(label=label):
+                self.assertIn(label, admin)
+                self.assertIn(label, view)
+
+    def test_model_choices_cover_exactly_the_labelled_conditions(self):
+        self.assertEqual(
+            {c[0] for c in StintAssignment.CONDITION_CHOICES},
+            {'dry', 'mixed', 'wet'},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dropdown anchoring
+#
+# position:fixed resolves against the nearest ancestor carrying a transform,
+# not the viewport. The admin sections hold one for the duration of their
+# fade-up entry animation, so panels positioned from getBoundingClientRect()
+# were placed relative to the section instead of the screen — landing in a
+# different spot depending on where the page happened to be scrolled.
+# ---------------------------------------------------------------------------
+
+class TimezonePickerAnchoringTests(SimpleTestCase):
+    """The picker anchors in CSS; nothing to go stale, nothing to rebase."""
+
+    def _markup(self):
+        return _read_template('partials', 'admin_add_driver.html')
+
+    def _component(self):
+        """Just the Alpine component body, so the prose in the template's
+        explanatory comment cannot satisfy or trip these assertions."""
+        markup = self._markup()
+        start = markup.index('x-data="{')
+        return markup[start:markup.index('}">', start)]
+
+    def _css(self):
+        return django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+
+    def test_panel_is_not_positioned_from_script(self):
+        component = self._component()
+
+        self.assertNotIn('dropStyle', component)
+        self.assertNotIn('getBoundingClientRect', component)
+
+    def test_open_does_not_defer_to_an_animation_frame(self):
+        # The old shape wrapped the measurement in requestAnimationFrame.
+        self.assertNotIn('requestAnimationFrame', self._component())
+
+    def test_panel_uses_the_anchored_class(self):
+        self.assertIn('class="tz-panel"', self._markup())
+
+    def test_wrapper_establishes_the_positioning_context(self):
+        css = self._css()
+        rule = css[css.index('.tz-picker {'):css.index('}', css.index('.tz-picker {'))]
+
+        self.assertIn('position: relative', rule)
+
+    def test_panel_is_absolutely_positioned_below_the_trigger(self):
+        css = self._css()
+        rule = css[css.index('.tz-panel {'):css.index('}', css.index('.tz-panel {'))]
+
+        self.assertIn('position: absolute', rule)
+        self.assertIn('top: calc(100% + 2px)', rule)
+
+    def test_panel_no_longer_closes_itself_on_scroll(self):
+        # It moves with the page now, so closing on scroll is pointless.
+        self.assertNotIn('@scroll.window', self._markup())
+
+
+class FixedContainingBlockRebaseTests(SimpleTestCase):
+    """
+    The stint driver dropdown must stay position:fixed — its .table-wrapper
+    ancestor clips overflow — so instead of dropping fixed it rebases its
+    offsets onto whatever the real containing block turns out to be.
+    """
+
+    def _markup(self):
+        return _read_template('admin.html')
+
+    def test_helper_exists(self):
+        self.assertIn('function fixedContainingBlockRect', self._markup())
+
+    def test_helper_looks_for_every_containing_block_trigger(self):
+        markup = self._markup()
+        fn = markup[markup.index('function fixedContainingBlockRect'):]
+        fn = fn[:fn.index('function formatTimeInTz')]
+
+        for prop in ('transform', 'filter', 'perspective', 'willChange'):
+            with self.subTest(prop=prop):
+                self.assertIn(prop, fn)
+
+    def test_toggle_rebases_its_offsets(self):
+        markup = self._markup()
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        self.assertIn('fixedContainingBlockRect', toggle)
+        self.assertIn('originLeft', toggle)
+        self.assertIn('originTop', toggle)
+
+    def test_toggle_no_longer_assumes_the_viewport_is_the_origin(self):
+        markup = self._markup()
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        # left used to be written straight from the viewport rect
+        self.assertNotIn("left: Math.round(rect.left) + 'px'", toggle)
+
+    def test_fade_up_animation_is_the_documented_cause(self):
+        # If the entry animation ever stops using a transform this rebase
+        # becomes dead weight — leave a trail back to why it exists.
+        css = django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+        keyframes = css[css.index('@keyframes fadeUp'):]
+        keyframes = keyframes[:keyframes.index('}\n}') + 3]
+
+        self.assertIn('transform', keyframes)
