@@ -21,6 +21,12 @@ class CanonicalHostMiddleware:
     Disabled (removed from the middleware chain) when CANONICAL_HOST is unset,
     or when it is not present in ALLOWED_HOSTS — a canonical host Django would
     reject can only produce a redirect loop.
+
+    IMPORTANT: every hostname you want redirected must ALSO be in ALLOWED_HOSTS.
+    request.get_host() validates against it and raises DisallowedHost, which
+    Django turns into a bare 400 before this middleware can issue a redirect.
+    Listing only CANONICAL_HOST therefore leaves www — the very host this
+    exists to rescue — returning 400 rather than a 301.
     """
 
     def __init__(self, get_response):

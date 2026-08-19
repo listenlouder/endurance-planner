@@ -25,15 +25,23 @@ Expects: stale_drivers — list of driver names.
             margin-bottom: 6px;">
     {{ stale_drivers|length }}
     driver{{ stale_drivers|length|pluralize }} recorded availability that falls
-    outside the new schedule and will show as unavailable until it is
-    re-entered:
+    outside the new schedule. Those slots will show as unavailable until they
+    are re-entered:
   </p>
-  <p style="font-size: 11px;
-            color: var(--text);
-            letter-spacing: 0.04em;
-            line-height: 1.6;">
-    {% for name in stale_drivers %}{{ name }}{% if not forloop.last %}, {% endif %}{% endfor %}
-  </p>
+  <ul style="font-size: 11px;
+             color: var(--text);
+             letter-spacing: 0.04em;
+             line-height: 1.7;
+             list-style: none;">
+    {% for entry in stale_drivers %}
+    <li>
+      {{ entry.name }}
+      <span style="color: var(--text-mid);">
+        — {{ entry.lost }} of {{ entry.total }} slot{{ entry.total|pluralize }} no longer apply
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
   <p style="font-size: 10px;
             color: var(--text-dim);
             letter-spacing: 0.04em;

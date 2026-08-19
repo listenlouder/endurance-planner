@@ -67,6 +67,14 @@
         if (!this.driversWithAvailability) return false;
         return this.dateChanged || this.timeChanged;
       },
+
+      // Re-baseline after a successful save. The saved values are what the
+      // server now holds, so the warning should fall silent until the admin
+      // changes something again.
+      acceptSaved() {
+        this.savedDate = this.date;
+        this.savedStartTime = this.startTime;
+      },
     };
   }
 </script>
@@ -265,7 +273,14 @@
           date: '{{ event.date|date:'Y-m-d' }}',
           startTime: '{{ event.start_time_utc|time:'H:i' }}',
           driversWithAvailability: {{ drivers_with_availability_count }}
-        })">
+        })"
+        @htmx:after-request="if ($event.detail.successful) acceptSaved()">
+    {% comment %}
+    The response swaps #admin-details-errors, which lives outside this form, so
+    the form's Alpine state survives the save. Without re-baselining, the
+    pre-save warning would sit there permanently describing a move that already
+    happened.
+    {% endcomment %}
     {% csrf_token %}
 
     <div class="details-grid">
@@ -1297,8 +1312,12 @@
   const existingAssignments = {{ existing_assignments_json|safe }};
   const existingConditionsData = {{ existing_conditions_json|safe }};
   const driversData       = {{ drivers_json|safe }};
-  // Session start (not race start) — availability slots are always anchored here
-  const sessionStartUtc = '{{ event.start_datetime_utc|to_utc_z }}';
+  // Origin of the availability slot grid: derived from the session start (not
+  // the race start) and floored to a wall-clock :00/:30 boundary. Must stay in
+  // step with utils.slot_grid_anchor() — the helpers below snap stint times
+  // onto this grid and look the results up in availabilityData, so an
+  // unfloored origin probes timestamps that no slot can ever occupy.
+  const slotGridAnchorUtc = '{{ slot_grid_anchor|to_utc_z }}';
 
   function checkDriverConflict(stintNumber, driverId) {
     if (!driverId) return false;
@@ -1306,7 +1325,7 @@
     const sw = stintWindows.find(w => w.stint_number === stintNumber);
     if (!sw) return false;
     const slotMs = 30 * 60 * 1000;
-    const gridAnchorMs = new Date(sessionStartUtc).getTime();
+    const gridAnchorMs = new Date(slotGridAnchorUtc).getTime();
     const startMs = new Date(sw.start_utc).getTime();
     const endMs   = new Date(sw.end_utc).getTime();
     const snappedStartMs = gridAnchorMs + Math.ceil((startMs - gridAnchorMs) / slotMs) * slotMs;
@@ -1485,13 +1504,23 @@
         if (!sw) return '';
         const driverAvailSet = new Set(driverAvail);
         const slotMs = 30 * 60 * 1000;
-        const gridAnchorMs = new Date(sessionStartUtc).getTime();
+        const gridAnchorMs = new Date(slotGridAnchorUtc).getTime();
         const startMs = new Date(sw.start_utc).getTime();
         const endMs   = new Date(sw.end_utc).getTime();
-        const offsetSlots = Math.ceil((startMs - gridAnchorMs) / slotMs);
-        let currentMs = gridAnchorMs + offsetSlots * slotMs;
+        const snappedStartMs = gridAnchorMs
+          + Math.ceil((startMs - gridAnchorMs) / slotMs) * slotMs;
         let hasMissing = false;
-        while (currentMs < endMs) {
+        // Mirror build_stint_availability_matrix() and checkDriverConflict():
+        // when the stint starts before the first grid boundary, the slot
+        // covering that pre-grid portion counts too. Without this the dropdown
+        // left a driver undimmed while the conflict marker and the server
+        // matrix beside it both flagged them.
+        if (startMs < snappedStartMs) {
+          const preSlot = new Date(snappedStartMs - slotMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+          if (!driverAvailSet.has(preSlot)) hasMissing = true;
+        }
+        let currentMs = snappedStartMs;
+        while (!hasMissing && currentMs < endMs) {
           const isoStr = new Date(currentMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
           if (!driverAvailSet.has(isoStr)) { hasMissing = true; break; }
           currentMs += slotMs;

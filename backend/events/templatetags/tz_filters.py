@@ -36,15 +36,21 @@ def dict_get(d, key):
 def seconds_to_hours_display(seconds):
     """
     Converts seconds to a human readable duration string.
-    Examples: 86400 -> "24h", 23400 -> "6h 30m"
+    Examples: 86400 -> "24h", 23400 -> "6h 30m", 1800 -> "30m"
+
+    Sub-hour durations omit the hours part entirely — "0h 30m" reads as a
+    mistake, and this is used for gap durations that are routinely under an
+    hour.
     """
     if not seconds:
         return '—'
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
-    if minutes:
+    if hours and minutes:
         return f"{hours}h {minutes}m"
-    return f"{hours}h"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
 
 
 @register.filter

@@ -133,20 +133,36 @@ def _driver_has_conflict(driver, start_utc, driver_availability):
 
 def _drivers_with_stale_availability(event):
     """
-    Names of drivers who recorded availability that no longer lands anywhere on
-    the event's current slot grid.
+    Drivers whose recorded availability no longer fits the event's slot grid,
+    and how much of it was stranded.
 
-    Availability rows hold absolute UTC datetimes, so moving the event's date
-    or start time can strand them outside the new window. Drivers who never
-    entered availability are not listed — they have nothing to lose — and
-    neither are drivers who kept at least one usable slot.
+    Availability rows hold absolute UTC datetimes, so moving the event's date,
+    start time or length can push them outside the new window.
+
+    Reports any driver who lost at least one slot, not only those who lost
+    everything: a driver left with one usable slot out of forty needs to
+    re-enter just as much as one left with none. No threshold is applied —
+    losing a single edge slot to a 30-minute nudge and losing the lot to a date
+    change are both real, and only the admin knows which matters, so the counts
+    are reported and the judgement left to them.
+
+    Drivers who never entered availability are skipped; they have nothing to
+    lose. Ordered by most lost first.
     """
     grid = {s.astimezone(dt_utc.utc) for s in get_availability_slots(event)}
     stale = []
     for driver in Driver.objects.filter(event=event).prefetch_related('availability'):
         stored = {a.slot_utc.astimezone(dt_utc.utc) for a in driver.availability.all()}
-        if stored and not (stored & grid):
-            stale.append(driver.name)
+        if not stored:
+            continue
+        lost = stored - grid
+        if lost:
+            stale.append({
+                'name': driver.name,
+                'lost': len(lost),
+                'total': len(stored),
+            })
+    stale.sort(key=lambda entry: (-entry['lost'], entry['name']))
     return stale
 
 
@@ -1135,6 +1151,10 @@ def _build_admin_context(request, event):
         'availability_matrix': availability_matrix,
         'sanity_warnings': validate_stint_sanity(event),
         'drivers_with_availability_count': drivers_with_availability_count,
+        # The client-side conflict and dimming helpers snap stint times onto the
+        # availability grid themselves, so they must start from the same floored
+        # origin the server uses — not event.start_datetime_utc.
+        'slot_grid_anchor': slot_grid_anchor(event),
         'uncovered_race_windows': uncovered_windows[:MAX_UNCOVERED_WINDOWS_SHOWN],
         'uncovered_race_windows_extra': max(0, len(uncovered_windows) - MAX_UNCOVERED_WINDOWS_SHOWN),
         'uncovered_race_seconds': uncovered_seconds,
@@ -1365,6 +1385,7 @@ def admin_save_details(request, event_id):
 
     original_date = event.date
     original_start_time = event.start_time_utc
+    original_length_seconds = event.length_seconds
 
     errors = {}
 
@@ -1413,8 +1434,12 @@ def admin_save_details(request, event_id):
     event.setup = request.POST.get('setup', '').strip()
     event.recruiting = (request.POST.get('recruiting') == 'on')
 
+    # Length counts too: shortening a race truncates the tail of the slot grid
+    # and strands availability just as surely as moving the start.
     schedule_moved = (
-        event.date != original_date or event.start_time_utc != original_start_time
+        event.date != original_date
+        or event.start_time_utc != original_start_time
+        or event.length_seconds != original_length_seconds
     )
     event.save()
 
@@ -1431,7 +1456,7 @@ def admin_save_details(request, event_id):
             {'stale_drivers': stale_drivers, 'event': event},
         )
         response['HX-Trigger'] = json.dumps({'show-toast': {
-            'message': f'Saved — {len(stale_drivers)} driver(s) need to re-enter availability.',
+            'message': f'Saved — {len(stale_drivers)} driver(s) lost availability slots.',
             'error': True,
         }})
         return response

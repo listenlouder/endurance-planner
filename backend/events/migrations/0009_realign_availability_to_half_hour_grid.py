@@ -11,6 +11,14 @@ For each affected event — one whose start_time_utc minutes are not 0 or 30 —
 shift its drivers' availability back by the same offset the anchor moved, so
 each stored slot lands on the corresponding boundary of the new grid. Events
 already starting on a half hour have an offset of zero and are untouched.
+
+Caveat: this assumes an event's stored slots were generated against its
+*current* start_time_utc. An event whose start was edited after drivers signed
+up already has slots on a third grid, and shifting by the current offset will
+not land them anywhere useful — though under the old anchoring those slots were
+already orphaned, so nothing is made worse. Not generally fixable without a
+history of start-time edits, which is not recorded. Take a database snapshot
+before the first deploy that carries this.
 """
 from datetime import timedelta
 

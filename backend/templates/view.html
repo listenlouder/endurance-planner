@@ -768,13 +768,39 @@
         return 'Could not reach the server. Check your connection.';
       },
 
-      async postStint(row, action) {
+      // Returns the updated stint rows, or null after reporting the failure.
+      // Only the fetch itself is guarded: a rejection there really is a
+      // transport problem, whereas letting the JSON parse share the same catch
+      // would report a malformed 2xx body as "could not reach the server".
+      async postStint(row, action, extraFields) {
         const formData = new FormData();
         formData.append('csrfmiddlewaretoken', this.csrfToken());
-        return fetch(
-          `/${eventId}/stints/${row.stint_number}/${action}/`,
-          { method: 'POST', body: formData }
-        );
+        for (const [key, value] of Object.entries(extraFields || {})) {
+          formData.append(key, value);
+        }
+
+        let res;
+        try {
+          res = await fetch(
+            `/${eventId}/stints/${row.stint_number}/${action}/`,
+            { method: 'POST', body: formData }
+          );
+        } catch (e) {
+          this.toast(this.failureMessage(0), true);
+          return null;
+        }
+
+        if (!res.ok) {
+          this.toast(this.failureMessage(res.status), true);
+          return null;
+        }
+
+        try {
+          return (await res.json()).stint_rows;
+        } catch (e) {
+          this.toast('The server sent back something unreadable.', true);
+          return null;
+        }
       },
 
       async saveEdit(row) {
@@ -782,23 +808,13 @@
         this.saving = true;
         try {
           const utcIso = this.localTimeToUtc(this.editValue, row.start_utc);
-          const formData = new FormData();
-          formData.append('actual_start_utc', utcIso);
-          formData.append('csrfmiddlewaretoken', this.csrfToken());
-          const res = await fetch(
-            `/${eventId}/stints/${row.stint_number}/set-start/`,
-            { method: 'POST', body: formData }
-          );
-          if (!res.ok) {
-            this.toast(this.failureMessage(res.status), true);
-            return;
-          }
-          const data = await res.json();
-          this.stintRows = data.stint_rows;
+          const rows = await this.postStint(row, 'set-start', {
+            actual_start_utc: utcIso,
+          });
+          if (!rows) return;
+          this.stintRows = rows;
           this.editingStint = null;
           this.editValue = '';
-        } catch (e) {
-          this.toast(this.failureMessage(0), true);
         } finally {
           this.saving = false;
         }
@@ -807,15 +823,8 @@
       async resetStint(row) {
         this.saving = true;
         try {
-          const res = await this.postStint(row, 'reset-start');
-          if (!res.ok) {
-            this.toast(this.failureMessage(res.status), true);
-            return;
-          }
-          const data = await res.json();
-          this.stintRows = data.stint_rows;
-        } catch (e) {
-          this.toast(this.failureMessage(0), true);
+          const rows = await this.postStint(row, 'reset-start');
+          if (rows) this.stintRows = rows;
         } finally {
           this.saving = false;
         }

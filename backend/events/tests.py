@@ -1592,12 +1592,21 @@ class SecondsToHoursDisplayFilterTests(SimpleTestCase):
         self.assertEqual(seconds_to_hours_display(23400), '6h 30m')
 
     def test_one_minute_only(self):
-        # 60 s = 0 h 1 m
-        self.assertEqual(seconds_to_hours_display(60), '0h 1m')
+        # Sub-hour durations omit the hours part: "0h 1m" reads as a bug.
+        self.assertEqual(seconds_to_hours_display(60), '1m')
 
     def test_fifty_nine_minutes(self):
-        # 3540 s = 0 h 59 m
-        self.assertEqual(seconds_to_hours_display(3540), '0h 59m')
+        self.assertEqual(seconds_to_hours_display(3540), '59m')
+
+    def test_half_an_hour(self):
+        # The uncovered-window banner routinely reports gaps under an hour.
+        self.assertEqual(seconds_to_hours_display(1800), '30m')
+
+    def test_whole_hours_keep_the_hours_only_form(self):
+        self.assertEqual(seconds_to_hours_display(7200), '2h')
+
+    def test_hours_and_minutes_keep_both(self):
+        self.assertEqual(seconds_to_hours_display(23400), '6h 30m')
 
     def test_zero_returns_em_dash(self):
         # 0 is falsy — the filter returns the sentinel
@@ -6842,7 +6851,10 @@ class SubHalfHourEditPreservesAvailabilityTests(TestCase):
         self.event.save(update_fields=['date'])
         self.event.refresh_from_db()
 
-        self.assertEqual(_drivers_with_stale_availability(self.event), ['Probe'])
+        stale = _drivers_with_stale_availability(self.event)
+
+        self.assertEqual([e['name'] for e in stale], ['Probe'])
+        self.assertEqual(stale[0]['lost'], stale[0]['total'])
 
 
 class OffGridEventConflictDetectionTests(TestCase):
@@ -6889,16 +6901,48 @@ class StaleAvailabilityDetectionTests(TestCase):
         driver = Driver.objects.create(event=self.event, name='Stranded', timezone='UTC')
         Availability.objects.create(driver=driver, slot_utc=utc(2020, 1, 1, 0, 0))
 
-        self.assertEqual(_drivers_with_stale_availability(self.event), ['Stranded'])
+        self.assertEqual(
+            _drivers_with_stale_availability(self.event),
+            [{'name': 'Stranded', 'lost': 1, 'total': 1}],
+        )
 
-    def test_driver_keeping_one_usable_slot_is_not_reported(self):
+    def test_driver_keeping_one_usable_slot_is_still_reported(self):
+        # Previously silent unless EVERY slot was stranded, so a driver left
+        # with one usable slot out of forty went unmentioned.
         driver = Driver.objects.create(event=self.event, name='Partial', timezone='UTC')
         Availability.objects.create(driver=driver, slot_utc=utc(2020, 1, 1, 0, 0))
         Availability.objects.create(
             driver=driver, slot_utc=get_availability_slots(self.event)[0]
         )
 
+        self.assertEqual(
+            _drivers_with_stale_availability(self.event),
+            [{'name': 'Partial', 'lost': 1, 'total': 2}],
+        )
+
+    def test_driver_losing_nothing_is_not_reported(self):
+        driver = Driver.objects.create(event=self.event, name='Intact', timezone='UTC')
+        Availability.objects.create(
+            driver=driver, slot_utc=get_availability_slots(self.event)[0]
+        )
+
         self.assertEqual(_drivers_with_stale_availability(self.event), [])
+
+    def test_worst_affected_driver_is_listed_first(self):
+        slots = get_availability_slots(self.event)
+        light = Driver.objects.create(event=self.event, name='Light', timezone='UTC')
+        Availability.objects.create(driver=light, slot_utc=utc(2020, 1, 1, 0, 0))
+        Availability.objects.create(driver=light, slot_utc=slots[0])
+
+        heavy = Driver.objects.create(event=self.event, name='Heavy', timezone='UTC')
+        Availability.objects.bulk_create([
+            Availability(driver=heavy, slot_utc=utc(2020, 1, 1, 0, 30 * i))
+            for i in range(2)
+        ] + [Availability(driver=heavy, slot_utc=utc(2020, 1, 2, 0, 0))])
+
+        names = [e['name'] for e in _drivers_with_stale_availability(self.event)]
+
+        self.assertEqual(names, ['Heavy', 'Light'])
 
 
 class ScheduleMoveWarningTests(TestCase):
@@ -7437,3 +7481,219 @@ class UncoveredRaceWindowAdminContextTests(TestCase):
         if extra:
             self.assertEqual(shown, MAX_UNCOVERED_WINDOWS_SHOWN)
         self.assertGreaterEqual(extra, 0)
+
+
+# ---------------------------------------------------------------------------
+# PR review follow-ups
+# ---------------------------------------------------------------------------
+
+class ClientSideGridAnchorTests(TestCase):
+    """
+    The admin page's JS snaps stint times onto the availability grid itself and
+    looks the results up in availabilityData. It therefore needs the same
+    floored origin the server uses — an unfloored one probes timestamps no slot
+    can occupy, so on any event not starting on a half hour every assigned
+    driver renders as conflicted and every dropdown option is dimmed.
+    """
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 15))
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def test_context_exposes_the_floored_anchor(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(
+            response.context['slot_grid_anchor'], slot_grid_anchor(self.event)
+        )
+
+    def test_anchor_in_context_is_floored_not_the_session_start(self):
+        response = self.client.get(self.url)
+
+        self.assertNotEqual(
+            response.context['slot_grid_anchor'], self.event.start_datetime_utc
+        )
+        self.assertEqual(response.context['slot_grid_anchor'].minute, 0)
+
+    def test_rendered_anchor_matches_the_first_real_slot(self):
+        response = self.client.get(self.url)
+
+        first_slot = get_availability_slots(self.event)[0]
+        self.assertContains(response, first_slot.strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+    def test_template_does_not_use_the_unfloored_session_start(self):
+        markup = _read_template('admin.html')
+
+        self.assertNotIn("event.start_datetime_utc|to_utc_z", markup)
+
+    def test_both_js_helpers_read_the_same_anchor(self):
+        markup = _read_template('admin.html')
+
+        self.assertEqual(markup.count('new Date(slotGridAnchorUtc).getTime()'), 2)
+
+
+class AvailStylePreGridSlotTests(SimpleTestCase):
+    """
+    availStyle() must mirror build_stint_availability_matrix() and
+    checkDriverConflict(), which both count the slot covering a stint's
+    pre-grid portion. Without it the dropdown left a driver undimmed while the
+    conflict marker beside it flagged them.
+    """
+
+    def test_avail_style_checks_the_pre_grid_slot(self):
+        markup = _read_template('admin.html')
+        avail_style = markup[markup.index('availStyle(stintNumber, driverId)'):]
+        avail_style = avail_style[:avail_style.index('availCellClass')]
+
+        self.assertIn('snappedStartMs', avail_style)
+        self.assertIn('preSlot', avail_style)
+
+    def test_conflict_check_still_has_its_pre_grid_branch(self):
+        markup = _read_template('admin.html')
+        fn = markup[markup.index('function checkDriverConflict'):]
+        fn = fn[:fn.index('function formatTimeInTz')]
+
+        self.assertIn('preSlot', fn)
+
+
+class ScheduleWarningResetTests(SimpleTestCase):
+    """
+    The save response swaps #admin-details-errors, which sits outside the form,
+    so the form's Alpine state survives. Without re-baselining, the pre-save
+    warning stayed on screen describing a move that already happened.
+    """
+
+    def test_component_can_re_baseline(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn('acceptSaved()', markup)
+
+    def test_form_re_baselines_after_a_successful_save(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn(
+            "@htmx:after-request=\"if ($event.detail.successful) acceptSaved()\"",
+            markup,
+        )
+
+
+class ScheduleMovedWatchesLengthTests(TestCase):
+    """Shortening a race truncates the slot grid tail just like moving it."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        self.driver = Driver.objects.create(
+            event=self.event, name='Trimmed', timezone='UTC'
+        )
+        Availability.objects.bulk_create([
+            Availability(driver=self.driver, slot_utc=s)
+            for s in get_availability_slots(self.event)
+        ])
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_save_details', kwargs={'event_id': self.event.id})
+
+    def _post(self, **overrides):
+        payload = {
+            'name': self.event.name,
+            'date': '2026-06-01',
+            'start_time_utc': '12:00',
+            'length_hours': '6',
+            'length_minutes': '0',
+        }
+        payload.update(overrides)
+        return self.client.post(self.url, payload)
+
+    def test_shortening_the_race_reports_stranded_availability(self):
+        response = self._post(length_hours='2')
+
+        self.assertIn(
+            'partials/availability_warning.html',
+            [t.name for t in response.templates],
+        )
+
+    def test_shortening_the_race_names_the_driver(self):
+        response = self._post(length_hours='2')
+
+        self.assertContains(response, 'Trimmed')
+
+    def test_unchanged_length_still_reports_nothing(self):
+        response = self._post()
+
+        self.assertEqual(response.content, b'')
+
+
+class StaleAvailabilityReportsScaleTests(TestCase):
+    """The warning carries how much each driver lost, not just who."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        self.driver = Driver.objects.create(event=self.event, name='Mover', timezone='UTC')
+        Availability.objects.bulk_create([
+            Availability(driver=self.driver, slot_utc=s)
+            for s in get_availability_slots(self.event)
+        ])
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+
+    def test_entries_carry_lost_and_total_counts(self):
+        self.event.date = dt.date(2026, 6, 8)
+        self.event.save(update_fields=['date'])
+
+        entry = _drivers_with_stale_availability(self.event)[0]
+
+        self.assertIn('lost', entry)
+        self.assertIn('total', entry)
+        self.assertGreater(entry['lost'], 0)
+
+    def test_warning_shows_the_scale_of_the_loss(self):
+        response = self.client.post(
+            reverse('admin_save_details', kwargs={'event_id': self.event.id}),
+            {'name': self.event.name, 'date': '2026-06-08', 'start_time_utc': '12:00',
+             'length_hours': '6', 'length_minutes': '0'},
+        )
+
+        self.assertContains(response, 'no longer apply')
+
+
+class CanonicalHostAllowedHostsTests(SimpleTestCase):
+    """
+    Documents the deployment trap: request.get_host() validates against
+    ALLOWED_HOSTS and raises DisallowedHost, which Django turns into a bare 400
+    BEFORE the middleware can redirect. Every host to be redirected must
+    therefore be in ALLOWED_HOSTS, not just the canonical one.
+    """
+
+    CANONICAL = 'wearechecking.gg'
+    OTHER = 'www.wearechecking.gg'
+
+    def _middleware(self, allowed):
+        with override_settings(CANONICAL_HOST=self.CANONICAL, ALLOWED_HOSTS=allowed):
+            return CanonicalHostMiddleware(lambda r: HttpResponse('ok'))
+
+    def test_redirect_works_when_the_other_host_is_allowed(self):
+        allowed = [self.CANONICAL, self.OTHER]
+        middleware = self._middleware(allowed)
+        with override_settings(CANONICAL_HOST=self.CANONICAL, ALLOWED_HOSTS=allowed):
+            response = middleware(RequestFactory(SERVER_NAME=self.OTHER).get('/create/'))
+
+        self.assertEqual(response.status_code, 301)
+
+    def test_host_missing_from_allowed_hosts_cannot_be_redirected(self):
+        from django.core.exceptions import DisallowedHost
+
+        allowed = [self.CANONICAL]
+        middleware = self._middleware(allowed)
+        with override_settings(CANONICAL_HOST=self.CANONICAL, ALLOWED_HOSTS=allowed):
+            with self.assertRaises(DisallowedHost):
+                middleware(RequestFactory(SERVER_NAME=self.OTHER).get('/create/'))
+
+    def test_env_example_documents_the_requirement(self):
+        env = django_conf.BASE_DIR.joinpath('.env.example').read_text(encoding='utf-8')
+
+        self.assertIn('every host you want redirected', env)

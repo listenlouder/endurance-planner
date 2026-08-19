@@ -490,10 +490,10 @@ DB_PORT                     Database port (default 3306)
 ```
 CSRF_TRUSTED_ORIGINS        https://wearechecking.gg,https://www.wearechecking.gg,...
 CANONICAL_HOST              wearechecking.gg — the single host users land on.
-                              Must also appear in ALLOWED_HOSTS or the
-                              redirect middleware disables itself. Without
-                              this, logging in on one host and browsing on
-                              another silently drops the session.
+                              Without it, logging in on one host and browsing
+                              on another silently drops the session.
+                              ALLOWED_HOSTS must list this host AND every host
+                              to be redirected — see the note below.
 DISCORD_CLIENT_ID           From discord.com/developers
 DISCORD_CLIENT_SECRET       From discord.com/developers
 FEEDBACK_PASSWORD           Password for /feedback/view/
@@ -508,6 +508,18 @@ SITE_DOMAIN                 Domain written to the django.contrib.sites row.
                               Does not affect the OAuth callback host.
 EMAIL_BACKEND               Django email backend
 EMAIL_HOST / PORT / etc.    SMTP config if email enabled
+```
+
+**`ALLOWED_HOSTS` must contain the hosts being redirected, not just the
+canonical one.** `request.get_host()` validates the Host header and raises
+`DisallowedHost`, which Django turns into a bare 400 *before*
+`CanonicalHostMiddleware` can issue its redirect. Listing only
+`CANONICAL_HOST` leaves `www` returning 400 rather than a 301 — the exact host
+the setting exists to rescue. Verified:
+
+```
+ALLOWED_HOSTS = [wearechecking.gg]                       www -> 400
+ALLOWED_HOSTS = [wearechecking.gg, www.wearechecking.gg] www -> 301
 ```
 
 Whenever `CANONICAL_HOST` changes, add
