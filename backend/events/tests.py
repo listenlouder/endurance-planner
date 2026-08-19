@@ -7697,3 +7697,155 @@ class CanonicalHostAllowedHostsTests(SimpleTestCase):
         env = django_conf.BASE_DIR.joinpath('.env.example').read_text(encoding='utf-8')
 
         self.assertIn('every host you want redirected', env)
+
+
+# ---------------------------------------------------------------------------
+# Stint assignment driver dropdown
+#
+# The trigger was pinned to 200px inside a 220px column, so a long name pushed
+# the adjacent clear button out of reach; the panel was pinned to 200px too,
+# hiding each option's local start time behind a horizontal scrollbar. And the
+# table's declared column widths were ignored entirely: under
+# table-layout: fixed the widths come from the first row, which is all colspan
+# cells, so every column rendered the same width.
+# ---------------------------------------------------------------------------
+
+import re
+
+
+class StintTableColumnWidthTests(TestCase):
+    """A colgroup is the only place fixed table layout reads column widths."""
+
+    def setUp(self):
+        self.event = save_event()
+        for name in ('One', 'Two', 'Three'):
+            Driver.objects.create(event=self.event, name=name, timezone='UTC')
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def test_table_declares_a_colgroup(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '<colgroup>')
+
+    def test_colgroup_has_one_col_per_column(self):
+        response = self.client.get(self.url)
+        html = response.content.decode()
+        colgroup = html[html.index('<colgroup>'):html.index('</colgroup>')]
+
+        # 6 assignment columns + divider + one per driver
+        self.assertEqual(colgroup.count('<col '), 7 + 3)
+
+    def test_driver_column_is_wider_than_the_index_column(self):
+        response = self.client.get(self.url)
+        html = response.content.decode()
+        colgroup = html[html.index('<colgroup>'):html.index('</colgroup>')]
+        widths = [int(w) for w in re.findall(r'width:\s*(\d+)px', colgroup)]
+
+        self.assertGreater(widths[4], widths[0])
+
+
+class DriverDropdownSizingTests(SimpleTestCase):
+    """The trigger yields to its cell; the panel is free to exceed it."""
+
+    def test_trigger_has_no_hard_coded_width(self):
+        markup = _read_template('admin.html')
+
+        self.assertNotIn('width:200px;min-width:200px;max-width:200px', markup)
+
+    def test_trigger_uses_the_shared_class(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn('class="dd-trigger"', markup)
+
+    def test_panel_width_is_not_pinned_to_the_trigger(self):
+        markup = _read_template('admin.html')
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        self.assertNotIn("width: '200px'", toggle)
+        self.assertIn("width: 'max-content'", toggle)
+
+    def test_panel_is_kept_on_screen_from_either_edge(self):
+        markup = _read_template('admin.html')
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        # anchors by left OR right depending on available room
+        self.assertIn('roomToTheRight', toggle)
+
+    def test_option_rows_separate_name_from_time(self):
+        markup = _read_template('admin.html')
+
+        self.assertIn('class="dd-option-name"', markup)
+        self.assertIn('class="dd-option-time"', markup)
+
+
+class DriverDropdownStylesheetTests(SimpleTestCase):
+    """Only the name yields; the start time must never be squeezed out."""
+
+    def _css(self):
+        return django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+
+    def _rule(self, selector):
+        css = self._css()
+        start = css.index(selector + ' {')
+        return css[start:css.index('}', start)]
+
+    def test_trigger_fills_its_cell_rather_than_a_fixed_width(self):
+        rule = self._rule('.dd-trigger')
+
+        self.assertIn('width: 100%', rule)
+        self.assertIn('min-width: 0', rule)
+
+    def test_trigger_name_truncates(self):
+        rule = self._rule('.dd-trigger-name')
+
+        self.assertIn('text-overflow: ellipsis', rule)
+
+    def test_panel_never_scrolls_sideways(self):
+        rule = self._rule('.dd-panel')
+
+        self.assertIn('overflow-x: hidden', rule)
+
+    def test_option_name_is_the_part_that_yields(self):
+        rule = self._rule('.dd-option-name')
+
+        self.assertIn('min-width: 0', rule)
+        self.assertIn('text-overflow: ellipsis', rule)
+
+    def test_option_time_never_shrinks(self):
+        rule = self._rule('.dd-option-time')
+
+        self.assertIn('flex-shrink: 0', rule)
+        self.assertIn('white-space: nowrap', rule)
+
+
+class DriverDropdownTimezoneTests(TestCase):
+    """Each option shows the stint start in that driver's own timezone."""
+
+    def setUp(self):
+        self.event = save_event()
+        Driver.objects.create(
+            event=self.event, name='Berliner', timezone='Europe/Berlin'
+        )
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+
+    def test_driver_timezone_reaches_the_dropdown(self):
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        self.assertContains(response, "driverStintTime('Europe/Berlin')")
+
+    def test_drivers_json_still_carries_timezones(self):
+        response = self.client.get(
+            reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+        )
+
+        drivers = json.loads(response.context['drivers_json'])
+        self.assertEqual(drivers[0]['timezone'], 'Europe/Berlin')

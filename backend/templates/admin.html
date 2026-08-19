@@ -867,6 +867,23 @@
 
     <div class="table-wrapper" style="overflow-x: auto; overflow-y: visible;">
       <table class="unified-table" id="unifiedTable">
+        {% comment %}
+        Under table-layout: fixed, column widths are taken from the first row —
+        and that row is all colspan cells, so every width declared on the
+        header row below was ignored and the browser split the table into equal
+        columns. That left "#" as wide as "Driver". A colgroup is the only
+        place fixed layout will read per-column widths from here.
+        {% endcomment %}
+        <colgroup>
+          <col style="width: 44px;">   {# # #}
+          <col style="width: 96px;">   {# Start #}
+          <col style="width: 84px;">   {# Dur. #}
+          <col style="width: 74px;">   {# Laps left #}
+          <col style="width: 240px;">  {# Driver #}
+          <col style="width: 96px;">   {# Conditions #}
+          <col style="width: 16px;">   {# divider #}
+          {% for driver in drivers %}<col style="width: 86px;">{% endfor %}
+        </colgroup>
         <thead>
           <tr>
             <th colspan="6" class="avail-group-header" style="color: var(--text-dim);">Assignments</th>
@@ -966,35 +983,31 @@
                             : isAssigned
                               ? 'background:var(--assigned-bg);border:1px solid var(--primary);color:var(--assigned-text);'
                               : 'background:var(--bg);border:1px solid var(--border-mid);color:var(--text-dim);'"
-                          :title="hasConflict ? '⚠ Driver not available for this stint' : ''"
-                          style="width:200px;min-width:200px;max-width:200px;display:flex;align-items:center;justify-content:space-between;
-                                 padding:6px 8px;font-family:'DM Mono',monospace;font-size:11px;
-                                 letter-spacing:0.04em;cursor:pointer;border-radius:0;gap:4px;
-                                 white-space:nowrap;overflow:hidden;">
-                    <span x-text="selectedName"
-                          style="overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;text-align:left;">
-                    </span>
+                          :title="hasConflict
+                            ? selectedName + ' — not available for this stint'
+                            : (isAssigned ? selectedName : '')"
+                          class="dd-trigger">
+                    <span x-text="selectedName" class="dd-trigger-name"></span>
                     <span x-show="hasConflict" style="flex-shrink:0;font-size:10px;">⚠</span>
                     <span x-show="!hasConflict" style="flex-shrink:0;font-size:9px;opacity:0.5;">↓</span>
                   </button>
 
                   <div x-show="open"
                        :style="dropStyle"
-                       style="display:none;background:var(--bg-card);border:1px solid var(--border-mid);
-                              box-shadow:0 8px 24px rgba(0,0,0,0.35);max-height:200px;overflow-y:auto;"
+                       class="dd-panel"
+                       style="display:none;"
                        @click.stop>
 
                     <div class="dd-option dd-unassign" @click="select('')">— unassigned —</div>
 
                     {% for driver in drivers %}
-                    <div class="dd-option"
+                    <div class="dd-option dd-option-row"
                          :class="selectedId === '{{ driver.id }}' ? 'dd-selected' : ''"
                          @click="select('{{ driver.id }}')"
-                         style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-                      <span>{{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} <span class="dd-avail-tag">partial</span>{% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} <span class="dd-avail-tag dd-unavail">unavail</span>{% endif %}</span>
-                      <span x-text="driverStintTime('{{ driver.timezone }}')"
-                            style="font-size:10px;color:var(--text-dim);white-space:nowrap;flex-shrink:0;">
-                      </span>
+                         title="{{ driver.name }}">
+                      <span class="dd-option-name">{{ driver.name }}{% if stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'partial' %} <span class="dd-avail-tag">partial</span>{% elif stint_availability|dict_get:driver.id|dict_get:sw.stint_number == 'none' %} <span class="dd-avail-tag dd-unavail">unavail</span>{% endif %}</span>
+                      <span class="dd-option-time"
+                            x-text="driverStintTime('{{ driver.timezone }}')"></span>
                     </div>
                     {% endfor %}
 
@@ -1393,23 +1406,33 @@
           const dropHeight = 200;
           const spaceBelow = window.innerHeight - rect.bottom;
           const goUp = spaceBelow < dropHeight && rect.top >= spaceBelow;
-          this.dropStyle = goUp
-            ? {
-                position: 'fixed',
-                bottom: (window.innerHeight - Math.round(rect.top) + 2) + 'px',
-                top: 'auto',
-                left: Math.round(rect.left) + 'px',
-                width: '200px',
-                zIndex: 9999,
-              }
-            : {
-                position: 'fixed',
-                top: Math.round(rect.bottom + 2) + 'px',
-                bottom: 'auto',
-                left: Math.round(rect.left) + 'px',
-                width: '200px',
-                zIndex: 9999,
-              };
+
+          // The panel is free to be wider than the trigger. Pinning it to the
+          // trigger's width pushed each option's local start time out of view
+          // behind a horizontal scrollbar, which is exactly the column an admin
+          // opens the dropdown to read.
+          const margin = 16;
+          const maxWidth = Math.min(380, window.innerWidth - margin * 2);
+
+          // Anchor by whichever edge keeps the panel on screen. Width is
+          // content-driven so it cannot be measured before paint; aligning the
+          // right edge to the trigger's is correct regardless of final width.
+          const roomToTheRight = window.innerWidth - rect.left - margin;
+          const anchor = roomToTheRight >= maxWidth
+            ? { left: Math.round(rect.left) + 'px', right: 'auto' }
+            : { right: Math.round(window.innerWidth - rect.right) + 'px', left: 'auto' };
+
+          const vertical = goUp
+            ? { bottom: (window.innerHeight - Math.round(rect.top) + 2) + 'px', top: 'auto' }
+            : { top: Math.round(rect.bottom + 2) + 'px', bottom: 'auto' };
+
+          this.dropStyle = Object.assign({
+            position: 'fixed',
+            minWidth: Math.round(rect.width) + 'px',
+            width: 'max-content',
+            maxWidth: maxWidth + 'px',
+            zIndex: 9999,
+          }, anchor, vertical);
           this.open = true;
         });
       },

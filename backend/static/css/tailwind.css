@@ -1663,6 +1663,44 @@ td.avail-td {
    CUSTOM DRIVER DROPDOWN (inside unified table)
    Uses position:fixed on the panel to escape table overflow.
 ============================================================ */
+/* Closed state. Sized by the cell, not by the driver's name: a fixed width
+   here overflowed the 220px Driver column and hid the adjacent clear button
+   behind long names. The flex parent carries min-width:0 so this can shrink. */
+.dd-trigger {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 6px 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.dd-trigger-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dd-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-mid);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-height: 200px;
+  overflow-y: auto;
+  /* Never scroll sideways — the start time lives at the right edge of each
+     row and must stay reachable without dragging a scrollbar. */
+  overflow-x: hidden;
+}
+
 .dd-option {
   padding: 7px 10px;
   font-family: 'DM Mono', monospace;
@@ -1671,6 +1709,25 @@ td.avail-td {
   cursor: pointer;
   letter-spacing: 0.04em;
   white-space: nowrap;
+}
+.dd-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* The name yields; the time never does. A long name truncates rather than
+   shouldering the time out of the panel. */
+.dd-option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dd-option-time {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .dd-option:hover { background: var(--bg-raised); }
 .dd-option.dd-selected {
