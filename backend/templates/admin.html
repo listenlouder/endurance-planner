@@ -652,22 +652,43 @@
 <section class="admin-section fade-up-delay-2">
   <div class="section-heading">Drivers Signed Up</div>
 
-  {% if drivers_missing_end_coverage %}
+  {% comment %}
+  Gaps where NO driver is available, measured against the race itself.
+  Deliberately not per-driver: partial availability is normal and expected, so
+  warning about an individual not covering the whole race is pure noise. What
+  an admin can act on is a stretch of the race nobody has claimed.
+  {% endcomment %}
+  {% if uncovered_race_windows %}
   <div style="padding: 10px 16px;
-               border: 1px solid var(--border);
-               background: var(--bg-raised);
-               border-left: 3px solid var(--text-dim);
+               border: 1px solid var(--primary);
+               background: var(--primary-dim);
+               border-left: 3px solid var(--primary);
                margin-bottom: 12px;
                max-width: 700px;">
     <p style="font-size: 10px;
-                color: var(--text-dim);
-                letter-spacing: 0.06em;
-                line-height: 1.6;
+                color: var(--primary);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                font-weight: 500;
+                margin-bottom: 6px;
                 font-family: 'DM Mono', monospace;">
-      ℹ Some drivers' availability doesn't cover the full race window:
-      <strong style="color: var(--text);">{{ drivers_missing_end_coverage|join:", " }}</strong>.
-      This may be because they signed up before the race end time was updated.
-      Ask them to update their availability, or assign them manually.
+      ⚠ {{ uncovered_race_seconds|seconds_to_hours_display }} of the race has no driver available
+    </p>
+    <p style="font-size: 11px;
+                color: var(--text-mid);
+                letter-spacing: 0.04em;
+                line-height: 1.7;
+                font-family: 'DM Mono', monospace;">
+      {% for window in uncovered_race_windows %}<span style="color: var(--text);">{{ window.label }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% if uncovered_race_windows_extra %}, and {{ uncovered_race_windows_extra }} more{% endif %}
+    </p>
+    <p style="font-size: 10px;
+                color: var(--text-dim);
+                letter-spacing: 0.04em;
+                line-height: 1.6;
+                margin-top: 8px;
+                font-family: 'DM Mono', monospace;">
+      Times shown in {{ admin_tz }}. Ask drivers to extend their availability,
+      or assign those stints manually.
     </p>
   </div>
   {% endif %}

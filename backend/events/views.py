@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 from .models import Availability, Driver, Event, Feedback, StintAssignment
 from .utils import (
     build_stint_availability_matrix,
+    collapse_slot_ranges,
     format_stint_duration,
     get_availability_slots,
     get_stint_windows,
@@ -254,27 +255,51 @@ def _build_availability_matrix(drivers, slots):
     return matrix, uncovered
 
 
-def _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz):
-    """Build the table_data list for the availability table partial."""
-    safe_tz = admin_tz if admin_tz in VALID_TIMEZONES else 'UTC'
-    admin_tz_zone = ZoneInfo(safe_tz)
+MAX_UNCOVERED_WINDOWS_SHOWN = 6
 
-    def _fmt_slot(slot):
-        local = slot.astimezone(admin_tz_zone)
-        return f"{local.strftime('%a')} {local.month}/{local.day} {local.strftime('%H:%M')}"
 
-    return [
-        {
-            'slot_utc': slot,
-            'slot_local_str': _fmt_slot(slot),
-            'is_uncovered': slot in uncovered_slots,
-            'driver_availability': {
-                driver.id: slot in availability_matrix[driver.id]
-                for driver in drivers
-            },
-        }
-        for slot in slots
+def _uncovered_race_windows(event, slots, uncovered_slots, admin_tz):
+    """
+    Stretches of the race that no driver has marked themselves available for.
+
+    Only the race itself counts. The slot grid also spans warmup and qualifying
+    before the green flag, and an hour of buffer past it for races that run
+    long — nobody has to be signed up for those, so gaps there are not gaps.
+
+    Returns (windows, total_seconds). Each window is a dict with a `label`
+    already rendered in admin_tz.
+    """
+    race_start = event.effective_start_datetime_utc
+    race_end = event.effective_end_datetime_utc
+
+    gaps = [
+        slot for slot in slots
+        if slot in uncovered_slots and race_start <= slot < race_end
     ]
+    if not gaps:
+        return [], 0
+
+    safe_tz = admin_tz if admin_tz in VALID_TIMEZONES else 'UTC'
+    zone = ZoneInfo(safe_tz)
+
+    def _fmt(moment, with_day):
+        local = moment.astimezone(zone)
+        if with_day:
+            return f"{local.strftime('%a')} {local.month}/{local.day} {local.strftime('%H:%M')}"
+        return local.strftime('%H:%M')
+
+    windows = []
+    total_seconds = 0
+    for start, end in collapse_slot_ranges(gaps):
+        # Repeat the date on the end only when the window crosses midnight.
+        crosses_day = start.astimezone(zone).date() != end.astimezone(zone).date()
+        windows.append({
+            'label': f"{_fmt(start, True)} – {_fmt(end, crosses_day)}",
+            'seconds': int((end - start).total_seconds()),
+        })
+        total_seconds += int((end - start).total_seconds())
+
+    return windows, total_seconds
 
 
 def _make_field_ctx(event, field_name):
@@ -993,17 +1018,9 @@ def _build_admin_context(request, event):
     if admin_tz not in VALID_TIMEZONES:
         admin_tz = 'UTC'
 
-    table_data = _build_table_data(slots, uncovered_slots, availability_matrix, drivers, admin_tz)
-
-    if slots:
-        last_slot = slots[-1]
-        drivers_missing_end_coverage = [
-            driver.name
-            for driver in drivers
-            if last_slot not in {a.slot_utc for a in driver.availability.all()}
-        ]
-    else:
-        drivers_missing_end_coverage = []
+    uncovered_windows, uncovered_seconds = _uncovered_race_windows(
+        event, slots, uncovered_slots, admin_tz
+    )
 
     field_groups = [
         {
@@ -1116,14 +1133,15 @@ def _build_admin_context(request, event):
         'required_fields': _REQUIRED_FOR_STINTS,
         'missing_required_fields': missing_required_fields,
         'availability_matrix': availability_matrix,
-        'table_data': table_data,
         'sanity_warnings': validate_stint_sanity(event),
         'drivers_with_availability_count': drivers_with_availability_count,
+        'uncovered_race_windows': uncovered_windows[:MAX_UNCOVERED_WINDOWS_SHOWN],
+        'uncovered_race_windows_extra': max(0, len(uncovered_windows) - MAX_UNCOVERED_WINDOWS_SHOWN),
+        'uncovered_race_seconds': uncovered_seconds,
         'timezone_list_json': _TIMEZONE_LIST_JSON,
         'slot_timestamps_json': slot_timestamps_json,
         'slots': slots,
         'signup_url': signup_url,
-        'drivers_missing_end_coverage': drivers_missing_end_coverage,
         'length_hours_display': total_seconds // 3600,
         'length_minutes_display': (total_seconds % 3600) // 60,
         'has_required_stint_fields': has_required_stint_fields,

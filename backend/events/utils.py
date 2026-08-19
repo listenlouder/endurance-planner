@@ -284,6 +284,36 @@ def get_availability_slots(event):
     return slots
 
 
+def collapse_slot_ranges(slots, slot_duration=timedelta(minutes=30)):
+    """
+    Collapse a list of grid slots into contiguous (start, end) ranges.
+
+    `end` is exclusive — the moment the final slot in the run finishes — so a
+    single 30-minute slot at 10:00 becomes (10:00, 10:30).
+
+    [10:00, 10:30, 11:00, 13:00] -> [(10:00, 11:30), (13:00, 13:30)]
+
+    Used to report gaps in driver coverage as a handful of readable windows
+    rather than a wall of individual half-hour timestamps.
+    """
+    if not slots:
+        return []
+
+    ordered = sorted(slots)
+    ranges = []
+    start = previous = ordered[0]
+
+    for slot in ordered[1:]:
+        if slot - previous == slot_duration:
+            previous = slot
+            continue
+        ranges.append((start, previous + slot_duration))
+        start = previous = slot
+
+    ranges.append((start, previous + slot_duration))
+    return ranges
+
+
 def _snap_to_grid(start_utc, grid_anchor, slot_duration=timedelta(minutes=30)):
     """
     Snap start_utc forward to the first 30-min grid boundary >= start_utc.

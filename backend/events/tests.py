@@ -7167,3 +7167,273 @@ class RequirementsMatchInstalledTests(SimpleTestCase):
                 mismatches.append(f'{name}: pinned {pinned.strip()}, installed {installed}')
 
         self.assertEqual(mismatches, [], f'requirements drift: {mismatches}')
+
+
+# ---------------------------------------------------------------------------
+# Uncovered race windows
+#
+# The old warning asked whether each driver had slots[-1]. That slot sits up to
+# an hour PAST the chequered flag, because get_availability_slots() pads the
+# grid as a buffer for races that run long. So a driver available for 100% of
+# the race was warned about, while one missing half of it was not.
+#
+# Coverage is now measured across the roster and against the race itself.
+# ---------------------------------------------------------------------------
+
+from events.utils import collapse_slot_ranges
+from events.views import _build_availability_matrix, _uncovered_race_windows
+
+
+def _cover(event, driver, slots):
+    Availability.objects.bulk_create([
+        Availability(driver=driver, slot_utc=s) for s in slots
+    ])
+
+
+def _windows_for(event, tz='UTC'):
+    slots = get_availability_slots(event)
+    drivers = list(Driver.objects.filter(event=event).prefetch_related('availability'))
+    _, uncovered = _build_availability_matrix(drivers, slots)
+    return _uncovered_race_windows(event, slots, uncovered, tz)
+
+
+class CollapseSlotRangesTests(SimpleTestCase):
+    """Contiguous half-hour slots collapse into ranges; end is exclusive."""
+
+    def test_empty_input_gives_no_ranges(self):
+        self.assertEqual(collapse_slot_ranges([]), [])
+
+    def test_single_slot_spans_its_own_duration(self):
+        result = collapse_slot_ranges([utc(2026, 6, 1, 10, 0)])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30))])
+
+    def test_consecutive_slots_merge_into_one_range(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30), utc(2026, 6, 1, 11, 0),
+        ])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 11, 30))])
+
+    def test_a_gap_starts_a_new_range(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30), utc(2026, 6, 1, 13, 0),
+        ])
+
+        self.assertEqual(result, [
+            (utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 11, 0)),
+            (utc(2026, 6, 1, 13, 0), utc(2026, 6, 1, 13, 30)),
+        ])
+
+    def test_unsorted_input_is_ordered_first(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 11, 0), utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 10, 30),
+        ])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 10, 0), utc(2026, 6, 1, 11, 30))])
+
+    def test_ranges_span_midnight_without_splitting(self):
+        result = collapse_slot_ranges([
+            utc(2026, 6, 1, 23, 30), utc(2026, 6, 2, 0, 0), utc(2026, 6, 2, 0, 30),
+        ])
+
+        self.assertEqual(result, [(utc(2026, 6, 1, 23, 30), utc(2026, 6, 2, 1, 0))])
+
+
+class UncoveredRaceWindowTests(TestCase):
+    """Only gaps inside the race itself count."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        self.slots = get_availability_slots(self.event)
+        self.race_start = self.event.effective_start_datetime_utc
+        self.race_end = self.event.effective_end_datetime_utc
+
+    def _driver(self, name='D'):
+        return Driver.objects.create(event=self.event, name=name, timezone='UTC')
+
+    def test_no_drivers_means_the_whole_race_is_uncovered(self):
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(seconds, 6 * 3600)
+        self.assertEqual(len(windows), 1)
+
+    def test_full_race_coverage_reports_nothing(self):
+        _cover(self.event, self._driver(),
+               [s for s in self.slots if self.race_start <= s < self.race_end])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(windows, [])
+        self.assertEqual(seconds, 0)
+
+    def test_unticked_post_race_buffer_is_not_a_gap(self):
+        # The exact false positive the old check produced: a driver available
+        # for the entire race but not the hour of padding after it.
+        _cover(self.event, self._driver(),
+               [s for s in self.slots if self.race_start <= s < self.race_end])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(seconds, 0)
+
+    def test_unticked_pre_race_warmup_is_not_a_gap(self):
+        # The grid starts at the session, not the green flag, so warmup and
+        # qualifying slots exist but need no driver.
+        event = save_event(
+            start_time_utc=dt.time(12, 0),
+            race_start_time_utc=dt.time(14, 0),
+            length_seconds=6 * 3600,
+        )
+        driver = Driver.objects.create(event=event, name='D', timezone='UTC')
+        _cover(event, driver, [
+            s for s in get_availability_slots(event)
+            if event.effective_start_datetime_utc <= s < event.effective_end_datetime_utc
+        ])
+
+        windows, seconds = _windows_for(event)
+
+        self.assertEqual(seconds, 0)
+
+    def test_two_drivers_splitting_the_race_leaves_no_gap(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        _cover(self.event, self._driver('Early'), race[:len(race) // 2])
+        _cover(self.event, self._driver('Late'), race[len(race) // 2:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(windows, [])
+        self.assertEqual(seconds, 0)
+
+    def test_a_hole_in_the_middle_is_reported(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        # drop four consecutive slots (2 hours) from the middle
+        _cover(self.event, self._driver(), race[:4] + race[8:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(seconds, 2 * 3600)
+        self.assertEqual(len(windows), 1)
+
+    def test_two_separate_holes_give_two_windows(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        _cover(self.event, self._driver(), race[:2] + race[4:6] + race[8:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(len(windows), 2)
+        self.assertEqual(seconds, 2 * 3600)
+
+    def test_window_seconds_sum_to_the_total(self):
+        race = [s for s in self.slots if self.race_start <= s < self.race_end]
+        _cover(self.event, self._driver(), race[:2] + race[6:])
+
+        windows, seconds = _windows_for(self.event)
+
+        self.assertEqual(sum(w['seconds'] for w in windows), seconds)
+
+    def test_label_is_rendered_in_the_admin_timezone(self):
+        windows_utc, _ = _windows_for(self.event, 'UTC')
+        windows_ny, _ = _windows_for(self.event, 'America/New_York')
+
+        self.assertNotEqual(windows_utc[0]['label'], windows_ny[0]['label'])
+
+    def test_invalid_admin_timezone_falls_back_to_utc(self):
+        windows_bad, _ = _windows_for(self.event, 'Not/AZone')
+        windows_utc, _ = _windows_for(self.event, 'UTC')
+
+        self.assertEqual(windows_bad[0]['label'], windows_utc[0]['label'])
+
+    def test_label_repeats_the_date_only_when_crossing_midnight(self):
+        # 6h race from 12:00 stays inside one day.
+        windows, _ = _windows_for(self.event)
+
+        # "Mon 6/1 12:00 – 18:00" — one date, one bare time
+        self.assertEqual(windows[0]['label'].count('/'), 1)
+
+    def test_label_carries_the_date_on_both_sides_across_midnight(self):
+        event = save_event(start_time_utc=dt.time(22, 0), length_seconds=6 * 3600)
+
+        windows, _ = _windows_for(event)
+
+        self.assertEqual(windows[0]['label'].count('/'), 2)
+
+
+class UncoveredRaceWindowAdminContextTests(TestCase):
+    """The admin page surfaces the gaps, capped to a readable number."""
+
+    def setUp(self):
+        self.event = save_event(start_time_utc=dt.time(12, 0), length_seconds=6 * 3600)
+        session = self.client.session
+        session['admin_%s' % self.event.id] = True
+        session.save()
+        self.url = reverse('admin_dashboard', kwargs={'event_id': self.event.id})
+
+    def test_context_exposes_windows_and_total(self):
+        response = self.client.get(self.url)
+
+        self.assertIn('uncovered_race_windows', response.context)
+        self.assertIn('uncovered_race_seconds', response.context)
+
+    def test_warning_renders_when_the_race_is_uncovered(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'no driver available')
+
+    def test_no_warning_when_every_race_slot_is_covered(self):
+        driver = Driver.objects.create(event=self.event, name='D', timezone='UTC')
+        _cover(self.event, driver, [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ])
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context['uncovered_race_windows'], [])
+        self.assertNotContains(response, 'no driver available')
+
+    def test_driver_covering_the_whole_race_is_never_named_in_a_warning(self):
+        # Regression: the old warning named exactly this driver.
+        driver = Driver.objects.create(event=self.event, name='Perfect Attendance', timezone='UTC')
+        _cover(self.event, driver, [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ])
+
+        response = self.client.get(self.url)
+
+        self.assertNotContains(response, "Perfect Attendance</strong>")
+
+    def test_window_list_is_capped(self):
+        from events.views import MAX_UNCOVERED_WINDOWS_SHOWN
+        # Alternate covered/uncovered slots to manufacture many separate gaps.
+        driver = Driver.objects.create(event=self.event, name='Patchy', timezone='UTC')
+        race = [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ]
+        _cover(self.event, driver, race[::2])
+
+        response = self.client.get(self.url)
+
+        self.assertLessEqual(
+            len(response.context['uncovered_race_windows']),
+            MAX_UNCOVERED_WINDOWS_SHOWN,
+        )
+
+    def test_capped_list_reports_how_many_were_hidden(self):
+        from events.views import MAX_UNCOVERED_WINDOWS_SHOWN
+        driver = Driver.objects.create(event=self.event, name='Patchy', timezone='UTC')
+        race = [
+            s for s in get_availability_slots(self.event)
+            if self.event.effective_start_datetime_utc <= s < self.event.effective_end_datetime_utc
+        ]
+        _cover(self.event, driver, race[::2])
+
+        response = self.client.get(self.url)
+
+        shown = len(response.context['uncovered_race_windows'])
+        extra = response.context['uncovered_race_windows_extra']
+        if extra:
+            self.assertEqual(shown, MAX_UNCOVERED_WINDOWS_SHOWN)
+        self.assertGreaterEqual(extra, 0)
