@@ -1,0 +1,44 @@
+{% comment %}
+Shown after an event's date or start time moves far enough that stored driver
+availability no longer overlaps the new schedule. Persistent rather than a
+toast: the admin needs to go chase these drivers.
+Expects: stale_drivers — list of driver names.
+{% endcomment %}
+<div style="margin-bottom: 12px;
+            padding: 12px 16px;
+            border: 1px solid var(--primary);
+            background: var(--primary-dim);
+            border-left: 3px solid var(--primary);"
+     role="status">
+  <p style="font-size: 10px;
+            color: var(--primary);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-weight: 500;
+            margin-bottom: 6px;">
+    Schedule moved — availability no longer applies
+  </p>
+  <p style="font-size: 11px;
+            color: var(--text-mid);
+            letter-spacing: 0.04em;
+            line-height: 1.6;
+            margin-bottom: 6px;">
+    {{ stale_drivers|length }}
+    driver{{ stale_drivers|length|pluralize }} recorded availability that falls
+    outside the new schedule and will show as unavailable until it is
+    re-entered:
+  </p>
+  <p style="font-size: 11px;
+            color: var(--text);
+            letter-spacing: 0.04em;
+            line-height: 1.6;">
+    {% for name in stale_drivers %}{{ name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+  </p>
+  <p style="font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 0.04em;
+            line-height: 1.6;
+            margin-top: 8px;">
+    Share the signup link again so they can update it.
+  </p>
+</div>

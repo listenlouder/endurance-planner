@@ -80,11 +80,11 @@
             $el.reset();
             $dispatch('close-add-driver');
           }
-        "
-        hx-on::response-error="
-          const errorDiv = document.getElementById('add-driver-errors');
-          if (errorDiv) errorDiv.innerHTML = $event.detail.xhr.responseText;
         ">
+    {% comment %}
+    Validation errors come back as 422 with HX-Retarget pointing at
+    #add-driver-errors, so HTMX places them itself — no bespoke error handler.
+    {% endcomment %}
     {% csrf_token %}
 
     <div id="add-driver-errors" style="margin-bottom: 8px;"></div>

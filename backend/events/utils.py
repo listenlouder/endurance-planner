@@ -196,35 +196,6 @@ def laps_remaining_after_stint(event, stint_number):
     return max(0, remaining)
 
 
-def stint_start_time(event, stint_number):
-    """
-    Calculate the UTC start datetime for a given stint.
-
-    stint_number is 1-indexed. Stint 1 starts at
-    event.effective_start_datetime_utc (race_start_time_utc when set,
-    otherwise session start_time_utc).
-
-    Returns timezone-aware datetime.
-    """
-    offset = (stint_number - 1) * stint_length_seconds(event)
-    return event.effective_start_datetime_utc + timedelta(seconds=offset)
-
-
-def stint_end_time(event, stint_number):
-    """
-    Calculate the UTC end datetime for a given stint.
-
-    The end time of stint N is the start time of stint N+1.
-    For the final stint, it is event.effective_end_datetime_utc.
-
-    Returns timezone-aware datetime.
-    """
-    n = total_stints(event)
-    if stint_number >= n:
-        return event.effective_end_datetime_utc
-    return stint_start_time(event, stint_number + 1)
-
-
 def get_stint_windows(event, assignment_overrides=None):
     """
     Returns a list of dicts for all stints, including per-stint duration.
@@ -272,18 +243,38 @@ def get_stint_windows(event, assignment_overrides=None):
     return windows
 
 
+def slot_grid_anchor(event):
+    """
+    Origin of the availability slot grid: the wall-clock :00/:30 boundary at or
+    before the session start.
+
+    Deliberately floored rather than using the exact start time. Anchoring to
+    the exact start makes the grid's phase depend on the event's minutes, so
+    editing the start from 12:00 to 12:15 would move every boundary to :15/:45
+    and orphan every stored slot — a fifteen-minute correction destroying more
+    availability than moving the event by an hour. Flooring keeps the grid on
+    wall-clock half hours, which is how drivers pick slots anyway, so
+    sub-30-minute edits change nothing.
+    """
+    start = event.start_datetime_utc
+    return start.replace(
+        minute=(start.minute // 30) * 30, second=0, microsecond=0
+    )
+
+
 def get_availability_slots(event):
     """
     Returns a list of UTC datetimes representing every 30-minute
     availability slot from session start to one hour past effective
     race end.
 
-    Always anchors to start_datetime_utc (session start) so warmup
+    Always anchors to the session start (never the race start) so warmup
     and qualifying slots are included even when race_start_time_utc
-    differs. Extends one hour past end_datetime_utc as a buffer for
-    races that run long and to cover the race_start_time_utc offset.
+    differs, and floors that anchor to a wall-clock half hour — see
+    slot_grid_anchor(). Extends one hour past end_datetime_utc as a buffer
+    for races that run long and to cover the race_start_time_utc offset.
     """
-    start = event.start_datetime_utc
+    start = slot_grid_anchor(event)
     end = event.end_datetime_utc + timedelta(hours=1)
     slots = []
     current = start
@@ -297,7 +288,7 @@ def _snap_to_grid(start_utc, grid_anchor, slot_duration=timedelta(minutes=30)):
     """
     Snap start_utc forward to the first 30-min grid boundary >= start_utc.
 
-    Availability slots live on a grid anchored at the event start time.
+    Availability slots live on the grid returned by slot_grid_anchor().
     When stint length is not a multiple of 30 min, a stint's start_utc
     falls off that grid. Ceiling-snapping ensures we only check slots that
     can actually exist in the availability table.
@@ -310,11 +301,11 @@ def build_stint_availability_matrix(drivers, stint_windows, grid_anchor=None):
     """
     For each driver and each stint window, determine availability status.
 
-    grid_anchor must be the session start datetime (event.start_datetime_utc),
-    NOT the race start. Availability slots are always anchored to the session
-    start, so snapping must use the same origin. Defaults to
-    stint_windows[0]['start_utc'] for backward compatibility, but callers
-    should always pass event.start_datetime_utc explicitly.
+    grid_anchor must be slot_grid_anchor(event) — derived from the session
+    start, NOT the race start. Availability slots are anchored there, so
+    snapping must use the same origin. Defaults to stint_windows[0]['start_utc']
+    for backward compatibility, but callers should always pass
+    slot_grid_anchor(event) explicitly.
 
     Returns a dict:
     {
@@ -364,44 +355,3 @@ def build_stint_availability_matrix(drivers, stint_windows, grid_anchor=None):
                 result[str(driver.id)][sw['stint_number']] = 'partial'
 
     return result
-
-
-def check_driver_conflict(driver, stint_window, grid_anchor=None):
-    """
-    Returns True if the driver has a conflict for the given stint window.
-
-    A conflict exists if any 30-minute slot in [first_grid_slot, end_utc) is
-    NOT in the driver's availability, where first_grid_slot is the first 30-min
-    grid boundary >= start_utc (using the same ceil-snap as
-    build_stint_availability_matrix).
-
-    grid_anchor defaults to stint_window['start_utc'] (i.e. the window itself
-    is on-grid). Pass the event's race-start datetime when checking stints
-    whose start times may fall off the 30-min grid.
-
-    stint_window is a dict with 'start_utc' and 'end_utc'.
-    """
-    start = stint_window['start_utc']
-    end = stint_window['end_utc']
-    anchor = grid_anchor if grid_anchor is not None else start
-    slot_duration = timedelta(minutes=30)
-
-    available_slots = set(
-        driver.availability.values_list('slot_utc', flat=True)
-    )
-
-    snapped_start = _snap_to_grid(start, anchor, slot_duration)
-    # If the stint starts before the first grid slot, also check the slot
-    # covering the pre-grid portion (snapped_start - 30min).
-    if start < snapped_start:
-        if (snapped_start - slot_duration) not in available_slots:
-            return True
-
-    current = snapped_start
-    while current < end:
-        if current not in available_slots:
-            return True
-        current += slot_duration
-
-    return False
-

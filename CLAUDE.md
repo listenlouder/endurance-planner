@@ -26,15 +26,22 @@ perpetually online, Discord-native.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | Python 3.13 | |
-| Framework | Django 5.x | `AUTH_USER_MODEL = 'events.User'` |
-| Database | MySQL (Railway) / MariaDB (local) | PyMySQL driver on Windows |
+| Framework | Django 6.0.x | `AUTH_USER_MODEL = 'events.User'` |
+| Database | MySQL (Railway) / MariaDB (local) | mysqlclient, PyMySQL fallback |
 | Interactivity | HTMX 2.x | Server-driven partial updates |
 | Reactivity | Alpine.js 3.x | Client-side state, no build step |
 | CSS | Tailwind CSS v4 | CLI binary, no Node required |
-| Auth | django-allauth 0.65+ | Discord OAuth only |
+| Auth | django-allauth 65.x | Discord OAuth only |
 | Static files | Whitenoise | Served from gunicorn directly |
 | Deployment | Railway (Railpack) | MySQL add-on, auto-deploy on push |
 | Domain | wearechecking.gg | Namecheap, CNAME to Railway |
+
+**Dependencies are exact-pinned in `backend/requirements.txt`.** Railway
+rebuilds on every push, so a floating version lets a deploy change behaviour
+with no code change. Bump a pin deliberately, test, then push. Note that
+`django-allauth` 65.x is not "0.65" — the project moved to calendar-style
+major versions, and the old `>=0.61.0` floor silently allowed 64 majors of
+drift.
 
 ---
 
@@ -45,7 +52,9 @@ endurance-planner/
 ├── backend/                    # Django project root
 │   ├── config/
 │   │   ├── settings.py         # All configuration
+│   │   ├── middleware.py       # CanonicalHostMiddleware
 │   │   ├── urls.py             # Root URL config
+│   │   ├── test_settings.py    # SQLite in-memory overrides for tests
 │   │   └── wsgi.py
 │   ├── events/                 # Main app — all models and views
 │   │   ├── models.py           # User, Event, Driver, Availability,
@@ -53,19 +62,21 @@ endurance-planner/
 │   │   ├── views.py            # All views
 │   │   ├── urls.py             # All URL patterns
 │   │   ├── forms.py            # EventCreateForm
-│   │   ├── utils.py            # Stint calculations
+│   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── context_processors.py  # discord_user in all templates
+│   │   ├── tests.py            # Full suite (686 tests, 87 classes)
+│   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
-│   │   │   └── tz_filters.py   # to_tz, time_in_tz, to_utc_z,
-│   │   │                       #   seconds_to_mmss, seconds_to_hours_display,
-│   │   │                       #   dict_get
+│   │   │   └── tz_filters.py   # to_utc_z, dict_get,
+│   │   │                       #   seconds_to_hours_display, seconds_to_mmss
+│   │   ├── migrations/         # 0001-0009
 │   │   └── management/
 │   │       └── commands/
 │   │           └── setup_discord_oauth.py
 │   ├── templates/
-│   │   ├── base.html           # Fixed header, footer, bg-grid,
-│   │   │                       #   feedback widget, theme toggle
+│   │   ├── base.html           # Fixed header, footer, bg-grid, login modal,
+│   │   │                       #   toast, message banners, feedback widget,
+│   │   │                       #   theme toggle, htmx 422 swap opt-in
 │   │   ├── home.html
 │   │   ├── event_create.html
 │   │   ├── signup.html
@@ -78,23 +89,29 @@ endurance-planner/
 │   │   ├── admin_error.html
 │   │   ├── 404.html
 │   │   ├── 500.html
-│   │   └── partials/           # HTMX swap targets
+│   │   ├── socialaccount/      # allauth template overrides
+│   │   │   ├── login.html
+│   │   │   └── authentication_error.html
+│   │   └── partials/           # HTMX swap targets and shared fragments
 │   │       ├── signup_form.html
+│   │       ├── signup_edit_form.html
 │   │       ├── driver_list.html
-│   │       ├── driver_row.html
 │   │       ├── driver_name_display.html
 │   │       ├── driver_name_edit_form.html
 │   │       ├── admin_add_driver.html
-│   │       ├── availability_grid.html
+│   │       ├── event_create_form.html
+│   │       ├── event_create_success.html
 │   │       ├── search_results.html
-│   │       ├── admin_details_errors.html
-│   │       └── admin_calc_errors.html
+│   │       ├── form_errors.html          # shared 422 validation errors
+│   │       ├── availability_warning.html # schedule move stranded availability
+│   │       └── discord_icon.html
 │   ├── static/
 │   │   └── css/
 │   │       ├── tailwind.css    # Source — @source directives,
 │   │       │                   #   all tokens and component classes
 │   │       └── output.css      # Compiled — committed to git
 │   ├── railpack.json           # Railpack build config
+│   ├── requirements.txt        # Exact-pinned
 │   ├── .env                    # Local only — never committed
 │   ├── .env.example
 │   └── manage.py
@@ -116,6 +133,9 @@ endurance-planner/
 └── CLAUDE.md                   # This file
 ```
 
+There is no `events/admin.py` — `django.contrib.admin` is not installed and
+`/admin/` 404s by design (the path is used for this app's own admin pages).
+
 ---
 
 ## Data models
@@ -131,29 +151,40 @@ for uniqueness. `AUTH_USER_MODEL = 'events.User'` in settings.
 
 ### Event
 ```python
-id                UUIDField     # Primary key, auto-generated
-admin_key         CharField(20) # Random string, used in admin URL
-name              CharField
-team_name         CharField     # Optional
-game              CharField     # Optional — iRacing, LMU, ACC etc.
-date              DateField
-start_time_utc    TimeField
-length_seconds    IntegerField
-car               CharField     # Optional
-track             CharField     # Optional
-setup             TextField     # Optional
-fuel_capacity     FloatField    # Optional — for stint calc
-fuel_per_lap      FloatField    # Optional
-target_laps       IntegerField  # Optional
-avg_lap_seconds   FloatField    # Optional
-in_lap_seconds    FloatField    # Optional
-out_lap_seconds   FloatField    # Optional
-recruiting        BooleanField  # Show on home page
-created_by        FK(User)      # Nullable — Discord user who created
+id                    UUIDField     # Primary key, auto-generated
+admin_key             CharField(20) # Random string, used in admin URL
+name                  CharField
+team_name             CharField     # Optional
+game                  CharField     # Optional — iRacing, LMU, ACC etc.
+date                  DateField
+start_time_utc        TimeField     # Session start (warmup/qualifying)
+race_start_time_utc   TimeField     # Optional — green flag, if later
+length_seconds        PositiveIntegerField
+car                   CharField     # Optional
+track                 CharField     # Optional
+setup                 TextField     # Optional
+fuel_capacity         FloatField    # Optional — for stint calc
+fuel_per_lap          FloatField    # Optional
+tire_change_fuel_min  FloatField    # Optional
+target_laps           PositiveIntegerField  # Optional
+avg_lap_seconds       FloatField    # Optional
+in_lap_seconds        FloatField    # Optional
+out_lap_seconds       FloatField    # Optional
+recruiting            BooleanField  # Show on home page
+created_at            DateTimeField # auto_now_add
+created_by            FK(User)      # Nullable — Discord user who created
 ```
 
+**Session start vs race start.** `start_time_utc` is when the session opens;
+`race_start_time_utc` is the green flag when it differs. Stint windows anchor
+to the *race* start (`effective_start_datetime_utc`), but availability slots
+always anchor to the *session* start so warmup and qualifying are selectable.
+Changing the race start therefore re-evaluates existing availability rather
+than invalidating it.
+
 Key properties: `start_datetime_utc`, `end_datetime_utc`,
-`has_required_stint_fields`
+`effective_start_time_utc`, `effective_start_datetime_utc`,
+`effective_end_datetime_utc`, `has_required_stint_fields`
 
 ### Driver
 ```python
@@ -174,50 +205,60 @@ Unique together: `(driver, slot_utc)`
 
 ### StintAssignment
 ```python
-event         FK(Event)
-stint_number  IntegerField  # 1-indexed
-driver        FK(Driver)    # Nullable — unassigned stints allowed
+event            FK(Event)
+stint_number     PositiveIntegerField  # 1-indexed
+driver           FK(Driver)    # Nullable — unassigned stints allowed
+condition        CharField     # 'dry' | 'mixed' | 'wet', default 'dry'
+actual_start_utc DateTimeField # Nullable — manual start-time override.
+                               #   When set, this and all later stints
+                               #   cascade from it.
 ```
 Unique together: `(event, stint_number)`
 
 ### Feedback
 ```python
 text          TextField
-page_url      CharField
-user_agent    CharField
-ip_address    GenericIPAddressField  # Nullable
+page_url      CharField(500)
+user_agent    CharField(500)
 submitted_at  DateTimeField
 ```
+No IP address is stored.
 
 ---
 
 ## URL structure
 
 ```
-/                                           home
-/create/                                    event creation
-/<event_id>/view/                           public view page
-/<event_id>/signup/                         driver signup
-/<event_id>/signup/<driver_id>/edit/        edit availability (URL key)
-/<event_id>/signup/<driver_id>/delete/      remove driver
-/<event_id>/signup/<driver_id>/success/     post-signup success
-/<event_id>/my-availability/               edit availability (Discord)
-/<event_id>/admin/<admin_key>/             admin page (key auth)
-/<event_id>/admin/                          admin page (Discord auth)
-/<event_id>/admin/save-details/            save event detail fields
-/<event_id>/admin/save-calc/               save stint calc fields
-/<event_id>/admin/save-assignments/        save stint assignments
-/<event_id>/admin/add-driver/              add driver manually
-/<event_id>/admin/remove-driver/<id>/      remove driver
-/<event_id>/admin/edit-driver/<id>/        edit driver name
-/<event_id>/admin/create-stints/           redirects to admin page
-/search/                                    event search (HTMX)
-/lookup/                                    removed — was UUID lookup
-/feedback/submit/                           feedback form POST
-/feedback/view/                            password-protected viewer
-/accounts/                                  allauth URLs (Discord OAuth)
-/set-timezone/                              set admin_timezone cookie
+/                                            home
+/create/                                     event creation
+/search/                                     event search (HTMX)
+/set-timezone/                               set admin_timezone cookie
+/<event_id>/view/                            public view page
+/<event_id>/signup/                          driver signup
+/<event_id>/signup/<driver_id>/edit/         edit availability (URL key)
+/<event_id>/signup/<driver_id>/success/      post-signup success
+/<event_id>/signup/<driver_id>/delete/       remove driver
+/<event_id>/my-availability/                 edit availability (Discord)
+/<event_id>/admin/                           admin page (Discord or session)
+/<event_id>/admin/<admin_key>/               admin entry point (key auth)
+/<event_id>/admin/save-details/              save event detail fields
+/<event_id>/admin/save-calc/                 save stint calc fields
+/<event_id>/admin/save-assignments/          save stint assignments
+/<event_id>/admin/add-driver/                add driver manually
+/<event_id>/admin/remove-driver/<id>/        remove driver
+/<event_id>/admin/edit-driver/<id>/          edit driver name
+/<event_id>/admin/delete-event/              delete event (typed confirmation)
+/<event_id>/admin/create-stints/             legacy — redirects to admin page
+/<event_id>/stints/<n>/set-start/            live stint start override
+/<event_id>/stints/<n>/reset-start/          clear stint start override
+/feedback/submit/                            feedback form POST
+/feedback/view/                              password-protected viewer
+/accounts/                                   allauth URLs (Discord OAuth)
 ```
+
+Admin sub-routes are declared **before** the `<str:admin_key>` entry point in
+`events/urls.py`, or Django matches literal segments like `save-details` as
+an admin key.
 
 ---
 
@@ -230,18 +271,60 @@ Three parallel auth mechanisms coexist:
 - Sets Django session, populates `User` model
 - Admin access: `event.created_by == request.user`
 - Driver access: `driver.user == request.user`
-- 30-day rolling session (`SESSION_COOKIE_AGE = 2592000`)
+- 30-day rolling session — `SESSION_COOKIE_AGE = 2592000` plus
+  `SESSION_SAVE_EVERY_REQUEST = True`, so the window counts from last
+  activity. Without the latter the session expires 30 days after *login*
+  no matter how active the user is.
 
 **2. Admin key URL (legacy / fallback)**
 - Admin key embedded in URL: `/<event_id>/admin/<admin_key>/`
 - Validated with `hmac.compare_digest()` for timing safety
-- Sets session key `admin_{event_id} = True` on valid access
+- Sets session key `admin_{event_id} = True` on valid access, then 302s to
+  the key-less `/admin/` URL so the key appears in logs only once
 - Sub-routes use `require_admin_session()` helper
 
 **3. Edit URL (drivers without Discord)**
 - Driver edit URL contains driver UUID
 - No additional auth — URL possession = access
 - Works for manually-added drivers with no Discord account
+
+### Session gotchas
+
+**`cycle_key()` only on transition.** `_grant_admin_session()` rotates the
+session ID when granting admin, but returns early if the flag is already set.
+`cycle_key()` deletes the old session row, so calling it on every admin
+request logs out any other tab or in-flight HTMX request — which presents to
+the user as being randomly signed out.
+
+**One hostname only.** Session and CSRF cookies are host-only
+(`SESSION_COOKIE_DOMAIN` is deliberately unset), so a site reachable at both
+the apex and `www` hands out cookies that work on just one of them. Set
+`CANONICAL_HOST` and `config.middleware.CanonicalHostMiddleware` 301s
+everything onto it. The middleware disables itself if `CANONICAL_HOST` is
+unset, or is not in `ALLOWED_HOSTS` (which could only cause a redirect loop).
+
+**Where the OAuth callback host comes from.** allauth builds it from the
+*request*, not from the `django.contrib.sites` record — `build_absolute_uri`
+only falls back to `Site.domain` when there is no request. `SITE_DOMAIN` sets
+the Site row for absolute URLs built without a request; it does not steer
+login. The SocialApp is resolved by `SITE_ID`, so a mismatched `Site.domain`
+does not break OAuth.
+
+**Discord `prompt=none`.** `SOCIALACCOUNT_PROVIDERS` sends `prompt=none` so
+returning users skip the consent screen. When silent auth is impossible
+(first authorization, revoked access, expired Discord session) Discord
+returns an *error* rather than a consent screen. That lands on
+`templates/socialaccount/authentication_error.html`, which offers a retry
+that overrides the setting with `prompt=consent` via allauth's
+`?auth_params=` query parameter.
+
+**`requests` is an undeclared runtime dependency.** allauth imports it in its
+socialaccount OAuth2 client but only declares it under an optional
+`socialaccount` extra that is not installed. Discord login depends on the
+explicit `requests` pin in `requirements.txt`. If a future allauth version
+starts touching `allauth/socialaccount/internal/jwtkit.py` from the shared
+OAuth2 path, switch to `django-allauth[socialaccount]` (it also pulls
+`oauthlib` and `pyjwt[crypto]`).
 
 ---
 
@@ -253,18 +336,47 @@ removal, and search. The `django-htmx` middleware provides
 `request.htmx` boolean. Views return full pages on direct
 load and HTML fragments on HTMX requests.
 
-Toast notifications use `HX-Trigger: showToast` response
-header caught by an Alpine `@show-toast.window` listener.
+**Validation errors return 422.** HTMX does not swap non-2xx responses by
+default, so a view returning an error partial with 422 would render nothing
+and the form would appear to do nothing at all. `base.html` registers an
+`htmx:beforeSwap` handler that opts 422 in. All admin form endpoints use
+`partials/form_errors.html` with status 422.
+
+That handler deliberately does **not** clear `detail.isError`. HTMX derives
+`afterRequest`'s `successful` flag from it, and forms key their "reset and
+close" logic off that — clearing it would make a form wipe the user's input
+and dismiss itself while displaying an error.
+
+When a form's success target differs from where its errors belong (the
+add-driver form swaps the driver list on success), the error response sets
+`HX-Retarget` / `HX-Reswap` rather than adding bespoke client-side handlers.
+
+**Event names must be kebab-case.** HTML lowercases attribute names, so an
+Alpine `@someEvent.window` listener can never match a camelCase
+`HX-Trigger`. Use `show-toast`, `feedback-success`.
+
+### Feedback to the user
+- **Toast** — one shared `.toast` in `base.html`, fired server-side with
+  `HX-Trigger: {"show-toast": {"message": "...", "error": true}}` or
+  client-side via `$dispatch('show-toast', {...})`. Transient.
+- **Message banners** — `django.contrib.messages`, rendered in `base.html`.
+  Used for things that must not vanish unread, like event deletion.
+- **Inline partials** — `form_errors.html`, `availability_warning.html`.
 
 ### Alpine.js reactivity
 Alpine handles:
 - Dark/light theme toggling (`data-theme` attribute on `<html>`)
-- Stint assignment table state (`stintAssignment()` component)
-- Stint calculation live preview (`stintCalc()` component)
-- Timezone picker in signup forms
+- Stint assignment table state (`stintPlanner()`, `driverDropdown()`)
+- Stint calculation live preview (`stintCalc()`)
+- Schedule-change availability warning (`scheduleWatch()`)
+- Live stint table and time editing on the view page (`stintTable()`)
+- Timezone picker in signup forms (`timezonePicker()`)
 - Login modal (`$dispatch('open-login')`)
 - Feedback widget
 - Copy-to-clipboard buttons
+
+The login modal lives in `base.html`, not `home.html` — the header login
+button is on every page, so its listener has to be too.
 
 ### Timezone handling
 All times stored in UTC. Client-side conversion via
@@ -272,6 +384,24 @@ All times stored in UTC. Client-side conversion via
 using `normalize_iso()` helper for consistent JS comparison.
 Template filter `to_utc_z` formats datetimes for Alpine
 consumption.
+
+### The availability slot grid
+`Availability` rows are absolute UTC datetimes on a 30-minute grid whose
+origin is `slot_grid_anchor(event)` — the wall-clock `:00`/`:30` boundary at
+or before the session start.
+
+Flooring that anchor matters. If the grid took its phase from the exact start
+time, editing an event from 12:00 to 12:15 would move every boundary to
+`:15`/`:45` and orphan every stored slot — a fifteen-minute correction
+destroying more availability than moving the event by an hour. Anything
+comparing a stint time against stored slots must use the same floored anchor;
+`_driver_has_conflict()` in `views.py` floors independently and the two must
+agree.
+
+Moving an event's **date** still strands availability, by design — drivers
+need to re-enter it for a new day. `admin_save_details` detects that via
+`_drivers_with_stale_availability()` and reports exactly who is affected
+instead of failing silently.
 
 ### Tailwind CSS v4
 Config uses `@source` directives in CSS, not `tailwind.config.js`.
@@ -346,7 +476,7 @@ Read these before making visual changes:
 
 ### Required in all environments
 ```
-DJANGO_SECRET_KEY           Strong random key
+DJANGO_SECRET_KEY           Strong random key (50+ chars)
 DJANGO_DEBUG                True (dev) / False (prod)
 ALLOWED_HOSTS               Comma-separated hostnames
 DB_NAME                     Database name
@@ -359,6 +489,11 @@ DB_PORT                     Database port (default 3306)
 ### Required in production
 ```
 CSRF_TRUSTED_ORIGINS        https://wearechecking.gg,https://www.wearechecking.gg,...
+CANONICAL_HOST              wearechecking.gg — the single host users land on.
+                              Must also appear in ALLOWED_HOSTS or the
+                              redirect middleware disables itself. Without
+                              this, logging in on one host and browsing on
+                              another silently drops the session.
 DISCORD_CLIENT_ID           From discord.com/developers
 DISCORD_CLIENT_SECRET       From discord.com/developers
 FEEDBACK_PASSWORD           Password for /feedback/view/
@@ -366,9 +501,18 @@ FEEDBACK_PASSWORD           Password for /feedback/view/
 
 ### Optional
 ```
+SITE_DOMAIN                 Domain written to the django.contrib.sites row.
+                              Defaults to CANONICAL_HOST, then to the first
+                              ALLOWED_HOSTS entry. Set it explicitly so
+                              reordering ALLOWED_HOSTS cannot change it.
+                              Does not affect the OAuth callback host.
 EMAIL_BACKEND               Django email backend
 EMAIL_HOST / PORT / etc.    SMTP config if email enabled
 ```
+
+Whenever `CANONICAL_HOST` changes, add
+`https://<host>/accounts/discord/login/callback/` as a redirect URL in the
+Discord developer portal — the callback follows the request host.
 
 ---
 
@@ -472,8 +616,10 @@ git push   # Railway auto-deploys
 ## Known platform quirks
 
 **Windows development:**
-- Use PyMySQL instead of mysqlclient (C build deps unavailable)
-- `config/__init__.py` contains version spoof:
+- `mysqlclient` now ships Windows wheels and installs cleanly, so it is the
+  driver actually used. `PyMySQL` is kept only as a fallback for environments
+  where the wheel is unavailable — in practice the fallback never fires.
+- `config/__init__.py` contains the driver selection and version spoof:
   ```python
   try:
       import MySQLdb
@@ -501,7 +647,7 @@ git push   # Railway auto-deploys
 - `setup_discord_oauth` command must run after every migration
   on fresh databases
 
-**allauth v0.65+:**
+**allauth 65.x:**
 - Use `ACCOUNT_LOGIN_METHODS`, `ACCOUNT_SIGNUP_FIELDS`,
   `ACCOUNT_EMAIL_VERIFICATION` — the v0.x-era settings
   (`ACCOUNT_EMAIL_REQUIRED`, `ACCOUNT_AUTHENTICATION_METHOD`)
@@ -516,16 +662,27 @@ git push   # Railway auto-deploys
 All calculation logic lives in `events/utils.py`:
 
 ```python
-stint_length_seconds(event)     # Single stint duration in seconds
-total_stints(event)             # ceil(race_length / stint_length)
-stint_start_time(event, n)      # UTC datetime for stint n (1-indexed)
-stint_end_time(event, n)        # UTC datetime for stint n end
-get_stint_windows(event)        # List of {stint_number, start_utc, end_utc}
-get_availability_slots(event)   # All 30-min UTC slots in event window
-build_stint_availability_matrix(drivers, windows)
-                                # {driver_id: {stint_num: 'full'|'partial'|'none'}}
-normalize_iso(dt)               # Format UTC datetime as ISO with Z suffix
+stint_length_seconds(event)      # Single stint duration in seconds
+last_stint_length_seconds(event) # Final stint — usually shorter
+total_stints(event)              # ceil(race_length / stint_length)
+total_race_laps(event)           # Planned lap count
+laps_remaining_after_stint(event, n)
+format_stint_duration(seconds)   # 3720 -> "62m"
+seconds_to_mmss(seconds)         # 105 -> "1:45"
+validate_stint_sanity(event)     # List of warning strings, never raises
+get_stint_windows(event, assignment_overrides=None)
+                                 # All stints with start/end/duration/is_last/
+                                 #   is_overridden. The single source of truth
+                                 #   for stint timing — it is the only helper
+                                 #   that honours actual_start_utc overrides.
+slot_grid_anchor(event)          # Wall-clock :00/:30 grid origin
+get_availability_slots(event)    # All 30-min UTC slots in the event window
+build_stint_availability_matrix(drivers, windows, grid_anchor)
+                                 # {driver_id: {stint_num: 'full'|'partial'|
+                                 #   'none'|'empty'}}
 ```
+
+`normalize_iso(dt)` lives in `events/views.py`.
 
 **Formula:**
 ```
@@ -535,6 +692,15 @@ total_stints = ceil(race_length_seconds / stint_length)
 
 Pit window logic was intentionally removed — stint length
 is defined by the fuel load, so every stint end is a pit stop.
+
+Stint 1 starts at `effective_start_datetime_utc` (race start when set,
+otherwise session start). Setting `actual_start_utc` on a `StintAssignment`
+overrides that stint's start and cascades to all later stints until the next
+override.
+
+There is deliberately no standalone `stint_start_time()` / `stint_end_time()`
+helper. They existed, had no callers, and computed times *without* override
+support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ---
 
@@ -548,6 +714,11 @@ is defined by the fuel load, so every stint end is a pit stop.
   accounts retroactively
 - Event ownership transfer between Discord users
 - Rate limiting on admin views
+- Splitting `events/tests.py` into a `tests/` package
+- Redesigning `404.html`, `500.html` and `admin_error.html` — they still use
+  generic Tailwind utilities (`rounded-lg`, default fonts) and violate the
+  sharp-corners design system
+- Setting `CSRF_COOKIE_SECURE`, `SECURE_HSTS_SECONDS`, `SECURE_SSL_REDIRECT`
 
 **Deliberate omissions (by design):**
 - No email auth — Discord only
@@ -561,16 +732,34 @@ is defined by the fuel load, so every stint end is a pit stop.
 
 ## Testing
 
-No automated test suite exists in v0.1.0. Manual verification
-checklist approach used throughout development. When adding
-tests in future, Django's `TestCase` with SQLite in-memory
-database is the standard path.
+**686 tests across 87 classes** in `backend/events/tests.py`, run against
+SQLite in-memory via `config/test_settings.py`.
 
-**Pre-deploy manual checks:**
+```powershell
+cd backend
+..\venv\Scripts\python.exe manage.py test --settings=config.test_settings
+```
+
+The run is clean — no tracebacks in the output. If any appear,
+something has regressed.
+
+Conventions used throughout:
+- Arrange / act / assert with blank lines between the three
+- One behaviour per test; the method name states the expected behaviour
+- `make_event()` / `save_event()` / `utc()` factories at the top of the file
+- Tests that can only be expressed against markup read the template source
+  through a `_read_template()` helper rather than an inline path
+
+`tests.py` is a single ~7k-line file. Splitting it into a `tests/` package is
+known technical debt, deferred deliberately.
+
+**Pre-deploy checks:**
 ```powershell
 python manage.py check
-python manage.py check --deploy  # Will warn about HTTPS settings —
-                                  # expected, handled by Railway proxy
+python manage.py check --deploy   # Warns about HSTS / SSL redirect /
+                                   # CSRF_COOKIE_SECURE — known, not yet
+                                   # addressed
+python manage.py makemigrations --check --dry-run
 ```
 
 ---
@@ -617,3 +806,21 @@ endpoints. This is intentional for Phase 1 — the tool is
 used by good-faith team members. No event ownership or
 admin session is required. Noted for future tightening if
 abuse occurs.
+
+**Session fixation on admin promotion**
+`_grant_admin_session()` rotates the session ID when granting admin, but only
+on the transition — see the session gotchas above for why rotating on every
+request logs users out.
+
+**Login CSRF (accepted)**
+`SOCIALACCOUNT_LOGIN_ON_GET = True` means a GET to
+`/accounts/discord/login/` starts the OAuth flow, so a third-party page can
+initiate a login. The consequence is limited to being signed into one's own
+Discord account unexpectedly. Kept because the admin and my-availability
+views redirect to that URL directly, and requiring a POST would add an
+interstitial click to those flows.
+
+**Feedback viewer**
+`/feedback/view/` is protected by a single shared password compared with
+`hmac.compare_digest()`, with a 1-second sleep on failure. There is no rate
+limiting or lockout.

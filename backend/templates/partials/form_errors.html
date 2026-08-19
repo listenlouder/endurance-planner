@@ -1,0 +1,20 @@
+{% comment %}
+Validation errors for an HTMX form submission. Served with status 422; the
+htmx:beforeSwap handler in base.html opts 422 into being swapped.
+Expects: errors — a dict of {field_name: message}.
+{% endcomment %}
+<div style="margin-bottom: 12px;
+            padding: 12px 16px;
+            border: 1px solid var(--danger);
+            background: var(--danger-dim);
+            border-left: 3px solid var(--danger);"
+     role="alert">
+  {% for field, msg in errors.items %}
+  <p style="font-size: 10px;
+            color: var(--danger);
+            letter-spacing: 0.08em;
+            margin-bottom: 4px;">
+    {{ msg }}
+  </p>
+  {% endfor %}
+</div>

@@ -39,6 +39,38 @@
     '; path=/; SameSite=Lax';
 </script>
 
+<!-- Warns before a schedule edit strands driver availability -->
+<script>
+  function scheduleWatch(initial) {
+    return {
+      date: initial.date,
+      startTime: initial.startTime,
+      savedDate: initial.date,
+      savedStartTime: initial.startTime,
+      driversWithAvailability: initial.driversWithAvailability || 0,
+
+      get dateChanged() { return this.date !== this.savedDate; },
+      get timeChanged() { return this.startTime !== this.savedStartTime; },
+
+      get changedFields() {
+        if (this.dateChanged && this.timeChanged) return 'date and start time';
+        return this.dateChanged ? 'date' : 'start time';
+      },
+
+      // Deliberately does not try to predict how much survives. Slots sit on
+      // wall-clock half hours, so a sub-30-minute edit costs nothing, while a
+      // date move on a race longer than a day can still overlap — any rule
+      // simple enough to state here would be wrong in one direction or the
+      // other. This is a heads-up; admin_save_details reports the exact
+      // casualties after saving.
+      get warnsAboutAvailability() {
+        if (!this.driversWithAvailability) return false;
+        return this.dateChanged || this.timeChanged;
+      },
+    };
+  }
+</script>
+
 <!-- Alpine data for stint calculation live preview -->
 <script>
   function stintCalc(initial) {
@@ -179,16 +211,7 @@
 
 {% block content %}
 
-<!-- Toast notification -->
-<div class="toast"
-     id="adminToast"
-     x-data
-     @show-toast.window="
-       $el.textContent = ($event.detail && $event.detail.message) ? $event.detail.message : 'Changes saved.';
-       $el.classList.add('visible');
-       setTimeout(() => $el.classList.remove('visible'), 2500)
-     ">
-</div>
+<!-- Toast lives in base.html — shared by every page. -->
 
 <!-- ============================================================
      PAGE HEADER
@@ -237,7 +260,12 @@
 
   <form hx-post="{% url 'admin_save_details' event.id %}"
         hx-target="#admin-details-errors"
-        hx-swap="innerHTML">
+        hx-swap="innerHTML"
+        x-data="scheduleWatch({
+          date: '{{ event.date|date:'Y-m-d' }}',
+          startTime: '{{ event.start_time_utc|time:'H:i' }}',
+          driversWithAvailability: {{ drivers_with_availability_count }}
+        })">
     {% csrf_token %}
 
     <div class="details-grid">
@@ -274,6 +302,7 @@
         <input class="detail-input"
                type="date"
                name="date"
+               x-model="date"
                value="{{ event.date|date:'Y-m-d' }}">
       </div>
 
@@ -283,6 +312,7 @@
         <input class="detail-input"
                type="time"
                name="start_time_utc"
+               x-model="startTime"
                value="{{ event.start_time_utc|time:'H:i' }}">
       </div>
 
@@ -349,6 +379,36 @@
         </label>
       </div>
 
+    </div>
+
+    <!-- Pre-save warning: stored availability is keyed to absolute UTC slots,
+         so moving the date or start time can strand it. Say so before saving,
+         not after. -->
+    <div x-show="warnsAboutAvailability"
+         x-cloak
+         style="margin-top: 12px;
+                padding: 12px 16px;
+                border: 1px solid var(--primary);
+                background: var(--primary-dim);
+                border-left: 3px solid var(--primary);">
+      <p style="font-size: 10px;
+                color: var(--primary);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                font-weight: 500;
+                margin-bottom: 6px;">
+        Schedule change affects availability
+      </p>
+      <p style="font-size: 11px;
+                color: var(--text-mid);
+                letter-spacing: 0.04em;
+                line-height: 1.6;">
+        <span x-text="driversWithAvailability"></span>
+        driver<span x-text="driversWithAvailability === 1 ? '' : 's'"></span>
+        entered availability against the current schedule. Moving the
+        <span x-text="changedFields"></span> keeps only what still falls inside
+        the new window — anything outside it is lost and will need re-entering.
+      </p>
     </div>
 
     <div class="details-actions">
