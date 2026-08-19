@@ -7913,3 +7913,111 @@ class ConditionLabelsMatchAcrossPagesTests(SimpleTestCase):
             {c[0] for c in StintAssignment.CONDITION_CHOICES},
             {'dry', 'mixed', 'wet'},
         )
+
+
+# ---------------------------------------------------------------------------
+# Dropdown anchoring
+#
+# position:fixed resolves against the nearest ancestor carrying a transform,
+# not the viewport. The admin sections hold one for the duration of their
+# fade-up entry animation, so panels positioned from getBoundingClientRect()
+# were placed relative to the section instead of the screen — landing in a
+# different spot depending on where the page happened to be scrolled.
+# ---------------------------------------------------------------------------
+
+class TimezonePickerAnchoringTests(SimpleTestCase):
+    """The picker anchors in CSS; nothing to go stale, nothing to rebase."""
+
+    def _markup(self):
+        return _read_template('partials', 'admin_add_driver.html')
+
+    def _component(self):
+        """Just the Alpine component body, so the prose in the template's
+        explanatory comment cannot satisfy or trip these assertions."""
+        markup = self._markup()
+        start = markup.index('x-data="{')
+        return markup[start:markup.index('}">', start)]
+
+    def _css(self):
+        return django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+
+    def test_panel_is_not_positioned_from_script(self):
+        component = self._component()
+
+        self.assertNotIn('dropStyle', component)
+        self.assertNotIn('getBoundingClientRect', component)
+
+    def test_open_does_not_defer_to_an_animation_frame(self):
+        # The old shape wrapped the measurement in requestAnimationFrame.
+        self.assertNotIn('requestAnimationFrame', self._component())
+
+    def test_panel_uses_the_anchored_class(self):
+        self.assertIn('class="tz-panel"', self._markup())
+
+    def test_wrapper_establishes_the_positioning_context(self):
+        css = self._css()
+        rule = css[css.index('.tz-picker {'):css.index('}', css.index('.tz-picker {'))]
+
+        self.assertIn('position: relative', rule)
+
+    def test_panel_is_absolutely_positioned_below_the_trigger(self):
+        css = self._css()
+        rule = css[css.index('.tz-panel {'):css.index('}', css.index('.tz-panel {'))]
+
+        self.assertIn('position: absolute', rule)
+        self.assertIn('top: calc(100% + 2px)', rule)
+
+    def test_panel_no_longer_closes_itself_on_scroll(self):
+        # It moves with the page now, so closing on scroll is pointless.
+        self.assertNotIn('@scroll.window', self._markup())
+
+
+class FixedContainingBlockRebaseTests(SimpleTestCase):
+    """
+    The stint driver dropdown must stay position:fixed — its .table-wrapper
+    ancestor clips overflow — so instead of dropping fixed it rebases its
+    offsets onto whatever the real containing block turns out to be.
+    """
+
+    def _markup(self):
+        return _read_template('admin.html')
+
+    def test_helper_exists(self):
+        self.assertIn('function fixedContainingBlockRect', self._markup())
+
+    def test_helper_looks_for_every_containing_block_trigger(self):
+        markup = self._markup()
+        fn = markup[markup.index('function fixedContainingBlockRect'):]
+        fn = fn[:fn.index('function formatTimeInTz')]
+
+        for prop in ('transform', 'filter', 'perspective', 'willChange'):
+            with self.subTest(prop=prop):
+                self.assertIn(prop, fn)
+
+    def test_toggle_rebases_its_offsets(self):
+        markup = self._markup()
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        self.assertIn('fixedContainingBlockRect', toggle)
+        self.assertIn('originLeft', toggle)
+        self.assertIn('originTop', toggle)
+
+    def test_toggle_no_longer_assumes_the_viewport_is_the_origin(self):
+        markup = self._markup()
+        toggle = markup[markup.index('toggle() {'):markup.index('select(driverId)')]
+
+        # left used to be written straight from the viewport rect
+        self.assertNotIn("left: Math.round(rect.left) + 'px'", toggle)
+
+    def test_fade_up_animation_is_the_documented_cause(self):
+        # If the entry animation ever stops using a transform this rebase
+        # becomes dead weight — leave a trail back to why it exists.
+        css = django_conf.BASE_DIR.joinpath(
+            'static', 'css', 'tailwind.css'
+        ).read_text(encoding='utf-8')
+        keyframes = css[css.index('@keyframes fadeUp'):]
+        keyframes = keyframes[:keyframes.index('}\n}') + 3]
+
+        self.assertIn('transform', keyframes)

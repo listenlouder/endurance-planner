@@ -1357,6 +1357,27 @@
     return false;
   }
 
+  // position:fixed resolves against the nearest ancestor carrying a transform,
+  // filter or perspective — not the viewport. The admin sections hold a
+  // transform for the duration of their fade-up entry animation, so anything
+  // positioned from getBoundingClientRect() has to be rebased onto that
+  // element or it lands wherever the section happens to be. Returns null when
+  // the viewport really is the containing block.
+  function fixedContainingBlockRect(el) {
+    let node = el.parentElement;
+    while (node && node !== document.documentElement) {
+      const cs = getComputedStyle(node);
+      if (cs.transform !== 'none' ||
+          cs.filter !== 'none' ||
+          cs.perspective !== 'none' ||
+          /transform|filter|perspective/.test(cs.willChange || '')) {
+        return node.getBoundingClientRect();
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   function formatTimeInTz(utcString, ianaTimezone) {
     if (!utcString || !ianaTimezone) return null;
     try {
@@ -1414,17 +1435,27 @@
           const margin = 16;
           const maxWidth = Math.min(380, window.innerWidth - margin * 2);
 
+          // Offsets are relative to the fixed containing block, which is not
+          // necessarily the viewport — see fixedContainingBlockRect().
+          const cb = fixedContainingBlockRect(this.$refs.btn);
+          const originLeft = cb ? cb.left : 0;
+          const originTop = cb ? cb.top : 0;
+          const originRight = cb ? cb.right : window.innerWidth;
+          const originBottom = cb ? cb.bottom : window.innerHeight;
+
           // Anchor by whichever edge keeps the panel on screen. Width is
           // content-driven so it cannot be measured before paint; aligning the
           // right edge to the trigger's is correct regardless of final width.
+          // The room checks stay in viewport terms — that is what "on screen"
+          // means — while the resulting offsets are rebased.
           const roomToTheRight = window.innerWidth - rect.left - margin;
           const anchor = roomToTheRight >= maxWidth
-            ? { left: Math.round(rect.left) + 'px', right: 'auto' }
-            : { right: Math.round(window.innerWidth - rect.right) + 'px', left: 'auto' };
+            ? { left: Math.round(rect.left - originLeft) + 'px', right: 'auto' }
+            : { right: Math.round(originRight - rect.right) + 'px', left: 'auto' };
 
           const vertical = goUp
-            ? { bottom: (window.innerHeight - Math.round(rect.top) + 2) + 'px', top: 'auto' }
-            : { top: Math.round(rect.bottom + 2) + 'px', bottom: 'auto' };
+            ? { bottom: Math.round(originBottom - rect.top + 2) + 'px', top: 'auto' }
+            : { top: Math.round(rect.bottom + 2 - originTop) + 'px', bottom: 'auto' };
 
           this.dropStyle = Object.assign({
             position: 'fixed',
