@@ -28,6 +28,11 @@ from datetime import datetime, timezone
 
 request_id_var = contextvars.ContextVar('request_id', default='')
 
+# The logger RequestLogMiddleware writes its per-request line to. Kept
+# separate from config.middleware so Sentry can be told to ignore it
+# without also silencing deliberate logger.error() calls in that module.
+REQUEST_LOG_LOGGER = 'config.middleware.requests'
+
 
 # Attributes present on every LogRecord. Anything outside this set was passed
 # by the caller via `extra=` and is therefore part of the payload we want.
@@ -169,6 +174,15 @@ def redact_admin_key(text):
     return _ADMIN_PATH_RE.sub(_replace_admin_segment, text)
 
 
+# Used for EVENTS only. sentry_sdk serialises an event before calling
+# before_send -- _prepare_event runs serialize() first, commented there as
+# "Postprocess the event here so that annotated types do generally not
+# surface in before_send" -- so every value reaching this function is
+# already a primitive and handling strings is sufficient.
+#
+# Logs get no such treatment and must NOT use this function; see
+# _scrub_attributes. Do not merge the two: that difference is the leak
+# this module exists to prevent.
 def _scrub(value, depth=0):
     if depth > _MAX_SCRUB_DEPTH:
         return value
@@ -199,10 +213,159 @@ def scrub_event(event, hint=None):
     list would miss — stack-frame locals, breadcrumb data, the repr of a
     request object. A whole-event walk cannot be outgrown that way.
 
-    Never raises: an exception here silently drops the event, which would
-    hide the very error it was called to report.
+    Deliberately does NOT catch exceptions. sentry_sdk calls this inside
+    capture_internal_exceptions(), so a hook that raises leaves new_event
+    as None and the event is dropped. Catching here would replace that
+    safe default with an unsafe one: the single case where redaction did
+    not complete would become the case where the payload is sent anyway.
     """
+    return _scrub(event)
+
+
+def scrub_log(log, hint=None):
+    """
+    Sentry `before_send_log` hook.
+
+    Sentry Logs are NOT covered by before_send. They arrive as a separate
+    payload with its own callback, so scrub_event does nothing for them and
+    the two hooks have to be registered independently.
+
+    Both halves of the payload need it. `body` is the formatted message, and
+    the raw message arguments are shipped individually as
+    `sentry.message.parameter.N` attributes without passing through any
+    logging formatter -- which is exactly where django.request puts the URL
+    of a failing request, admin key and all.
+
+    Deliberately does NOT catch exceptions, for the same reason as
+    scrub_event: the SDK drops a log whose hook raises, and losing one log
+    line costs far less than shipping a credential because the scrubber
+    half-finished.
+    """
+    log['body'] = redact_admin_key(log.get('body') or '')
+    attributes = log.get('attributes')
+    if attributes:
+        log['attributes'] = _scrub_attributes(attributes)
+    return log
+
+
+# Dropped from logs specifically. send_default_pii=False governs only what
+# the SDK collects itself; custom attributes bypass it entirely, so the
+# client IP RequestLogMiddleware records would otherwise be sent to Sentry
+# on every forwarded line. Railway already sees the IP as the host --
+# Sentry would be a new recipient, and this project deliberately keeps IPs
+# out of Feedback for the same reason.
+#
+# `user` is deliberately kept: a Discord username is what makes 'someone
+# said signup is broken' actionable, and ActivityLog already stores it.
+_LOG_DROP_KEYS = frozenset({'ip'})
+
+
+def _scrub_attributes(attributes):
+    """
+    Redact a Sentry log's attributes, flattening anything that is not a
+    primitive first.
+
+    The flattening is the security-relevant half. Sentry serialises attribute
+    values with safe_repr *after* before_send_log has run, so a live object
+    reaching this function unchanged gets stringified downstream where nothing
+    can redact it -- which is precisely how django.request leaks a URL, by
+    passing the request object itself as an attribute. Sentry only stores
+    primitives anyway, so coercing here loses nothing.
+
+    Two known limitations, neither reachable from this codebase today: a
+    list of primitives would be stored by Sentry as a real array but is
+    flattened to a repr here, and a sensitive key nested inside a
+    flattened value survives as text instead of being redacted by name.
+    Nothing emits list or nested attributes; revisit if anything starts to.
+    """
+    cleaned = {}
+    for key, value in attributes.items():
+        lowered = str(key).lower()
+        if lowered in _DROP_KEYS or lowered in _LOG_DROP_KEYS:
+            continue
+        if lowered in _SENSITIVE_KEYS:
+            cleaned[key] = REDACTED
+        elif isinstance(value, str):
+            cleaned[key] = redact_admin_key(value)
+        elif isinstance(value, (bool, int, float)):
+            cleaned[key] = value
+        else:
+            cleaned[key] = redact_admin_key(_safe_str(value))
+    return cleaned
+
+
+def _safe_str(value):
+    """str() that cannot raise -- a __str__ that throws must not lose the log."""
     try:
-        return _scrub(event)
+        return str(value)
     except Exception:  # pragma: no cover - defensive
-        return event
+        return '<unrepresentable>'
+
+
+def build_sentry_options(dsn, environment, release, traces_sample_rate,
+                         logs_level):
+    """
+    The keyword arguments for sentry_sdk.init().
+
+    Built here rather than inline in settings.py so the wiring is testable --
+    the scrubbers are a security control, and a security control nobody can
+    assert on is one that quietly stops being applied.
+    """
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.logging import (
+        LoggingIntegration,
+        ignore_logger,
+    )
+
+    level = _resolve_log_level(logs_level)
+
+    # Stops the per-request line raising an Issue, without changing its
+    # severity anywhere else. DjangoIntegration already reports the
+    # exception behind a 5xx, so that line was only ever a duplicate of it.
+    #
+    # ignore_logger() covers events and breadcrumbs only -- the SDK keeps
+    # _IGNORED_LOGGERS and _IGNORED_LOGGERS_SENTRY_LOGS as separate sets --
+    # so the line still reaches Sentry Logs, still at ERROR for a 5xx.
+    ignore_logger(REQUEST_LOG_LOGGER)
+
+    logging_integration = LoggingIntegration(
+        # Forward records to Sentry Logs at this level and above. A level of
+        # None builds no handler at all, so "off" means off rather than
+        # meaning "a handler exists but a second flag suppresses it".
+        capture_sentry_logs=level is not None,
+        sentry_logs_level=level,
+        # Left at the SDK default rather than disabled. Disabling it also
+        # killed every deliberate logger.error() in the codebase -- the
+        # CANONICAL_HOST misconfiguration being the live example -- and
+        # under SENTRY_LOGS_LEVEL=OFF those errors would then have reached
+        # Sentry by no path at all. The duplicate issue is solved above, at
+        # the one logger that actually caused it.
+        event_level=logging.ERROR,
+    )
+
+    return {
+        'dsn': dsn,
+        'integrations': [DjangoIntegration(), logging_integration],
+        'environment': environment,
+        'release': release or None,
+        'send_default_pii': False,
+        'traces_sample_rate': traces_sample_rate,
+        'before_send': scrub_event,
+        'before_send_log': scrub_log,
+    }
+
+
+def _resolve_log_level(name):
+    """Level number for a name, or None to disable log forwarding entirely."""
+    cleaned = (name or '').strip().upper()
+    if cleaned in ('OFF', 'NONE', 'DISABLED'):
+        return None
+    level = logging.getLevelNamesMapping().get(cleaned)
+    # NOTSET is a real level name resolving to 0, which a handler reads as
+    # 'forward everything' -- the whole request stream, and
+    # django.db.backends too if it were ever turned up. It reaches the
+    # loudest possible outcome through a correctly spelled value, so it
+    # falls back exactly as a typo does.
+    if not level:
+        return logging.WARNING
+    return level

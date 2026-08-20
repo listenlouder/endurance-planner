@@ -41,11 +41,14 @@ from django.test import RequestFactory, SimpleTestCase, TestCase, override_setti
 from django.urls import reverse
 
 from config.logging import (
+    REQUEST_LOG_LOGGER,
     JsonFormatter,
     RequestIdFilter,
+    build_sentry_options,
     redact_admin_key,
     request_id_var,
     scrub_event,
+    scrub_log,
 )
 from config import settings as prod_settings
 from config.middleware import client_ip
@@ -8350,14 +8353,18 @@ class ScrubEventTests(SimpleTestCase):
 
         self.assertEqual(event['request']['url'], 'https://x/e1/signup/')
 
-    def test_never_raises_on_a_malformed_event(self):
-        class Exploding:
+    def test_a_scrubber_failure_drops_the_event_rather_than_sending_it(self):
+        # A dict subclass, so _scrub actually recurses into it. A plain object
+        # is returned untouched and never reaches .items() at all.
+        class Exploding(dict):
             def items(self):
                 raise RuntimeError('nope')
 
-        # Returning the event unscrubbed would be wrong, but dropping the
-        # error report entirely would be worse.
-        self.assertIsNotNone(scrub_event({'request': Exploding()}))
+        # sentry_sdk runs before_send inside capture_internal_exceptions(),
+        # so raising drops the event. Returning it unscrubbed would ship a
+        # credential precisely when redaction is known to have failed.
+        with self.assertRaises(RuntimeError):
+            scrub_event({'request': Exploding()})
 
 
 class SentryConfigurationTests(SimpleTestCase):
@@ -8373,6 +8380,245 @@ class SentryConfigurationTests(SimpleTestCase):
 
         self.assertIn('sentry-sdk==', requirements)
 
+
+
+# ---------------------------------------------------------------------------
+# Observability: Sentry Logs
+# ---------------------------------------------------------------------------
+
+class ScrubLogTests(SimpleTestCase):
+    """Tests for config.logging.scrub_log() - the before_send_log hook.
+
+    Sentry Logs are a separate payload with a separate callback, so none of
+    the before_send scrubbing applies to them.
+    """
+
+    KEY = 'rYOzs6o3qob3SvMrM4dH'
+
+    def test_admin_key_is_stripped_from_the_body(self):
+        log = scrub_log({'body': 'Internal Server Error: /e1/admin/%s/' % self.KEY})
+
+        self.assertNotIn(self.KEY, log['body'])
+
+    def test_admin_key_is_stripped_from_a_string_attribute(self):
+        log = scrub_log({
+            'body': '',
+            'attributes': {'path': '/e1/admin/%s/' % self.KEY},
+        })
+
+        self.assertNotIn(self.KEY, log['attributes']['path'])
+
+    def test_admin_key_is_stripped_from_a_message_parameter(self):
+        # Raw log arguments are shipped as their own attributes without
+        # passing through any formatter -- which is where django.request puts
+        # the URL of the failing request.
+        log = scrub_log({
+            'body': '',
+            'attributes': {'sentry.message.parameter.1': '/e1/admin/%s/' % self.KEY},
+        })
+
+        self.assertNotIn(self.KEY, log['attributes']['sentry.message.parameter.1'])
+
+    def test_non_primitive_attribute_is_flattened_and_redacted(self):
+        # The one that actually bit: django.request attaches the live request
+        # object, and Sentry calls safe_repr on it AFTER this hook runs, so a
+        # value passed through untouched gets stringified where nothing can
+        # redact it.
+        class FakeRequest:
+            def __repr__(self):
+                return "<WSGIRequest: GET '/e1/admin/%s/'>" % ScrubLogTests.KEY
+
+            __str__ = __repr__
+
+        log = scrub_log({'body': '', 'attributes': {'request': FakeRequest()}})
+
+        self.assertNotIn(self.KEY, str(log['attributes']['request']))
+
+    def test_non_primitive_attribute_becomes_a_string(self):
+        log = scrub_log({'body': '', 'attributes': {'obj': object()}})
+
+        self.assertIsInstance(log['attributes']['obj'], str)
+
+    def test_an_attribute_whose_str_raises_does_not_lose_the_log(self):
+        class Hostile:
+            def __str__(self):
+                raise RuntimeError('nope')
+
+        log = scrub_log({'body': '', 'attributes': {'bad': Hostile()}})
+
+        self.assertEqual(log['attributes']['bad'], '<unrepresentable>')
+
+    def test_primitive_attributes_are_preserved(self):
+        log = scrub_log({'body': '', 'attributes': {'status': 500, 'htmx': True}})
+
+        self.assertEqual(log['attributes']['status'], 500)
+
+    def test_boolean_attributes_stay_boolean(self):
+        log = scrub_log({'body': '', 'attributes': {'htmx': False}})
+
+        self.assertIs(log['attributes']['htmx'], False)
+
+    def test_sensitive_attribute_is_redacted(self):
+        log = scrub_log({'body': '', 'attributes': {'admin_key': self.KEY}})
+
+        self.assertEqual(log['attributes']['admin_key'], '[redacted]')
+
+    def test_client_ip_is_dropped(self):
+        # send_default_pii=False governs only what the SDK collects itself.
+        # Custom attributes bypass it, so without this every forwarded 4xx
+        # would ship a client IP to a third party.
+        log = scrub_log({'body': '', 'attributes': {'ip': '203.0.113.9'}})
+
+        self.assertNotIn('ip', log['attributes'])
+
+    def test_discord_username_is_kept(self):
+        # Deliberate: it is what makes a vague bug report actionable, and
+        # ActivityLog already stores it.
+        log = scrub_log({'body': '', 'attributes': {'user': 'someracer'}})
+
+        self.assertEqual(log['attributes']['user'], 'someracer')
+
+    def test_cookie_attribute_is_dropped(self):
+        log = scrub_log({'body': '', 'attributes': {'Cookie': 'sessionid=abc'}})
+
+        self.assertNotIn('Cookie', log['attributes'])
+
+    def test_harmless_body_is_left_alone(self):
+        log = scrub_log({'body': 'GET /create/ -> 200'})
+
+        self.assertEqual(log['body'], 'GET /create/ -> 200')
+
+    def test_a_missing_body_is_tolerated(self):
+        self.assertEqual(scrub_log({'body': None})['body'], '')
+
+    def test_a_scrubber_failure_drops_the_log_rather_than_sending_it(self):
+        # The SDK drops a log whose before_send_log hook raises. Catching
+        # here would turn that safe default into an unsafe one: the single
+        # case where redaction did not finish would become the case where
+        # the payload is sent anyway.
+        class Exploding(dict):
+            def items(self):
+                raise RuntimeError('nope')
+
+        with self.assertRaises(RuntimeError):
+            scrub_log({'body': '', 'attributes': Exploding(x=1)})
+
+
+class BuildSentryOptionsTests(SimpleTestCase):
+    """Tests for config.logging.build_sentry_options()."""
+
+    def setUp(self):
+        # Configuring Sentry mutates SDK globals: capture_sentry_logs is a
+        # class attribute assigned in LoggingIntegration.__init__, and
+        # ignore_logger() appends to a module-level set. Left alone, these
+        # tests would leave whichever value ran last in place -- the shape
+        # that passes alone and fails in a full run.
+        from sentry_sdk.integrations import logging as sentry_logging
+
+        original_capture = sentry_logging.LoggingIntegration.capture_sentry_logs
+        original_ignored = set(sentry_logging._IGNORED_LOGGERS)
+
+        def restore():
+            sentry_logging.LoggingIntegration.capture_sentry_logs = original_capture
+            sentry_logging._IGNORED_LOGGERS.clear()
+            sentry_logging._IGNORED_LOGGERS.update(original_ignored)
+
+        self.addCleanup(restore)
+
+    def _options(self, logs_level='WARNING'):
+        return build_sentry_options(
+            dsn='https://k@o0.ingest.sentry.io/0',
+            environment='test',
+            release='abc123',
+            traces_sample_rate=0.0,
+            logs_level=logs_level,
+        )
+
+    def _logging_integration(self, logs_level='WARNING'):
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        for integration in self._options(logs_level)['integrations']:
+            if isinstance(integration, LoggingIntegration):
+                return integration
+        self.fail('LoggingIntegration was not registered')
+
+    def test_event_scrubber_is_wired(self):
+        self.assertIs(self._options()['before_send'], scrub_event)
+
+    def test_log_scrubber_is_wired(self):
+        # before_send does not apply to logs. Without this, forwarding logs
+        # would ship admin keys to Sentry unredacted.
+        self.assertIs(self._options()['before_send_log'], scrub_log)
+
+    def test_sdk_does_not_collect_pii_of_its_own(self):
+        # Named for what it actually checks. This flag governs only what the
+        # SDK gathers itself; custom log attributes bypass it entirely, so
+        # it says nothing about what this app sends. ScrubLogTests covers
+        # that half.
+        self.assertIs(self._options()['send_default_pii'], False)
+
+    def test_deliberate_error_logs_still_raise_issues(self):
+        # Disabling event_level outright also killed every logger.error() in
+        # the codebase, and with SENTRY_LOGS_LEVEL=OFF those errors would
+        # then reach Sentry by no path at all.
+        self.assertEqual(self._logging_integration()._handler.level,
+                         logging.ERROR)
+
+    def test_the_per_request_line_cannot_raise_an_issue(self):
+        # The duplicate issue per 500 is solved at the one logger that
+        # caused it, rather than by disabling the feature globally.
+        from sentry_sdk.integrations.logging import _IGNORED_LOGGERS
+
+        self._options()
+
+        self.assertIn(REQUEST_LOG_LOGGER, _IGNORED_LOGGERS)
+
+    def test_the_per_request_line_still_reaches_sentry_logs(self):
+        # ignore_logger() covers events and breadcrumbs only; the SDK keeps
+        # a separate set for Logs. If that ever merges, 4xx and 5xx request
+        # lines vanish from the Logs view and this catches it.
+        from sentry_sdk.integrations.logging import (
+            _IGNORED_LOGGERS_SENTRY_LOGS,
+        )
+
+        self._options()
+
+        self.assertNotIn(REQUEST_LOG_LOGGER, _IGNORED_LOGGERS_SENTRY_LOGS)
+
+    def test_logs_are_forwarded_at_the_requested_level(self):
+        self.assertEqual(self._logging_integration('WARNING')._sentry_logs_handler.level,
+                         logging.WARNING)
+
+    def test_info_level_forwards_the_whole_request_stream(self):
+        self.assertEqual(self._logging_integration('INFO')._sentry_logs_handler.level,
+                         logging.INFO)
+
+    def test_forwarding_can_be_turned_off(self):
+        self.assertIsNone(self._logging_integration('OFF')._sentry_logs_handler)
+
+    def test_notset_does_not_forward_the_whole_stream(self):
+        # NOTSET is a real level name resolving to 0, which a handler reads
+        # as 'forward everything' -- the loudest possible outcome, reached
+        # through a correctly spelled value.
+        self.assertEqual(self._logging_integration('NOTSET')._sentry_logs_handler.level,
+                         logging.WARNING)
+
+    def test_an_unrecognised_level_falls_back_to_warning(self):
+        # A typo must not silently ship the entire request stream to a plan
+        # with a quota.
+        self.assertEqual(self._logging_integration('lots')._sentry_logs_handler.level,
+                         logging.WARNING)
+
+    def test_release_is_passed_through(self):
+        self.assertEqual(self._options()['release'], 'abc123')
+
+    def test_blank_release_becomes_none(self):
+        options = build_sentry_options(
+            dsn='https://k@o0.ingest.sentry.io/0', environment='test',
+            release='', traces_sample_rate=0.0, logs_level='WARNING',
+        )
+
+        self.assertIsNone(options['release'])
 
 # ---------------------------------------------------------------------------
 # Observability: RequestLogMiddleware
@@ -8562,6 +8808,23 @@ class AdminKeyRedactionInRecordsTests(TestCase):
             self.client.get(self.url)
 
         self.assertNotIn(self.event.admin_key, captured.records[0].path)
+
+    def test_log_message_does_not_contain_the_key(self):
+        # Not the same assertion as the one above. Message arguments are
+        # forwarded to Sentry Logs as their own attributes and never reach
+        # the stdout formatter, so redacting only the extra fields left the
+        # raw path in the one place a formatter could not clean.
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(self.url)
+
+        self.assertNotIn(self.event.admin_key, captured.records[0].getMessage())
+
+    def test_log_message_arguments_do_not_contain_the_key(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(self.url)
+
+        self.assertNotIn(self.event.admin_key,
+                         ' '.join(str(a) for a in captured.records[0].args))
 
     def test_request_log_line_still_shows_it_was_an_admin_request(self):
         with self.assertLogs('config.middleware', level='INFO') as captured:
@@ -8772,6 +9035,24 @@ class ActivityLogMiddlewareTests(TestCase):
                 self.client.get(reverse('home'))
 
         self.assertIn('activity log write failed', captured.output[0])
+
+    def test_a_failed_write_does_not_log_the_admin_key(self):
+        # The other half of the root-cause fix: raw log arguments are
+        # forwarded to Sentry as their own attributes, so a credential here
+        # would rest entirely on the scrubber catching it.
+        event = save_event()
+        session = self.client.session
+        session['admin_' + str(event.id)] = True
+        session.save()
+        url = reverse('admin_page', kwargs={
+            'event_id': event.id, 'admin_key': event.admin_key})
+
+        with patch.object(ActivityLog.objects, 'create',
+                          side_effect=RuntimeError('db gone')):
+            with self.assertLogs('events.middleware', level='WARNING') as captured:
+                self.client.get(url)
+
+        self.assertNotIn(event.admin_key, captured.output[0])
 
 
 class VisitorCookieTests(TestCase):

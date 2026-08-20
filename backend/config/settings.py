@@ -293,21 +293,27 @@ ACTIVITY_RETENTION_DAYS = int(os.getenv('ACTIVITY_RETENTION_DAYS', '90'))
 
 SENTRY_DSN = os.getenv('SENTRY_DSN', '').strip()
 
+# Which log records are forwarded to Sentry Logs. WARNING keeps the Logs
+# view to 4xx, 5xx, client-side JavaScript errors and failed activity
+# writes; routine 200s stay in Railway, which already has them. Set to INFO
+# to ship the whole request stream, or OFF to forward nothing.
+SENTRY_LOGS_LEVEL = os.getenv('SENTRY_LOGS_LEVEL', 'WARNING')
+
 if SENTRY_DSN:
     import sentry_sdk
-    from sentry_sdk.integrations.django import DjangoIntegration
 
-    from config.logging import scrub_event
+    from config.logging import build_sentry_options
 
-    sentry_sdk.init(
+    # Both scrubbers are wired up in build_sentry_options, and both are
+    # required: before_send covers events, before_send_log covers logs, and
+    # neither applies to the other's payload. BuildSentryOptionsTests
+    # asserts that wiring; this call site is what carries it to production,
+    # so keep the ** spread rather than listing options here, where one
+    # could be dropped without a test noticing.
+    sentry_sdk.init(**build_sentry_options(
         dsn=SENTRY_DSN,
-        integrations=[DjangoIntegration()],
         environment=os.getenv('SENTRY_ENVIRONMENT', 'production'),
-        release=os.getenv('RAILWAY_GIT_COMMIT_SHA', '')[:12] or None,
-        send_default_pii=False,
+        release=os.getenv('RAILWAY_GIT_COMMIT_SHA', '')[:12],
         traces_sample_rate=float(os.getenv('SENTRY_TRACES_SAMPLE_RATE', '0')),
-        # Non-negotiable: strips event admin keys, which are credentials, out
-        # of URLs, breadcrumbs and captured stack-frame locals. See
-        # config.logging.scrub_event.
-        before_send=scrub_event,
-    )
+        logs_level=SENTRY_LOGS_LEVEL,
+    ))

@@ -115,9 +115,12 @@ class ActivityLogMiddleware:
                 detail=self._detail(request),
             )
         except Exception:
+            # Redacted for the same reason the row is: raw log arguments
+            # are forwarded to Sentry as their own attributes, so leaving a
+            # credential here would rest entirely on the scrubber.
             logger.warning(
                 "activity log write failed for %s %s", request.method,
-                request.path, exc_info=True,
+                redact_admin_key(request.path), exc_info=True,
             )
 
     @staticmethod

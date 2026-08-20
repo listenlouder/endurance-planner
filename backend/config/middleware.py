@@ -6,7 +6,11 @@ from django.conf import settings
 from django.core.exceptions import MiddlewareNotUsed
 from django.http import HttpResponsePermanentRedirect
 
-from config.logging import redact_admin_key, request_id_var
+from config.logging import (
+    REQUEST_LOG_LOGGER,
+    redact_admin_key,
+    request_id_var,
+)
 
 try:
     import sentry_sdk
@@ -14,6 +18,10 @@ except ImportError:  # pragma: no cover - sentry_sdk is a pinned dependency
     sentry_sdk = None
 
 logger = logging.getLogger(__name__)
+
+# Separate from the module logger so Sentry can ignore the per-request line
+# without silencing the configuration errors logged above it.
+request_logger = logging.getLogger(REQUEST_LOG_LOGGER)
 
 
 class CanonicalHostMiddleware:
@@ -133,11 +141,18 @@ class RequestLogMiddleware:
         # exception into a 500 response before it reaches this middleware, and
         # django.request already logs the traceback. Adding one would put the
         # same traceback in the stream three times.
-        logger.log(
+        context = request_log_context(request, response)
+
+        # The path comes from the context, which has already been redacted,
+        # rather than from request.path. Message arguments are shipped to
+        # Sentry Logs as their own attributes without passing through any
+        # formatter, so a raw path here would leave the site's redaction
+        # depending entirely on which handler happened to see the record.
+        request_logger.log(
             level,
             "%s %s -> %s",
-            request.method, request.path, status,
-            extra=request_log_context(request, response),
+            request.method, context['path'], status,
+            extra=context,
         )
 
 
