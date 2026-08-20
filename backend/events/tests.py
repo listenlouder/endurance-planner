@@ -41,6 +41,7 @@ from django.test import RequestFactory, SimpleTestCase, TestCase, override_setti
 from django.urls import reverse
 
 from config.logging import (
+    REQUEST_LOG_LOGGER,
     JsonFormatter,
     RequestIdFilter,
     build_sentry_options,
@@ -8352,14 +8353,18 @@ class ScrubEventTests(SimpleTestCase):
 
         self.assertEqual(event['request']['url'], 'https://x/e1/signup/')
 
-    def test_never_raises_on_a_malformed_event(self):
-        class Exploding:
+    def test_a_scrubber_failure_drops_the_event_rather_than_sending_it(self):
+        # A dict subclass, so _scrub actually recurses into it. A plain object
+        # is returned untouched and never reaches .items() at all.
+        class Exploding(dict):
             def items(self):
                 raise RuntimeError('nope')
 
-        # Returning the event unscrubbed would be wrong, but dropping the
-        # error report entirely would be worse.
-        self.assertIsNotNone(scrub_event({'request': Exploding()}))
+        # sentry_sdk runs before_send inside capture_internal_exceptions(),
+        # so raising drops the event. Returning it unscrubbed would ship a
+        # credential precisely when redaction is known to have failed.
+        with self.assertRaises(RuntimeError):
+            scrub_event({'request': Exploding()})
 
 
 class SentryConfigurationTests(SimpleTestCase):
@@ -8458,6 +8463,21 @@ class ScrubLogTests(SimpleTestCase):
 
         self.assertEqual(log['attributes']['admin_key'], '[redacted]')
 
+    def test_client_ip_is_dropped(self):
+        # send_default_pii=False governs only what the SDK collects itself.
+        # Custom attributes bypass it, so without this every forwarded 4xx
+        # would ship a client IP to a third party.
+        log = scrub_log({'body': '', 'attributes': {'ip': '203.0.113.9'}})
+
+        self.assertNotIn('ip', log['attributes'])
+
+    def test_discord_username_is_kept(self):
+        # Deliberate: it is what makes a vague bug report actionable, and
+        # ActivityLog already stores it.
+        log = scrub_log({'body': '', 'attributes': {'user': 'someracer'}})
+
+        self.assertEqual(log['attributes']['user'], 'someracer')
+
     def test_cookie_attribute_is_dropped(self):
         log = scrub_log({'body': '', 'attributes': {'Cookie': 'sessionid=abc'}})
 
@@ -8468,12 +8488,42 @@ class ScrubLogTests(SimpleTestCase):
 
         self.assertEqual(log['body'], 'GET /create/ -> 200')
 
-    def test_never_raises_on_a_malformed_log(self):
-        self.assertIsNotNone(scrub_log({'body': None}))
+    def test_a_missing_body_is_tolerated(self):
+        self.assertEqual(scrub_log({'body': None})['body'], '')
+
+    def test_a_scrubber_failure_drops_the_log_rather_than_sending_it(self):
+        # The SDK drops a log whose before_send_log hook raises. Catching
+        # here would turn that safe default into an unsafe one: the single
+        # case where redaction did not finish would become the case where
+        # the payload is sent anyway.
+        class Exploding(dict):
+            def items(self):
+                raise RuntimeError('nope')
+
+        with self.assertRaises(RuntimeError):
+            scrub_log({'body': '', 'attributes': Exploding(x=1)})
 
 
 class BuildSentryOptionsTests(SimpleTestCase):
     """Tests for config.logging.build_sentry_options()."""
+
+    def setUp(self):
+        # Configuring Sentry mutates SDK globals: capture_sentry_logs is a
+        # class attribute assigned in LoggingIntegration.__init__, and
+        # ignore_logger() appends to a module-level set. Left alone, these
+        # tests would leave whichever value ran last in place -- the shape
+        # that passes alone and fails in a full run.
+        from sentry_sdk.integrations import logging as sentry_logging
+
+        original_capture = sentry_logging.LoggingIntegration.capture_sentry_logs
+        original_ignored = set(sentry_logging._IGNORED_LOGGERS)
+
+        def restore():
+            sentry_logging.LoggingIntegration.capture_sentry_logs = original_capture
+            sentry_logging._IGNORED_LOGGERS.clear()
+            sentry_logging._IGNORED_LOGGERS.update(original_ignored)
+
+        self.addCleanup(restore)
 
     def _options(self, logs_level='WARNING'):
         return build_sentry_options(
@@ -8500,14 +8550,40 @@ class BuildSentryOptionsTests(SimpleTestCase):
         # would ship admin keys to Sentry unredacted.
         self.assertIs(self._options()['before_send_log'], scrub_log)
 
-    def test_pii_is_not_sent_by_default(self):
+    def test_sdk_does_not_collect_pii_of_its_own(self):
+        # Named for what it actually checks. This flag governs only what the
+        # SDK gathers itself; custom log attributes bypass it entirely, so
+        # it says nothing about what this app sends. ScrubLogTests covers
+        # that half.
         self.assertIs(self._options()['send_default_pii'], False)
 
-    def test_no_log_record_becomes_an_issue(self):
-        # event_level defaults to ERROR, and RequestLogMiddleware logs 5xx at
-        # ERROR, so one failure produced two issues: the exception and the log
-        # line describing it. Issues are exceptions; the stream is Logs.
-        self.assertIsNone(self._logging_integration()._handler)
+    def test_deliberate_error_logs_still_raise_issues(self):
+        # Disabling event_level outright also killed every logger.error() in
+        # the codebase, and with SENTRY_LOGS_LEVEL=OFF those errors would
+        # then reach Sentry by no path at all.
+        self.assertEqual(self._logging_integration()._handler.level,
+                         logging.ERROR)
+
+    def test_the_per_request_line_cannot_raise_an_issue(self):
+        # The duplicate issue per 500 is solved at the one logger that
+        # caused it, rather than by disabling the feature globally.
+        from sentry_sdk.integrations.logging import _IGNORED_LOGGERS
+
+        self._options()
+
+        self.assertIn(REQUEST_LOG_LOGGER, _IGNORED_LOGGERS)
+
+    def test_the_per_request_line_still_reaches_sentry_logs(self):
+        # ignore_logger() covers events and breadcrumbs only; the SDK keeps
+        # a separate set for Logs. If that ever merges, 4xx and 5xx request
+        # lines vanish from the Logs view and this catches it.
+        from sentry_sdk.integrations.logging import (
+            _IGNORED_LOGGERS_SENTRY_LOGS,
+        )
+
+        self._options()
+
+        self.assertNotIn(REQUEST_LOG_LOGGER, _IGNORED_LOGGERS_SENTRY_LOGS)
 
     def test_logs_are_forwarded_at_the_requested_level(self):
         self.assertEqual(self._logging_integration('WARNING')._sentry_logs_handler.level,
@@ -8519,6 +8595,13 @@ class BuildSentryOptionsTests(SimpleTestCase):
 
     def test_forwarding_can_be_turned_off(self):
         self.assertIsNone(self._logging_integration('OFF')._sentry_logs_handler)
+
+    def test_notset_does_not_forward_the_whole_stream(self):
+        # NOTSET is a real level name resolving to 0, which a handler reads
+        # as 'forward everything' -- the loudest possible outcome, reached
+        # through a correctly spelled value.
+        self.assertEqual(self._logging_integration('NOTSET')._sentry_logs_handler.level,
+                         logging.WARNING)
 
     def test_an_unrecognised_level_falls_back_to_warning(self):
         # A typo must not silently ship the entire request stream to a plan
@@ -8952,6 +9035,24 @@ class ActivityLogMiddlewareTests(TestCase):
                 self.client.get(reverse('home'))
 
         self.assertIn('activity log write failed', captured.output[0])
+
+    def test_a_failed_write_does_not_log_the_admin_key(self):
+        # The other half of the root-cause fix: raw log arguments are
+        # forwarded to Sentry as their own attributes, so a credential here
+        # would rest entirely on the scrubber catching it.
+        event = save_event()
+        session = self.client.session
+        session['admin_' + str(event.id)] = True
+        session.save()
+        url = reverse('admin_page', kwargs={
+            'event_id': event.id, 'admin_key': event.admin_key})
+
+        with patch.object(ActivityLog.objects, 'create',
+                          side_effect=RuntimeError('db gone')):
+            with self.assertLogs('events.middleware', level='WARNING') as captured:
+                self.client.get(url)
+
+        self.assertNotIn(event.admin_key, captured.output[0])
 
 
 class VisitorCookieTests(TestCase):

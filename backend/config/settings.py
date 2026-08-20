@@ -306,7 +306,10 @@ if SENTRY_DSN:
 
     # Both scrubbers are wired up in build_sentry_options, and both are
     # required: before_send covers events, before_send_log covers logs, and
-    # neither applies to the other's payload.
+    # neither applies to the other's payload. BuildSentryOptionsTests
+    # asserts that wiring; this call site is what carries it to production,
+    # so keep the ** spread rather than listing options here, where one
+    # could be dropped without a test noticing.
     sentry_sdk.init(**build_sentry_options(
         dsn=SENTRY_DSN,
         environment=os.getenv('SENTRY_ENVIRONMENT', 'production'),

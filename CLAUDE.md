@@ -549,7 +549,9 @@ SENTRY_ENVIRONMENT          Label separating environments. Default production.
 SENTRY_LOGS_LEVEL           Level forwarded to Sentry Logs. Default WARNING.
                               INFO ships the whole request stream; OFF ships
                               none. An unrecognised value falls back to
-                              WARNING rather than to something louder.
+                              WARNING rather than to something louder — and
+                              so does NOTSET, which is spelled correctly but
+                              resolves to 0, meaning forward everything.
 SENTRY_TRACES_SAMPLE_RATE   Performance tracing, 0 to 1. Default 0; this is an
                               error tracker, not an APM.
 ACTIVITY_LOG_ENABLED        Kill switch for ActivityLog writes. Default True.
@@ -742,12 +744,32 @@ Three layers, answering three different questions.
 | Sentry Logs | "What else went wrong this week?" | sentry.io → Explore → Logs |
 | `ActivityLog` table | "How are people using this?" | `/activity/view/` |
 
-**Issues are exceptions; Logs are the log stream.** `event_level=None` on the
-LoggingIntegration keeps them separate. The default is ERROR, and
-`RequestLogMiddleware` logs a 5xx at ERROR — so out of the box one failure
-produced *two* issues, the exception and the log line describing it, on a
-plan that counts them. Unhandled exceptions still reach Issues through
-DjangoIntegration; nothing is lost.
+**Issues are exceptions; Logs are the log stream.** Out of the box one 500
+produced *two* issues — the exception, and `RequestLogMiddleware`'s ERROR
+line describing it — on a plan that counts them.
+
+The fix is scoped to the one logger responsible. `RequestLogMiddleware`
+writes its per-request line to `config.middleware.requests`
+(`REQUEST_LOG_LOGGER`), and `build_sentry_options()` calls `ignore_logger()`
+on it. `event_level` stays at the SDK default of ERROR.
+
+Three things had to hold at once, and each is pinned by a test:
+
+- `ignore_logger()` covers **events and breadcrumbs only** — the SDK keeps
+  `_IGNORED_LOGGERS` and `_IGNORED_LOGGERS_SENTRY_LOGS` as separate sets — so
+  the request line still reaches Logs, still at ERROR for a 5xx. The stdout
+  stream is untouched, which matters: dropping 5xx to WARNING to dodge the
+  duplicate would have broken severity in Railway, the primary destination.
+- Deliberate `logger.error()` calls stay alertable. `event_level=None` would
+  have silenced every one of them — `CanonicalHostMiddleware`'s
+  misconfiguration error is the live example.
+- The two settings compose. With `event_level=None`, setting
+  `SENTRY_LOGS_LEVEL=OFF` would have left logged errors reaching Sentry by no
+  path at all — neither Issues nor Logs.
+
+The separate logger name is the load-bearing part. `ignore_logger` is
+per-logger, so without it the only way to silence the request line would
+also silence the configuration errors logged from the same module.
 
 Railway's log browser looked empty before this existed because the app emitted
 almost nothing — it is a log *browser*, not a log *source*. It is now fed real
@@ -809,6 +831,15 @@ and both are required. Forwarding logs without it ships admin keys to Sentry
 in the clear, because the raw arguments of a log call are sent as individual
 `sentry.message.parameter.N` attributes that never pass through a logging
 formatter — and `django.request` puts the failing URL there.
+
+**What is deliberately not forwarded.** `send_default_pii=False` governs only
+what the SDK collects for itself; custom attributes bypass it completely, so
+it says nothing about what this app sends. `_LOG_DROP_KEYS` drops the client
+IP from every forwarded log — Railway already sees it as the host, and Sentry
+would be a new recipient of it on every 4xx, which sits badly next to a
+`Feedback` model that deliberately stores none. The Discord username *is*
+kept: it is what makes "someone said signup is broken" actionable, and
+`ActivityLog` already stores it.
 
 `scrub_log()` also **flattens non-primitive attribute values to strings**
 before redacting. Sentry calls `safe_repr` on attributes *after*
@@ -1097,6 +1128,16 @@ See the Observability section. Verified end to end against a real `sentry_sdk`
 init with a capturing transport: the key appears in neither the envelope nor
 the log stream. Railway's own edge logging remains outside this project's
 control - that is the pre-existing residual risk documented above.
+
+**What reaches Sentry**
+Unhandled exceptions with stack traces, and — at `SENTRY_LOGS_LEVEL` and
+above — log records. Admin keys are stripped from both by `scrub_event` and
+`scrub_log`, which are separate hooks covering separate payloads; neither
+applies to the other's. Client IPs are dropped from logs. Discord usernames
+are sent deliberately. Both scrubbers **fail closed**: they do not catch
+their own exceptions, because the SDK drops a payload whose hook raises, and
+losing one report costs far less than shipping a credential from a scrubber
+that half-finished.
 
 **Visitor cookie**
 `wac_vid` is a random first-party identifier with no cross-site scope and no
