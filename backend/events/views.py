@@ -1938,9 +1938,18 @@ def client_error_report(request):
         payload['status'] = 0
 
     log_detail(request, **payload)
+    # Flat dotted keys rather than a nested dict. Sentry stores only
+    # primitive attribute values, so a dict is flattened to a repr blob and
+    # its fields stop being queryable -- and 'which JavaScript error, on
+    # which page' is one of the more useful things to search by. The
+    # ActivityLog row still gets the real structure via log_detail above,
+    # where a JSONField can hold it.
     logger.warning(
         "client error (%s): %s", payload['kind'] or 'unknown', payload['message'],
-        extra={'client_error': payload, 'visitor_id': visitor_id},
+        extra={
+            'visitor_id': visitor_id,
+            **{f'client_error.{key}': value for key, value in payload.items()},
+        },
     )
     return HttpResponse(status=204)
 

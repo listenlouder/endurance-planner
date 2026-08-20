@@ -84,6 +84,7 @@ from .utils import (
 )
 from .views import (
     ACTIVITY_DEFAULT_DAYS,
+    CLIENT_ERROR_FIELD_LIMITS,
     CLIENT_ERROR_GLOBAL_HOURLY_LIMIT,
     CLIENT_ERROR_HOURLY_LIMIT,
     _validate_and_save_field,
@@ -9367,6 +9368,46 @@ class ClientErrorReportTests(TestCase):
             self.client.post(self.url, {'message': 'boom', 'kind': 'js'})
 
         self.assertIn('client error', captured.output[0])
+
+    def test_report_fields_are_flat_log_attributes(self):
+        # Sentry stores only primitive attribute values, so a nested dict
+        # arrives as one opaque repr blob and 'which kind of JS error'
+        # stops being a query. Flat dotted keys keep each field its own
+        # searchable attribute.
+        with self.assertLogs('events.views', level='WARNING') as captured:
+            self.client.post(self.url, {'message': 'boom', 'kind': 'js'})
+
+        record = captured.records[0]
+        self.assertEqual(getattr(record, 'client_error.kind'), 'js')
+
+    def test_report_does_not_nest_a_dict_in_the_log_attributes(self):
+        with self.assertLogs('events.views', level='WARNING') as captured:
+            self.client.post(self.url, {'message': 'boom', 'kind': 'js'})
+
+        record = captured.records[0]
+        self.assertFalse(hasattr(record, 'client_error'))
+
+    def test_every_reported_field_becomes_its_own_attribute(self):
+        with self.assertLogs('events.views', level='WARNING') as captured:
+            self.client.post(self.url, {
+                'message': 'boom', 'kind': 'js',
+                'source': 'app.js:1:2', 'page_url': 'https://x/create/',
+            })
+
+        record = captured.records[0]
+        for field in CLIENT_ERROR_FIELD_LIMITS:
+            with self.subTest(field=field):
+                self.assertTrue(hasattr(record, 'client_error.' + field))
+
+    def test_flat_attributes_survive_the_sentry_log_scrubber(self):
+        # The scrubber only preserves primitives; anything else is
+        # stringified. These have to come through as real values.
+        log = scrub_log({'body': '', 'attributes': {
+            'client_error.kind': 'js',
+            'client_error.status': 500,
+        }})
+
+        self.assertEqual(log['attributes']['client_error.status'], 500)
 
     def test_reports_beyond_the_hourly_limit_are_dropped(self):
         for _ in range(CLIENT_ERROR_HOURLY_LIMIT + 5):

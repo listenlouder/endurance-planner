@@ -272,11 +272,16 @@ def _scrub_attributes(attributes):
     passing the request object itself as an attribute. Sentry only stores
     primitives anyway, so coercing here loses nothing.
 
-    Two known limitations, neither reachable from this codebase today: a
-    list of primitives would be stored by Sentry as a real array but is
-    flattened to a repr here, and a sensitive key nested inside a
-    flattened value survives as text instead of being redacted by name.
-    Nothing emits list or nested attributes; revisit if anything starts to.
+    Two limitations follow from that, and log call sites need to know
+    about them: a list of primitives that Sentry would store as a real
+    array is flattened to a repr here, and a sensitive key nested inside a
+    flattened value survives as text rather than being redacted by name.
+
+    So pass flat, dotted keys in `extra` rather than a nested dict --
+    client_error_report is the worked example. A dict there does not leak
+    (redaction still runs over the flattened text) but it arrives in
+    Sentry as one opaque blob instead of queryable fields, which this
+    comment previously claimed could not happen here. It could, and did.
     """
     cleaned = {}
     for key, value in attributes.items():
