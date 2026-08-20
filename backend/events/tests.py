@@ -7731,6 +7731,67 @@ class CanonicalHostAllowedHostsTests(SimpleTestCase):
         self.assertIn('every host you want redirected', env)
 
 
+class HealthcheckReachabilityTests(SimpleTestCase):
+    """
+    Railway probes the container as Host: healthcheck.railway.app — neither the
+    canonical host nor a host anyone thinks to configure. That failed a deploy
+    two ways over: leaving it out of ALLOWED_HOSTS turned the probe into a bare
+    400, and putting it in turned the probe into a 301. A healthcheck scores a
+    redirect exactly the way it scores a rejection, so both halves have to hold
+    at once or the replica never goes healthy.
+    """
+
+    PROBE_HOST = 'healthcheck.railway.app'
+    CANONICAL = 'wearechecking.gg'
+
+    def _overrides(self):
+        return dict(
+            CANONICAL_HOST=self.CANONICAL,
+            ALLOWED_HOSTS=[self.CANONICAL, self.PROBE_HOST],
+        )
+
+    def _probe(self, path):
+        with override_settings(**self._overrides()):
+            middleware = CanonicalHostMiddleware(lambda r: HttpResponse('ok'))
+            return middleware(RequestFactory(SERVER_NAME=self.PROBE_HOST).get(path))
+
+    def test_probe_host_is_allowed_without_being_configured(self):
+        # Appended by settings rather than left to the env var: nobody browses
+        # to this name, so it is a platform fact and not a deployment choice.
+        self.assertIn(self.PROBE_HOST, django_conf.ALLOWED_HOSTS)
+
+    def test_healthcheck_is_not_redirected_off_the_probe_host(self):
+        response = self._probe(django_conf.HEALTHCHECK_PATH)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_other_paths_on_the_probe_host_are_still_redirected(self):
+        # The exemption is scoped to the path, not to the host — an internal
+        # hostname must not become a way to bypass canonical redirects.
+        response = self._probe('/create/')
+
+        self.assertEqual(response.status_code, 301)
+
+    def test_probe_gets_200_through_the_whole_middleware_chain(self):
+        # The deploy failure itself: every layer has to agree, and testing the
+        # middleware alone would have missed the ALLOWED_HOSTS half entirely.
+        with override_settings(
+            CANONICAL_HOST=self.CANONICAL,
+            ALLOWED_HOSTS=[self.CANONICAL] + list(django_conf.ALLOWED_HOSTS),
+        ):
+            response = self.client.get(
+                django_conf.HEALTHCHECK_PATH, headers={'host': self.PROBE_HOST}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'ok')
+
+    def test_env_example_says_the_probe_host_needs_no_configuring(self):
+        env = django_conf.BASE_DIR.joinpath('.env.example').read_text(encoding='utf-8')
+
+        self.assertIn('healthcheck.railway.app', env)
+
+
 # ---------------------------------------------------------------------------
 # Stint assignment driver dropdown
 #

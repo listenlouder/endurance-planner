@@ -71,7 +71,7 @@ endurance-planner/
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (923 tests, 128 classes)
+│   │   ├── tests.py            # Full suite (928 tests, 129 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
@@ -576,6 +576,10 @@ ALLOWED_HOSTS = [wearechecking.gg]                       www -> 400
 ALLOWED_HOSTS = [wearechecking.gg, www.wearechecking.gg] www -> 301
 ```
 
+Railway's `healthcheck.railway.app` is the exception: `settings.py` appends it
+to `ALLOWED_HOSTS` itself, so it never needs listing here. See the Healthcheck
+section under Observability for why leaving it to the env var breaks deploys.
+
 Whenever `CANONICAL_HOST` changes, add
 `https://<host>/accounts/discord/login/callback/` as a redirect URL in the
 Discord developer portal — the callback follows the request host.
@@ -860,7 +864,23 @@ less is refused rather than silently emptying the table.
 `railway.toml` points at `/healthz/`, a plain-text view with no database
 access and no template. It used to point at `/`, which rendered the whole
 homepage — queries and all — on every probe and would have made the activity
-table mostly probe traffic. Both middlewares skip the path.
+table mostly probe traffic. Both logging middlewares skip the path.
+
+**The probe arrives as `Host: healthcheck.railway.app`**, and getting a 200 back
+takes two things that are easy to get half right:
+
+- `settings.py` appends that host to `ALLOWED_HOSTS` unconditionally. Leave it
+  to the env var and a deploy dies as a bare 400 `DisallowedHost` — Django
+  validates the Host header in `CommonMiddleware.process_request`, which runs
+  on every request whatever the path, so exempting the path is not enough.
+- `CanonicalHostMiddleware` skips `HEALTHCHECK_PATH`. The probe host is by
+  definition not the canonical host, and a healthcheck scores a 301 exactly the
+  way it scores a 400.
+
+Get either half wrong and Railway reports only `1/1 replicas never became
+healthy` while the build log shows a clean build — because the build *is*
+clean. This cost one failed deploy already; `HealthcheckReachabilityTests`
+covers both halves plus the full middleware chain.
 
 ---
 
@@ -941,7 +961,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**923 tests across 128 classes** in `backend/events/tests.py`, run against
+**928 tests across 129 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell

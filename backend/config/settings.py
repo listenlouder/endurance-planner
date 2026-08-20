@@ -14,6 +14,21 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 _allowed = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1')
 ALLOWED_HOSTS = [h.strip() for h in _allowed.split(',') if h.strip()]
 
+# Railway probes the container with Host: healthcheck.railway.app. Nobody
+# browses to that name, so it is appended here rather than left to the
+# ALLOWED_HOSTS environment variable, where forgetting it fails a deploy in the
+# most confusing way available: django.request answers the probe with a bare
+# 400 DisallowedHost, Railway reports only that the replica never became
+# healthy, and the build log shows nothing wrong because nothing is.
+#
+# Adding it is required even though CanonicalHostMiddleware exempts the
+# healthcheck path -- CommonMiddleware.process_request calls get_host() on
+# every request regardless of path, so the Host header is validated before the
+# view is ever reached.
+HEALTHCHECK_HOST = 'healthcheck.railway.app'
+if HEALTHCHECK_HOST not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(HEALTHCHECK_HOST)
+
 # The one hostname users should end up on. Session and CSRF cookies are
 # host-only, so serving the same site at both the apex and www domains means a
 # login on one host does not carry to the other. When set, every request on
@@ -191,9 +206,11 @@ SILENCED_SYSTEM_CHECKS = [
 # Observability
 # ---------------------------------------------------------------------------
 
-# Path served by config.urls for Railway's healthcheck. Both logging
-# middlewares skip it: Railway probes continuously, and without the skip the
-# activity table and the log stream would be mostly probe traffic.
+# Path served by config.urls for Railway's healthcheck. Three middlewares treat
+# it specially. Both logging middlewares skip it because Railway probes
+# continuously and the activity table and log stream would otherwise be mostly
+# probe traffic. CanonicalHostMiddleware skips it because the probe arrives on
+# an internal hostname and a 301 fails a healthcheck just as a 400 does.
 HEALTHCHECK_PATH = '/healthz/'
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()

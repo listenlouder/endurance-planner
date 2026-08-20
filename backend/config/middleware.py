@@ -36,6 +36,12 @@ class CanonicalHostMiddleware:
     Django turns into a bare 400 before this middleware can issue a redirect.
     Listing only CANONICAL_HOST therefore leaves www — the very host this
     exists to rescue — returning 400 rather than a 301.
+
+    HEALTHCHECK_PATH is exempt. Railway's probe arrives on an internal
+    hostname that is by definition not the canonical one, and a healthcheck
+    scores a 301 exactly as it scores a 400 — not a 200. Redirecting it means
+    every deploy fails with a build log that shows nothing wrong, which is
+    precisely the failure this project already hit once.
     """
 
     def __init__(self, get_response):
@@ -51,8 +57,12 @@ class CanonicalHostMiddleware:
             raise MiddlewareNotUsed
         self.get_response = get_response
         self.canonical_host = canonical
+        self.healthcheck_path = getattr(settings, 'HEALTHCHECK_PATH', '/healthz/')
 
     def __call__(self, request):
+        if request.path == self.healthcheck_path:
+            return self.get_response(request)
+
         if request.get_host() != self.canonical_host:
             return HttpResponsePermanentRedirect(
                 f"{request.scheme}://{self.canonical_host}{request.get_full_path()}"
