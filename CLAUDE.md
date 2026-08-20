@@ -833,9 +833,16 @@ Server-side logging cannot see a JavaScript failure — the page breaks while
 every server signal reads 200 OK. `base.html` reports `htmx:responseError`,
 `htmx:sendError`, `window.onerror` and `unhandledrejection` to
 `/client-error/`, deduplicated and capped at 5 per page load so an error inside
-a render loop cannot flood the endpoint. The server drops reports past 20 per
-visitor per hour and always answers 204 — returning an error to an error
-handler is how a reporting loop starts.
+a render loop cannot flood the endpoint. It always answers 204 — returning an
+error to an error handler is how a reporting loop starts.
+
+Two server-side limits, and the distinction matters. The per-visitor cap (20
+an hour) is keyed on the `wac_vid` cookie, so a caller that discards it looks
+like a new visitor every request — it bounds one stuck browser, not an
+attacker. The global cap (500 an hour) is the one that actually bounds a
+public, unauthenticated write endpoint, because it depends on nothing the
+client supplies. Do not remove it on the grounds that the per-visitor limit
+already covers it.
 
 **422 is deliberately not reported.** It is this app's "here are your
 validation errors" response, already swapped into the page; reporting it would

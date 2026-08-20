@@ -207,7 +207,7 @@ class ActivityLog(models.Model):
 
     occurred_at = models.DateTimeField(auto_now_add=True, db_index=True)
     request_id = models.CharField(max_length=32, blank=True)
-    action = models.CharField(max_length=64, db_index=True)
+    action = models.CharField(max_length=64)
     method = models.CharField(max_length=8, blank=True)
     status_code = models.PositiveSmallIntegerField(default=0)
     duration_ms = models.PositiveIntegerField(default=0)
@@ -218,17 +218,27 @@ class ActivityLog(models.Model):
         on_delete=models.SET_NULL,
         related_name='+',
     )
-    visitor_id = models.CharField(max_length=32, blank=True, db_index=True)
+    visitor_id = models.CharField(max_length=32, blank=True)
     event_id_ref = models.UUIDField(null=True, blank=True, db_index=True)
     path = models.CharField(max_length=300, blank=True)
     is_htmx = models.BooleanField(default=False)
     detail = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ['-occurred_at']
+        # The id tiebreak matters: two rows written in the same tick would
+        # otherwise come back in arbitrary order, and a trail read out of
+        # order is worse than no trail.
+        ordering = ['-occurred_at', '-id']
         indexes = [
             # The two queries the dashboard runs: counts per action over a
-            # window, and one visitor's trail in order.
+            # window, and one visitor's trail in order. Both are composite
+            # and both lead with the column they filter on, so neither
+            # field needs a single-column index of its own.
+            #
+            # request_id is deliberately NOT indexed. It is looked up only
+            # when someone pastes an ID into the dashboard, and an index
+            # would be maintained on every request to speed up a query run
+            # a few times a month.
             models.Index(fields=['action', '-occurred_at'],
                          name='activity_action_time_idx'),
             models.Index(fields=['visitor_id', '-occurred_at'],

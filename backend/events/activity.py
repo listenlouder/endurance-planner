@@ -86,8 +86,6 @@ def log_detail(request, **fields):
     existing.update(fields)
 
 
-CLIENT_ERROR_STATUS = 599
-
 # What the dashboard counts as an error.
 #
 # A client error arrives as a successful POST to the reporting endpoint, so

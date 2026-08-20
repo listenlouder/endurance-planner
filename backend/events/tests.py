@@ -81,6 +81,7 @@ from .utils import (
 )
 from .views import (
     ACTIVITY_DEFAULT_DAYS,
+    CLIENT_ERROR_GLOBAL_HOURLY_LIMIT,
     CLIENT_ERROR_HOURLY_LIMIT,
     _validate_and_save_field,
     _validate_signup_post,
@@ -8837,6 +8838,19 @@ class ActivityLogDisabledTests(SimpleTestCase):
 class ActivityLogModelTests(TestCase):
     """Tests for the ActivityLog model itself."""
 
+    def test_rows_written_in_the_same_tick_order_deterministically(self):
+        # Without the id tiebreak these come back in arbitrary order, and a
+        # trail read out of order is worse than no trail at all.
+        stamp = dt.datetime.now(timezone.utc)
+        rows = ActivityLog.objects.bulk_create([
+            ActivityLog(action='page.home', status_code=200) for _ in range(5)
+        ])
+        ActivityLog.objects.update(occurred_at=stamp)
+
+        ids = list(ActivityLog.objects.values_list('id', flat=True))
+
+        self.assertEqual(ids, sorted([r.id for r in rows], reverse=True))
+
     def test_is_error_is_true_for_a_server_error(self):
         row = ActivityLog(action='page.home', status_code=500)
 
@@ -8846,6 +8860,23 @@ class ActivityLogModelTests(TestCase):
         row = ActivityLog(action='page.home', status_code=200)
 
         self.assertFalse(row.is_error)
+
+    def test_action_has_no_redundant_single_column_index(self):
+        # The composite index leads with action, so a second index on it
+        # alone is pure write cost on a table written once per request.
+        field = ActivityLog._meta.get_field('action')
+
+        self.assertFalse(field.db_index)
+
+    def test_visitor_id_has_no_redundant_single_column_index(self):
+        field = ActivityLog._meta.get_field('visitor_id')
+
+        self.assertFalse(field.db_index)
+
+    def test_composite_indexes_lead_with_the_filtered_column(self):
+        leads = {ix.fields[0] for ix in ActivityLog._meta.indexes}
+
+        self.assertEqual(leads, {'action', 'visitor_id'})
 
     def test_rows_survive_deletion_of_the_event_they_describe(self):
         # event_id_ref is a bare UUID, not an FK, precisely so that deleting
@@ -9065,6 +9096,30 @@ class ClientErrorReportTests(TestCase):
             CLIENT_ERROR_HOURLY_LIMIT,
         )
 
+    def test_global_limit_holds_when_the_visitor_cookie_is_discarded(self):
+        # The per-visitor cap is keyed on a cookie the client sets, so a
+        # caller that drops it looks like a new visitor every time. The
+        # global ceiling is what actually bounds a public write endpoint.
+        for _ in range(CLIENT_ERROR_GLOBAL_HOURLY_LIMIT + 3):
+            self.client.cookies.pop(VISITOR_COOKIE, None)
+            self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(
+            ActivityLog.objects.filter(action='client.error').count(),
+            CLIENT_ERROR_GLOBAL_HOURLY_LIMIT,
+        )
+
+    def test_report_over_the_global_limit_still_returns_204(self):
+        ActivityLog.objects.bulk_create([
+            ActivityLog(action='client.error', status_code=200,
+                        visitor_id='%032x' % n)
+            for n in range(CLIENT_ERROR_GLOBAL_HOURLY_LIMIT)
+        ])
+
+        response = self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(response.status_code, 204)
+
     def test_dropped_report_still_returns_204(self):
         for _ in range(CLIENT_ERROR_HOURLY_LIMIT):
             self.client.post(self.url, {'message': 'boom'})
@@ -9210,6 +9265,36 @@ class ActivityViewContentTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertContains(response, 'page.home')
+
+    def test_repeated_actions_collapse_into_one_row(self):
+        # Meta.ordering plus values().annotate() is a Django footgun: the
+        # ordering field joins the GROUP BY, and occurred_at is unique per
+        # row, so losing the explicit order_by() would give one row per
+        # request instead of one per action.
+        self._log()
+        self._log()
+        self._log()
+
+        rows = self.client.get(self.url).context['actions']
+
+        self.assertEqual([r['action'] for r in rows].count('page.home'), 1)
+
+    def test_collapsed_row_carries_the_full_count(self):
+        self._log()
+        self._log()
+        self._log()
+
+        rows = self.client.get(self.url).context['actions']
+
+        self.assertEqual(rows[0]['total'], 3)
+
+    def test_error_rate_is_reported_per_action(self):
+        self._log()
+        self._log(status_code=500)
+
+        rows = self.client.get(self.url).context['actions']
+
+        self.assertEqual(rows[0]['error_rate'], 50.0)
 
     def test_errors_are_counted(self):
         self._log(status_code=500)

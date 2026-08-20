@@ -18,7 +18,7 @@ from django.core.exceptions import MiddlewareNotUsed
 
 from config.logging import redact_admin_key
 
-from .activity import EXCLUDED_URL_NAMES, action_name, log_detail  # noqa: F401
+from .activity import EXCLUDED_URL_NAMES, action_name
 from .models import ActivityLog
 
 logger = logging.getLogger(__name__)

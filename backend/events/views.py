@@ -1876,7 +1876,18 @@ def activity_view(request):
 # Client-side error reporting
 # ---------------------------------------------------------------------------
 
+# Per visitor, and therefore advisory: visitor_id comes from a cookie the
+# client sets, so dropping it between requests defeats this. It is here to
+# stop one stuck browser from filling the table, which is the realistic
+# case.
 CLIENT_ERROR_HOURLY_LIMIT = 20
+
+# The backstop that cannot be bypassed. This is a public, unauthenticated
+# write endpoint; without a ceiling that ignores client-supplied identity,
+# anyone willing to discard a cookie can grow the table without limit.
+# Set well above what a real incident produces, so it only ever trips on
+# abuse or on a bug reporting in a loop.
+CLIENT_ERROR_GLOBAL_HOURLY_LIMIT = 500
 CLIENT_ERROR_FIELD_LIMITS = {
     'message': 300,
     'source': 300,
@@ -1903,7 +1914,13 @@ def client_error_report(request):
         return HttpResponseNotAllowed(['POST'])
 
     visitor_id = getattr(request, 'visitor_id', '')
-    if visitor_id and _client_errors_this_hour(visitor_id) >= CLIENT_ERROR_HOURLY_LIMIT:
+
+    over_global = _client_errors_this_hour() >= CLIENT_ERROR_GLOBAL_HOURLY_LIMIT
+    over_visitor = (
+        bool(visitor_id)
+        and _client_errors_this_hour(visitor_id) >= CLIENT_ERROR_HOURLY_LIMIT
+    )
+    if over_global or over_visitor:
         skip_activity(request)
         return HttpResponse(status=204)
 
@@ -1928,10 +1945,13 @@ def client_error_report(request):
     return HttpResponse(status=204)
 
 
-def _client_errors_this_hour(visitor_id):
+def _client_errors_this_hour(visitor_id=None):
+    """Client errors reported in the last hour, site-wide or for one visitor."""
     since = datetime.now(dt_utc.utc) - timedelta(hours=1)
-    return ActivityLog.objects.filter(
-        visitor_id=visitor_id,
+    reports = ActivityLog.objects.filter(
         action=CLIENT_ERROR_ACTION,
         occurred_at__gte=since,
-    ).count()
+    )
+    if visitor_id:
+        reports = reports.filter(visitor_id=visitor_id)
+    return reports.count()
