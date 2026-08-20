@@ -546,6 +546,10 @@ LOG_FORMAT                  json | console. Defaults to console when
 SENTRY_DSN                  Unset means Sentry is entirely inert - nothing is
                               initialised and no network calls are made.
 SENTRY_ENVIRONMENT          Label separating environments. Default production.
+SENTRY_LOGS_LEVEL           Level forwarded to Sentry Logs. Default WARNING.
+                              INFO ships the whole request stream; OFF ships
+                              none. An unrecognised value falls back to
+                              WARNING rather than to something louder.
 SENTRY_TRACES_SAMPLE_RATE   Performance tracing, 0 to 1. Default 0; this is an
                               error tracker, not an APM.
 ACTIVITY_LOG_ENABLED        Kill switch for ActivityLog writes. Default True.
@@ -734,8 +738,16 @@ Three layers, answering three different questions.
 | Layer | Question it answers | Where it lives |
 |---|---|---|
 | Structured stdout logs | "What happened at 14:02?" | Railway log browser |
-| Sentry | "Did anything break, and why?" | sentry.io |
+| Sentry Issues | "Did anything break, and why?" | sentry.io → Issues |
+| Sentry Logs | "What else went wrong this week?" | sentry.io → Explore → Logs |
 | `ActivityLog` table | "How are people using this?" | `/activity/view/` |
+
+**Issues are exceptions; Logs are the log stream.** `event_level=None` on the
+LoggingIntegration keeps them separate. The default is ERROR, and
+`RequestLogMiddleware` logs a 5xx at ERROR — so out of the box one failure
+produced *two* issues, the exception and the log line describing it, on a
+plan that counts them. Unhandled exceptions still reach Issues through
+DjangoIntegration; nothing is lost.
 
 Railway's log browser looked empty before this existed because the app emitted
 almost nothing — it is a log *browser*, not a log *source*. It is now fed real
@@ -790,6 +802,20 @@ starting with `<` are preserved so route *patterns* survive intact.
 rather than named fields — secrets turn up in stack-frame locals (`admin_key`
 is a view argument), breadcrumb data, and request reprs, and a field list
 cannot be kept in step with SDK versions.
+
+**`before_send` does not apply to Sentry Logs.** Logs are a separate payload
+with a separate callback, so `scrub_log()` is registered as `before_send_log`
+and both are required. Forwarding logs without it ships admin keys to Sentry
+in the clear, because the raw arguments of a log call are sent as individual
+`sentry.message.parameter.N` attributes that never pass through a logging
+formatter — and `django.request` puts the failing URL there.
+
+`scrub_log()` also **flattens non-primitive attribute values to strings**
+before redacting. Sentry calls `safe_repr` on attributes *after*
+`before_send_log` has run, so a live object passed through untouched gets
+stringified downstream where nothing can clean it. That is exactly how
+`django.request` leaks a URL: it attaches the request object itself.
+Sentry only stores primitives anyway, so the coercion costs nothing.
 
 Note that `runserver`'s own `django.server` access line is *not* redacted. It
 is dev-only; gunicorn writes no access log in production.

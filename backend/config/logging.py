@@ -206,3 +206,112 @@ def scrub_event(event, hint=None):
         return _scrub(event)
     except Exception:  # pragma: no cover - defensive
         return event
+
+
+def scrub_log(log, hint=None):
+    """
+    Sentry `before_send_log` hook.
+
+    Sentry Logs are NOT covered by before_send. They arrive as a separate
+    payload with its own callback, so scrub_event does nothing for them and
+    the two hooks have to be registered independently.
+
+    Both halves of the payload need it. `body` is the formatted message, and
+    the raw message arguments are shipped individually as
+    `sentry.message.parameter.N` attributes without passing through any
+    logging formatter -- which is exactly where django.request puts the URL
+    of a failing request, admin key and all.
+    """
+    try:
+        log['body'] = redact_admin_key(log.get('body', ''))
+        attributes = log.get('attributes')
+        if attributes:
+            log['attributes'] = _scrub_attributes(attributes)
+        return log
+    except Exception:  # pragma: no cover - defensive
+        return log
+
+
+def _scrub_attributes(attributes):
+    """
+    Redact a Sentry log's attributes, flattening anything that is not a
+    primitive first.
+
+    The flattening is the security-relevant half. Sentry serialises attribute
+    values with safe_repr *after* before_send_log has run, so a live object
+    reaching this function unchanged gets stringified downstream where nothing
+    can redact it -- which is precisely how django.request leaks a URL, by
+    passing the request object itself as an attribute. Sentry only stores
+    primitives anyway, so coercing here loses nothing.
+    """
+    cleaned = {}
+    for key, value in attributes.items():
+        lowered = str(key).lower()
+        if lowered in _DROP_KEYS:
+            continue
+        if lowered in _SENSITIVE_KEYS:
+            cleaned[key] = REDACTED
+        elif isinstance(value, str):
+            cleaned[key] = redact_admin_key(value)
+        elif isinstance(value, (bool, int, float)):
+            cleaned[key] = value
+        else:
+            cleaned[key] = redact_admin_key(_safe_str(value))
+    return cleaned
+
+
+def _safe_str(value):
+    """str() that cannot raise -- a __str__ that throws must not lose the log."""
+    try:
+        return str(value)
+    except Exception:  # pragma: no cover - defensive
+        return '<unrepresentable>'
+
+
+def build_sentry_options(dsn, environment, release, traces_sample_rate,
+                         logs_level):
+    """
+    The keyword arguments for sentry_sdk.init().
+
+    Built here rather than inline in settings.py so the wiring is testable --
+    the scrubbers are a security control, and a security control nobody can
+    assert on is one that quietly stops being applied.
+    """
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    level = _resolve_log_level(logs_level)
+
+    logging_integration = LoggingIntegration(
+        # Forward records to Sentry Logs at this level and above. A level of
+        # None builds no handler at all, so "off" means off rather than
+        # meaning "a handler exists but a second flag suppresses it".
+        capture_sentry_logs=level is not None,
+        sentry_logs_level=level,
+        # No log record becomes a Sentry Issue. DjangoIntegration already
+        # captures every unhandled exception, and RequestLogMiddleware logs
+        # the resulting 5xx at ERROR -- with the default event_level of ERROR
+        # that produced two issues for one failure, on a plan that counts them.
+        # Issues are exceptions; the log stream is Logs.
+        event_level=None,
+    )
+
+    return {
+        'dsn': dsn,
+        'integrations': [DjangoIntegration(), logging_integration],
+        'environment': environment,
+        'release': release or None,
+        'send_default_pii': False,
+        'traces_sample_rate': traces_sample_rate,
+        'before_send': scrub_event,
+        'before_send_log': scrub_log,
+    }
+
+
+def _resolve_log_level(name):
+    """Level number for a name, or None to disable log forwarding entirely."""
+    cleaned = (name or '').strip().upper()
+    if cleaned in ('OFF', 'NONE', 'DISABLED'):
+        return None
+    level = logging.getLevelNamesMapping().get(cleaned)
+    return level if level is not None else logging.WARNING

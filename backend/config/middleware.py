@@ -133,11 +133,18 @@ class RequestLogMiddleware:
         # exception into a 500 response before it reaches this middleware, and
         # django.request already logs the traceback. Adding one would put the
         # same traceback in the stream three times.
+        context = request_log_context(request, response)
+
+        # The path comes from the context, which has already been redacted,
+        # rather than from request.path. Message arguments are shipped to
+        # Sentry Logs as their own attributes without passing through any
+        # formatter, so a raw path here would leave the site's redaction
+        # depending entirely on which handler happened to see the record.
         logger.log(
             level,
             "%s %s -> %s",
-            request.method, request.path, status,
-            extra=request_log_context(request, response),
+            request.method, context['path'], status,
+            extra=context,
         )
 
 
