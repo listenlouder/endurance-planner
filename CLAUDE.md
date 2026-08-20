@@ -35,6 +35,8 @@ perpetually online, Discord-native.
 | Static files | Whitenoise | Served from gunicorn directly |
 | Deployment | Railway (Railpack) | MySQL add-on, auto-deploy on push |
 | Domain | wearechecking.gg | Namecheap, CNAME to Railway |
+| Errors | Sentry (sentry-sdk 2.x) | Inert unless `SENTRY_DSN` is set |
+| Logs | stdout JSON | Captured by Railway; see Observability |
 
 **Dependencies are exact-pinned in `backend/requirements.txt`.** Railway
 rebuilds on every push, so a floating version lets a deploy change behaviour
@@ -52,27 +54,33 @@ endurance-planner/
 ├── backend/                    # Django project root
 │   ├── config/
 │   │   ├── settings.py         # All configuration
-│   │   ├── middleware.py       # CanonicalHostMiddleware
+│   │   ├── logging.py          # JsonFormatter, RequestIdFilter,
+│   │   │                       #   Sentry admin-key scrubber
+│   │   ├── middleware.py       # CanonicalHostMiddleware,
+│   │   │                       #   RequestLogMiddleware
 │   │   ├── urls.py             # Root URL config
 │   │   ├── test_settings.py    # SQLite in-memory overrides for tests
 │   │   └── wsgi.py
 │   ├── events/                 # Main app — all models and views
 │   │   ├── models.py           # User, Event, Driver, Availability,
-│   │   │                       #   StintAssignment, Feedback
+│   │   │                       #   StintAssignment, Feedback, ActivityLog
 │   │   ├── views.py            # All views
 │   │   ├── urls.py             # All URL patterns
+│   │   ├── activity.py         # Action-name map, log_detail()
+│   │   ├── middleware.py       # ActivityLogMiddleware
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (686 tests, 87 classes)
+│   │   ├── tests.py            # Full suite (928 tests, 129 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
 │   │   │                       #   seconds_to_hours_display, seconds_to_mmss
-│   │   ├── migrations/         # 0001-0009
+│   │   ├── migrations/         # 0001-0010
 │   │   └── management/
 │   │       └── commands/
-│   │           └── setup_discord_oauth.py
+│   │           ├── setup_discord_oauth.py
+│   │           └── prune_activity.py
 │   ├── templates/
 │   │   ├── base.html           # Fixed header, footer, bg-grid, login modal,
 │   │   │                       #   toast, message banners, feedback widget,
@@ -86,6 +94,7 @@ endurance-planner/
 │   │   │                       #   assignment (no separate page)
 │   │   ├── view.html
 │   │   ├── feedback_view.html
+│   │   ├── activity_view.html
 │   │   ├── admin_error.html
 │   │   ├── 404.html
 │   │   ├── 500.html
@@ -220,9 +229,33 @@ Unique together: `(event, stint_number)`
 text          TextField
 page_url      CharField(500)
 user_agent    CharField(500)
+request_id    CharField(32)   # ID of the last request the reporter saw
 submitted_at  DateTimeField
 ```
-No IP address is stored.
+No IP address is stored. `request_id` arrives on the `X-Last-Request-Id`
+header that `base.html` attaches to every HTMX request, so a report filed
+right after a failure points at that failure's log line.
+
+### ActivityLog
+```python
+occurred_at   DateTimeField   # auto_now_add, indexed
+request_id    CharField(32)
+action        CharField(64)   # 'signup.submit', 'admin.save_assignments'
+method        CharField(8)
+status_code   PositiveSmallIntegerField
+duration_ms   PositiveIntegerField
+user          FK(User)        # Nullable, SET_NULL
+visitor_id    CharField(32)   # wac_vid cookie, anonymous stitching
+event_id_ref  UUIDField       # Nullable - a bare UUID, deliberately not a FK
+path          CharField(300)  # Admin keys redacted before storage
+is_htmx       BooleanField
+detail        JSONField       # Extras from log_detail()
+```
+One row per handled request. **`event_id_ref` is not a foreign key** and that
+is deliberate: deleting an event is itself a recorded action, and a FK would
+either cascade that history away or null out the identifier needed to read
+it. `user` *is* a FK because Discord users are never deleted here and
+`select_related()` keeps the dashboard to one query.
 
 ---
 
@@ -253,6 +286,9 @@ No IP address is stored.
 /<event_id>/stints/<n>/reset-start/          clear stint start override
 /feedback/submit/                            feedback form POST
 /feedback/view/                              password-protected viewer
+/client-error/                               browser error reports (POST)
+/activity/view/                              password-protected usage dashboard
+/healthz/                                    Railway healthcheck (no DB)
 /accounts/                                   allauth URLs (Discord OAuth)
 ```
 
@@ -499,6 +535,24 @@ DISCORD_CLIENT_SECRET       From discord.com/developers
 FEEDBACK_PASSWORD           Password for /feedback/view/
 ```
 
+### Observability (all optional)
+```
+LOG_LEVEL                   Root log level. Default INFO.
+LOG_FORMAT                  json | console. Defaults to console when
+                              DJANGO_DEBUG is True, json otherwise. Keep json
+                              in production: Railway's log browser only
+                              searches text, so discrete keys are what make
+                              status, route and request_id filterable.
+SENTRY_DSN                  Unset means Sentry is entirely inert - nothing is
+                              initialised and no network calls are made.
+SENTRY_ENVIRONMENT          Label separating environments. Default production.
+SENTRY_TRACES_SAMPLE_RATE   Performance tracing, 0 to 1. Default 0; this is an
+                              error tracker, not an APM.
+ACTIVITY_LOG_ENABLED        Kill switch for ActivityLog writes. Default True.
+                              The log stream is unaffected either way.
+ACTIVITY_RETENTION_DAYS     Horizon for prune_activity. Default 90.
+```
+
 ### Optional
 ```
 SITE_DOMAIN                 Domain written to the django.contrib.sites row.
@@ -521,6 +575,10 @@ the setting exists to rescue. Verified:
 ALLOWED_HOSTS = [wearechecking.gg]                       www -> 400
 ALLOWED_HOSTS = [wearechecking.gg, www.wearechecking.gg] www -> 301
 ```
+
+Railway's `healthcheck.railway.app` is the exception: `settings.py` appends it
+to `ALLOWED_HOSTS` itself, so it never needs listing here. See the Healthcheck
+section under Observability for why leaving it to the env var breaks deploys.
 
 Whenever `CANONICAL_HOST` changes, add
 `https://<host>/accounts/discord/login/callback/` as a redirect URL in the
@@ -669,6 +727,170 @@ git push   # Railway auto-deploys
 
 ---
 
+## Observability
+
+Three layers, answering three different questions.
+
+| Layer | Question it answers | Where it lives |
+|---|---|---|
+| Structured stdout logs | "What happened at 14:02?" | Railway log browser |
+| Sentry | "Did anything break, and why?" | sentry.io |
+| `ActivityLog` table | "How are people using this?" | `/activity/view/` |
+
+Railway's log browser looked empty before this existed because the app emitted
+almost nothing — it is a log *browser*, not a log *source*. It is now fed real
+structured lines, but it is still not an error tracker: retention is short,
+there is no grouping, and nothing tells you an error happened. That is Sentry's
+job. And neither is a usage store, which is why the activity table exists.
+
+### The request ID
+
+`RequestLogMiddleware` mints a 12-character ID per request and puts it in four
+places: a `X-Request-ID` response header, every log line for that request, the
+Sentry event's `request_id` tag, and the `ActivityLog` row. Error pages print it
+as "Reference: …", and `base.html` sends the last one it saw back on the
+`X-Last-Request-Id` header, so feedback arrives already correlated.
+
+It travels in a ContextVar, which is what lets Django's own `django.request`
+logger emit correlated lines without knowing this project exists.
+`RequestIdFilter` falls back to `record.request` because Django logs a 4xx/5xx
+from `BaseHandler.get_response` — *after* the middleware chain has unwound and
+reset the ContextVar. Without that fallback the one line carrying the traceback
+would be the one line missing the ID needed to find it.
+
+### Middleware placement is load-bearing
+
+Both logging middlewares sit high in `MIDDLEWARE`, right after
+`CanonicalHostMiddleware`. Middleware is an onion and the *last* entry wraps
+only the view, so a bottom-placed logger never sees a request rejected by
+`CsrfViewMiddleware` — and CSRF rejections are exactly the failures worth
+seeing. `request.user` and `request.htmx` are still readable because both are
+inspected during the response phase, after inner middleware populated them.
+`MiddlewareOrderingTests` asserts all of this.
+
+### Admin keys must never be logged
+
+An event admin key is a credential sitting in a URL path, so it turns up in
+request lines, in `HTTP_REFERER`, and in the repr of the request object Django
+attaches to its own records. `config.logging.redact_admin_key()` rewrites
+`/admin/<key>/` to `/admin/[redacted]/`, and it is applied in three places:
+
+- `JsonFormatter`, on the **serialised** line rather than per value. Django
+  attaches the request *object*; only `default=str` turns it into text, so a
+  per-value pass runs too early to see it.
+- `request_log_context()`, covering `path` and `referer`.
+- `ActivityLogMiddleware`, before the path is written to the database.
+
+The allowlist in `_ADMIN_SUBROUTES` must list every literal segment that can
+follow `/admin/` in `events/urls.py`. A missing one gets redacted and that
+route becomes unreadable in the logs; a stale one is harmless. Segments
+starting with `<` are preserved so route *patterns* survive intact.
+
+`scrub_event()` is the Sentry `before_send` hook and walks the whole event
+rather than named fields — secrets turn up in stack-frame locals (`admin_key`
+is a view argument), breadcrumb data, and request reprs, and a field list
+cannot be kept in step with SDK versions.
+
+Note that `runserver`'s own `django.server` access line is *not* redacted. It
+is dev-only; gunicorn writes no access log in production.
+
+### Action names
+
+`events/activity.py` maps `(url_name, method)` to a stable label like
+`signup.submit`. Names are declared, not derived, because a renamed URL would
+otherwise split one feature's history into two buckets and break every
+month-over-month comparison. Unmapped routes fall back to
+`<url_name>.<method>`. `event_search` is excluded — it fires per keystroke —
+along with both operator consoles, so reading the data does not change it.
+
+Views add context with `log_detail(request, **fields)`; the middleware merges
+it into the row's `detail` JSON. Note that **422 responses need no
+instrumentation at all**: `status_code` alone answers "which admin form
+produces the most validation errors", which is the highest-value friction
+signal on the site.
+
+### The visitor cookie
+
+`wac_vid` holds a random uuid4 hex, httponly, SameSite=Lax, one year. It is
+first-party only and stitches an anonymous visitor's actions into a trail —
+without it "opened the signup form three times and never submitted" is
+unmeasurable. A cookie value that is not 32 hex characters is replaced rather
+than trusted.
+
+### Failure is never the site's problem
+
+`ActivityLogMiddleware` wraps its write in `try/except` and logs a warning.
+Analytics is the least important thing this application does and must never be
+the reason a page fails to render. `ActivityLogMiddlewareTests` asserts this
+with a patched-to-explode manager.
+
+`ACTIVITY_LOG_ENABLED=False` disables the writes entirely via
+`MiddlewareNotUsed`; the log stream is unaffected.
+
+### Client-side errors
+
+Server-side logging cannot see a JavaScript failure — the page breaks while
+every server signal reads 200 OK. `base.html` reports `htmx:responseError`,
+`htmx:sendError`, `window.onerror` and `unhandledrejection` to
+`/client-error/`, deduplicated and capped at 5 per page load so an error inside
+a render loop cannot flood the endpoint. It always answers 204 — returning an
+error to an error handler is how a reporting loop starts.
+
+Two server-side limits, and the distinction matters. The per-visitor cap (20
+an hour) is keyed on the `wac_vid` cookie, so a caller that discards it looks
+like a new visitor every request — it bounds one stuck browser, not an
+attacker. The global cap (500 an hour) is the one that actually bounds a
+public, unauthenticated write endpoint, because it depends on nothing the
+client supplies. Do not remove it on the grounds that the per-visitor limit
+already covers it.
+
+**422 is deliberately not reported.** It is this app's "here are your
+validation errors" response, already swapped into the page; reporting it would
+bury real faults in form typos.
+
+These rows carry `action='client.error'` with a 200 status, so the dashboard
+counts errors with `activity.ERROR_FILTER` rather than `status_code >= 400`. A
+status-only filter would miss every JavaScript failure on the site.
+
+The same change also fixed a UX bug: a 500 from an HTMX action used to produce
+complete silence, and now raises a toast.
+
+### Retention
+
+```powershell
+python manage.py prune_activity            # uses ACTIVITY_RETENTION_DAYS
+python manage.py prune_activity --dry-run
+```
+
+Needs a Railway cron service to run on a schedule. Until one exists it is a
+manual job, which at this volume is fine for a long time. A retention of 0 or
+less is refused rather than silently emptying the table.
+
+### Healthcheck
+
+`railway.toml` points at `/healthz/`, a plain-text view with no database
+access and no template. It used to point at `/`, which rendered the whole
+homepage — queries and all — on every probe and would have made the activity
+table mostly probe traffic. Both logging middlewares skip the path.
+
+**The probe arrives as `Host: healthcheck.railway.app`**, and getting a 200 back
+takes two things that are easy to get half right:
+
+- `settings.py` appends that host to `ALLOWED_HOSTS` unconditionally. Leave it
+  to the env var and a deploy dies as a bare 400 `DisallowedHost` — Django
+  validates the Host header in `CommonMiddleware.process_request`, which runs
+  on every request whatever the path, so exempting the path is not enough.
+- `CanonicalHostMiddleware` skips `HEALTHCHECK_PATH`. The probe host is by
+  definition not the canonical host, and a healthcheck scores a 301 exactly the
+  way it scores a 400.
+
+Get either half wrong and Railway reports only `1/1 replicas never became
+healthy` while the build log shows a clean build — because the build *is*
+clean. This cost one failed deploy already; `HealthcheckReachabilityTests`
+covers both halves plus the full middleware chain.
+
+---
+
 ## Stint calculation
 
 All calculation logic lives in `events/utils.py`:
@@ -726,6 +948,8 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
   accounts retroactively
 - Event ownership transfer between Discord users
 - Rate limiting on admin views
+- A Railway cron service to run `prune_activity` on a schedule (it is a
+  manual job until then)
 - Splitting `events/tests.py` into a `tests/` package
 - Redesigning `404.html`, `500.html` and `admin_error.html` — they still use
   generic Tailwind utilities (`rounded-lg`, default fonts) and violate the
@@ -744,7 +968,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**686 tests across 87 classes** in `backend/events/tests.py`, run against
+**928 tests across 129 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell
@@ -781,6 +1005,10 @@ python manage.py makemigrations --check --dry-run
 User feedback is stored in the `Feedback` model and viewable
 at `/feedback/view/` behind the `FEEDBACK_PASSWORD` environment
 variable. No email integration — DB only.
+
+Each submission carries the `request_id` of the last request that browser saw
+answered, so a report can be traced straight to its log line, its Sentry issue,
+and that visitor's trail at `/activity/view/?request=<id>`.
 
 ---
 
@@ -831,6 +1059,23 @@ initiate a login. The consequence is limited to being signed into one's own
 Discord account unexpectedly. Kept because the admin and my-availability
 views redirect to that URL directly, and requiring a POST would add an
 interstitial click to those flows.
+
+**Activity dashboard shares the feedback password**
+`/activity/view/` uses `FEEDBACK_PASSWORD` and the same session-gate pattern as
+the feedback viewer. Same operator, same trust level, and a second secret would
+be a second secret to rotate and leak. It carries the same caveats: no rate
+limiting, no lockout.
+
+**Admin keys are stripped from logs, Sentry and the activity table**
+See the Observability section. Verified end to end against a real `sentry_sdk`
+init with a capturing transport: the key appears in neither the envelope nor
+the log stream. Railway's own edge logging remains outside this project's
+control - that is the pre-existing residual risk documented above.
+
+**Visitor cookie**
+`wac_vid` is a random first-party identifier with no cross-site scope and no
+personal data. The site has no privacy page today; worth a footer line
+eventually.
 
 **Feedback viewer**
 `/feedback/view/` is protected by a single shared password compared with

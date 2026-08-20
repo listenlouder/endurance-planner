@@ -26,3 +26,20 @@ SILENCED_SYSTEM_CHECKS = [
     'models.W036',
     'sites.E101',
 ]
+
+# Route logging to a null handler. The middleware emits a line per request and
+# the suite makes thousands of them, which would bury a real traceback in
+# scroll-back — and a clean test run is the signal that nothing regressed.
+# assertLogs() installs its own handler, so tests that assert on log output
+# are unaffected by this.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'null': {'class': 'logging.NullHandler'},
+    },
+    'root': {
+        'handlers': ['null'],
+        'level': 'WARNING',
+    },
+}

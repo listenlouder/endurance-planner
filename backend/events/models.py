@@ -130,6 +130,10 @@ class Feedback(models.Model):
     text = models.TextField()
     page_url = models.CharField(max_length=500, blank=True)
     user_agent = models.CharField(max_length=500, blank=True)
+    # ID of the last request the reporter's browser saw answered, sent by the
+    # X-Last-Request-Id header from base.html. Turns "it broke when I saved"
+    # into the exact log line and Sentry issue for that save.
+    request_id = models.CharField(max_length=32, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -179,3 +183,71 @@ class StintAssignment(models.Model):
 
     def __str__(self):
         return f"Stint {self.stint_number} - {self.driver or 'Unassigned'}"
+
+
+class ActivityLog(models.Model):
+    """
+    One row per handled request: what was done, by whom, and what came back.
+
+    This is a usage record, not a log stream. The two answer different
+    questions — the stdout stream answers "what happened at 14:02", which
+    needs no schema and can expire; this table answers "how many people opened
+    the signup form and never submitted it", which needs a queryable shape and
+    has to survive long enough to compare months.
+
+    Deliberately not a Feedback-style anonymous table: attribution is the
+    point. Two asymmetries in how that attribution is stored:
+
+      * `user` is a real FK because Discord users are never deleted here and
+        select_related() keeps the dashboard to one query.
+      * `event_id_ref` is a bare UUID, NOT a FK. Deleting an event is itself
+        an action worth recording; a FK would either cascade that history away
+        or null out the one identifier needed to read it.
+    """
+
+    occurred_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    request_id = models.CharField(max_length=32, blank=True)
+    action = models.CharField(max_length=64)
+    method = models.CharField(max_length=8, blank=True)
+    status_code = models.PositiveSmallIntegerField(default=0)
+    duration_ms = models.PositiveIntegerField(default=0)
+    user = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+    )
+    visitor_id = models.CharField(max_length=32, blank=True)
+    event_id_ref = models.UUIDField(null=True, blank=True, db_index=True)
+    path = models.CharField(max_length=300, blank=True)
+    is_htmx = models.BooleanField(default=False)
+    detail = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        # The id tiebreak matters: two rows written in the same tick would
+        # otherwise come back in arbitrary order, and a trail read out of
+        # order is worse than no trail.
+        ordering = ['-occurred_at', '-id']
+        indexes = [
+            # The two queries the dashboard runs: counts per action over a
+            # window, and one visitor's trail in order. Both are composite
+            # and both lead with the column they filter on, so neither
+            # field needs a single-column index of its own.
+            #
+            # request_id is deliberately NOT indexed. It is looked up only
+            # when someone pastes an ID into the dashboard, and an index
+            # would be maintained on every request to speed up a query run
+            # a few times a month.
+            models.Index(fields=['action', '-occurred_at'],
+                         name='activity_action_time_idx'),
+            models.Index(fields=['visitor_id', '-occurred_at'],
+                         name='activity_visitor_time_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.occurred_at:%Y-%m-%d %H:%M} {self.action} -> {self.status_code}"
+
+    @property
+    def is_error(self):
+        return self.status_code >= 400

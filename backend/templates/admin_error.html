@@ -10,5 +10,11 @@
   <a href="/" class="mt-6 text-sm underline" style="color: var(--secondary);">
     &larr; Back to Home
   </a>
+
+  {% if request_id %}
+  <p class="text-xs mt-8" style="color: var(--text-dim);">
+    Reference: {{ request_id }}
+  </p>
+  {% endif %}
 </div>
 {% endblock %}

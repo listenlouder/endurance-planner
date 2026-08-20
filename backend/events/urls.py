@@ -28,4 +28,6 @@ urlpatterns = [
     path('<uuid:event_id>/stints/<int:stint_number>/reset-start/', views.reset_stint_start, name='reset_stint_start'),
     path('feedback/submit/', views.feedback_submit, name='feedback_submit'),
     path('feedback/view/', views.feedback_view, name='feedback_view'),
+    path('client-error/', views.client_error_report, name='client_error_report'),
+    path('activity/view/', views.activity_view, name='activity_view'),
 ]

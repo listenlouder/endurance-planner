@@ -1,0 +1,190 @@
+{% extends 'base.html' %}
+{% block title %}Activity — WeAreChecking{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  <h1 class="text-2xl font-bold mb-6" style="color: var(--primary);">
+    Activity
+  </h1>
+
+  {% if not authenticated %}
+
+  <div class="max-w-sm mx-auto mt-20">
+    <div class="card">
+      <h2 class="text-base font-bold mb-4">
+        Enter password to view activity
+      </h2>
+      {% if error %}
+      <p class="field-error mb-3">{{ error }}</p>
+      {% endif %}
+      <form method="post">
+        {% csrf_token %}
+        <div class="field">
+          <input type="password" name="password" placeholder="Password" autofocus>
+        </div>
+        <button type="submit" class="btn-primary w-full mt-3">
+          View Activity
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% else %}
+
+  <!-- Window selector -->
+  <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+    <div class="flex items-center gap-2">
+      {% for w in windows %}
+      <a href="?days={{ w }}"
+         class="text-xs px-3 py-1"
+         style="border: 1px solid {% if w == days %}var(--primary){% else %}var(--border){% endif %};
+                color: {% if w == days %}var(--primary){% else %}var(--text-mid){% endif %};">
+        {{ w }}d
+      </a>
+      {% endfor %}
+    </div>
+    <a href="?logout=1" class="text-xs underline" style="color: var(--text-dim);">
+      Log out
+    </a>
+  </div>
+
+  <!-- Totals -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+    <div class="stat-card accent">
+      <span class="stat-label">Requests</span>
+      <span class="stat-value">{{ totals.requests }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Visitors</span>
+      <span class="stat-value">{{ totals.visitors }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Discord users</span>
+      <span class="stat-value">{{ totals.users }}</span>
+    </div>
+    <div class="stat-card{% if totals.errors %} danger{% endif %}">
+      <span class="stat-label">Errors</span>
+      <span class="stat-value{% if totals.errors %} danger{% endif %}">{{ totals.errors }}</span>
+    </div>
+  </div>
+
+  <!-- Trail -->
+  {% if trail_visitor or trail_request %}
+  <h2 class="section-heading">Trail</h2>
+  <div class="mb-8 overflow-x-auto">
+    {% if trail %}
+    <p class="text-xs mb-2" style="color: var(--text-dim);">
+      Visitor {{ trail_visitor }} — oldest first, most recent {{ trail|length }} action{{ trail|pluralize }}.
+    </p>
+    <table class="unified-table">
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>Action</th>
+          <th>Status</th>
+          <th>ms</th>
+          <th>User</th>
+          <th>Request</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in trail %}
+        <tr {% if row.request_id == trail_request %}style="border-left: 3px solid var(--primary);"{% endif %}>
+          <td>{{ row.occurred_at|date:"M j H:i:s" }}</td>
+          <td>{{ row.action }}</td>
+          <td style="{% if row.is_error %}color: var(--danger);{% endif %}">{{ row.status_code }}</td>
+          <td>{{ row.duration_ms }}</td>
+          <td>{{ row.user.discord_username|default:"anon" }}</td>
+          <td style="color: var(--text-dim);">{{ row.request_id }}</td>
+          <td style="color: var(--text-mid);">{{ row.detail|default:"" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-sm" style="color: var(--text-dim);">
+      No activity found for that visitor or request ID.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Actions -->
+  <h2 class="section-heading">Actions</h2>
+  <div class="mb-8 overflow-x-auto">
+    {% if actions %}
+    <table class="unified-table">
+      <thead>
+        <tr>
+          <th>Action</th>
+          <th>Count</th>
+          <th>Errors</th>
+          <th>Error rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in actions %}
+        <tr>
+          <td>{{ row.action }}</td>
+          <td>{{ row.total }}</td>
+          <td style="{% if row.errors %}color: var(--danger);{% endif %}">{{ row.errors }}</td>
+          <td style="{% if row.errors %}color: var(--danger);{% endif %}">{{ row.error_rate }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-sm" style="color: var(--text-dim);">
+      No activity recorded in this window yet.
+    </p>
+    {% endif %}
+  </div>
+
+  <!-- Errors -->
+  <h2 class="section-heading">Recent errors</h2>
+  <div class="overflow-x-auto">
+    {% if recent_errors %}
+    <table class="unified-table">
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>Status</th>
+          <th>Action</th>
+          <th>User</th>
+          <th>Path</th>
+          <th>Request</th>
+          <th>Trail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in recent_errors %}
+        <tr>
+          <td>{{ row.occurred_at|date:"M j H:i:s" }}</td>
+          <td style="color: var(--danger);">{{ row.status_code }}</td>
+          <td>{{ row.action }}</td>
+          <td>{{ row.user.discord_username|default:"anon" }}</td>
+          <td style="color: var(--text-mid);">{{ row.path }}</td>
+          <td style="color: var(--text-dim);">{{ row.request_id }}</td>
+          <td>
+            {% if row.visitor_id %}
+            <a href="?days={{ days }}&visitor={{ row.visitor_id }}&request={{ row.request_id }}"
+               class="underline" style="color: var(--secondary);">view</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-sm" style="color: var(--text-dim);">
+      No errors in this window.
+    </p>
+    {% endif %}
+  </div>
+
+  {% endif %}
+
+</div>
+{% endblock %}

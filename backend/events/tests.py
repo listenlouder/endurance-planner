@@ -27,15 +27,42 @@ Test groups:
 
 import datetime as dt
 import json
+import logging
+import sys
 import uuid
 from datetime import timezone
+from io import StringIO
 from unittest.mock import patch
 
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.core.exceptions import MiddlewareNotUsed
+from django.core.management import call_command
+from django.http import HttpResponse
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
+from config.logging import (
+    JsonFormatter,
+    RequestIdFilter,
+    redact_admin_key,
+    request_id_var,
+    scrub_event,
+)
+from config import settings as prod_settings
+from config.middleware import client_ip
+
+from . import urls as events_urls
+from .activity import ACTION_NAMES, action_name, log_detail
 from .forms import EventCreateForm
-from .models import Availability, Driver, Event, Feedback, StintAssignment
+from .middleware import VISITOR_COOKIE, ActivityLogMiddleware
+from .models import (
+    ActivityLog,
+    Availability,
+    Driver,
+    Event,
+    Feedback,
+    StintAssignment,
+    User,
+)
 from .templatetags.tz_filters import (
     dict_get,
     seconds_to_hours_display,
@@ -52,7 +79,13 @@ from .utils import (
     total_stints,
     validate_stint_sanity,
 )
-from .views import _validate_and_save_field, _validate_signup_post
+from .views import (
+    ACTIVITY_DEFAULT_DAYS,
+    CLIENT_ERROR_GLOBAL_HOURLY_LIMIT,
+    CLIENT_ERROR_HOURLY_LIMIT,
+    _validate_and_save_field,
+    _validate_signup_post,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -7699,6 +7732,67 @@ class CanonicalHostAllowedHostsTests(SimpleTestCase):
         self.assertIn('every host you want redirected', env)
 
 
+class HealthcheckReachabilityTests(SimpleTestCase):
+    """
+    Railway probes the container as Host: healthcheck.railway.app — neither the
+    canonical host nor a host anyone thinks to configure. That failed a deploy
+    two ways over: leaving it out of ALLOWED_HOSTS turned the probe into a bare
+    400, and putting it in turned the probe into a 301. A healthcheck scores a
+    redirect exactly the way it scores a rejection, so both halves have to hold
+    at once or the replica never goes healthy.
+    """
+
+    PROBE_HOST = 'healthcheck.railway.app'
+    CANONICAL = 'wearechecking.gg'
+
+    def _overrides(self):
+        return dict(
+            CANONICAL_HOST=self.CANONICAL,
+            ALLOWED_HOSTS=[self.CANONICAL, self.PROBE_HOST],
+        )
+
+    def _probe(self, path):
+        with override_settings(**self._overrides()):
+            middleware = CanonicalHostMiddleware(lambda r: HttpResponse('ok'))
+            return middleware(RequestFactory(SERVER_NAME=self.PROBE_HOST).get(path))
+
+    def test_probe_host_is_allowed_without_being_configured(self):
+        # Appended by settings rather than left to the env var: nobody browses
+        # to this name, so it is a platform fact and not a deployment choice.
+        self.assertIn(self.PROBE_HOST, django_conf.ALLOWED_HOSTS)
+
+    def test_healthcheck_is_not_redirected_off_the_probe_host(self):
+        response = self._probe(django_conf.HEALTHCHECK_PATH)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_other_paths_on_the_probe_host_are_still_redirected(self):
+        # The exemption is scoped to the path, not to the host — an internal
+        # hostname must not become a way to bypass canonical redirects.
+        response = self._probe('/create/')
+
+        self.assertEqual(response.status_code, 301)
+
+    def test_probe_gets_200_through_the_whole_middleware_chain(self):
+        # The deploy failure itself: every layer has to agree, and testing the
+        # middleware alone would have missed the ALLOWED_HOSTS half entirely.
+        with override_settings(
+            CANONICAL_HOST=self.CANONICAL,
+            ALLOWED_HOSTS=[self.CANONICAL] + list(django_conf.ALLOWED_HOSTS),
+        ):
+            response = self.client.get(
+                django_conf.HEALTHCHECK_PATH, headers={'host': self.PROBE_HOST}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'ok')
+
+    def test_env_example_says_the_probe_host_needs_no_configuring(self):
+        env = django_conf.BASE_DIR.joinpath('.env.example').read_text(encoding='utf-8')
+
+        self.assertIn('healthcheck.railway.app', env)
+
+
 # ---------------------------------------------------------------------------
 # Stint assignment driver dropdown
 #
@@ -8021,3 +8115,1331 @@ class FixedContainingBlockRebaseTests(SimpleTestCase):
         keyframes = keyframes[:keyframes.index('}\n}') + 3]
 
         self.assertIn('transform', keyframes)
+
+
+# ---------------------------------------------------------------------------
+# Observability: config.logging formatters and filters
+# ---------------------------------------------------------------------------
+
+class JsonFormatterTests(SimpleTestCase):
+    """Tests for config.logging.JsonFormatter."""
+
+    def _record(self, **extra):
+        record = logging.LogRecord(
+            name='events.test', level=logging.INFO, pathname=__file__,
+            lineno=1, msg='saved %s', args=('assignments',), exc_info=None,
+        )
+        for key, value in extra.items():
+            setattr(record, key, value)
+        return record
+
+    def _format(self, record):
+        return json.loads(JsonFormatter().format(record))
+
+    def test_output_is_a_single_json_object(self):
+        payload = self._format(self._record())
+
+        self.assertIsInstance(payload, dict)
+
+    def test_message_is_rendered_with_its_arguments(self):
+        payload = self._format(self._record())
+
+        self.assertEqual(payload['msg'], 'saved assignments')
+
+    def test_level_name_is_included(self):
+        payload = self._format(self._record())
+
+        self.assertEqual(payload['level'], 'INFO')
+
+    def test_timestamp_is_utc_iso_with_a_z_suffix(self):
+        payload = self._format(self._record())
+
+        self.assertTrue(payload['ts'].endswith('Z'), payload['ts'])
+
+    def test_extra_fields_are_promoted_to_top_level_keys(self):
+        payload = self._format(self._record(status=422, route='signup/'))
+
+        self.assertEqual(payload['status'], 422)
+
+    def test_request_id_is_included_when_set(self):
+        payload = self._format(self._record(request_id='abc123'))
+
+        self.assertEqual(payload['request_id'], 'abc123')
+
+    def test_request_id_is_omitted_when_blank(self):
+        payload = self._format(self._record(request_id=''))
+
+        self.assertNotIn('request_id', payload)
+
+    def test_standard_record_attributes_are_not_leaked_into_the_payload(self):
+        payload = self._format(self._record())
+
+        self.assertNotIn('pathname', payload)
+
+    def test_exception_is_rendered_as_a_traceback_field(self):
+        try:
+            raise ValueError('boom')
+        except ValueError:
+            record = self._record()
+            record.exc_info = sys.exc_info()
+
+        payload = self._format(record)
+
+        self.assertIn('ValueError: boom', payload['traceback'])
+
+    def test_unserialisable_extra_degrades_to_its_repr(self):
+        payload = self._format(self._record(obj=object()))
+
+        self.assertIn('object object at', payload['obj'])
+
+    def test_admin_key_is_redacted_from_the_message(self):
+        record = self._record()
+        record.msg = 'Internal Server Error: /e1/admin/SECRETKEY1234567890/'
+        record.args = ()
+
+        payload = self._format(record)
+
+        self.assertNotIn('SECRETKEY1234567890', payload['msg'])
+
+    def test_admin_key_is_redacted_from_a_non_string_extra(self):
+        # Django attaches the request *object* to its own records. Only
+        # default=str turns it into text, so redaction has to happen after
+        # serialisation or the raw URL slips through in its repr.
+        class FakeRequest:
+            def __repr__(self):
+                return "<WSGIRequest: GET '/e1/admin/SECRETKEY1234567890/'>"
+
+        payload = self._format(self._record(request=FakeRequest()))
+
+        self.assertNotIn('SECRETKEY1234567890', json.dumps(payload))
+
+    def test_admin_key_is_redacted_from_a_nested_extra(self):
+        payload = self._format(self._record(
+            client_error={'page_url': '/e1/admin/SECRETKEY1234567890/'}
+        ))
+
+        self.assertNotIn('SECRETKEY1234567890', json.dumps(payload))
+
+
+class RequestIdFilterTests(SimpleTestCase):
+    """Tests for config.logging.RequestIdFilter."""
+
+    def _record(self):
+        return logging.LogRecord(
+            name='events.test', level=logging.INFO, pathname=__file__,
+            lineno=1, msg='hello', args=(), exc_info=None,
+        )
+
+    def test_stamps_the_current_context_request_id(self):
+        token = request_id_var.set('deadbeef')
+        record = self._record()
+        try:
+            RequestIdFilter().filter(record)
+        finally:
+            request_id_var.reset(token)
+
+        self.assertEqual(record.request_id, 'deadbeef')
+
+    def test_stamps_an_empty_string_outside_a_request(self):
+        record = self._record()
+
+        RequestIdFilter().filter(record)
+
+        self.assertEqual(record.request_id, '')
+
+    def test_never_drops_the_record(self):
+        self.assertTrue(RequestIdFilter().filter(self._record()))
+
+
+# ---------------------------------------------------------------------------
+# Observability: Sentry scrubbing
+# ---------------------------------------------------------------------------
+
+class RedactAdminKeyTests(SimpleTestCase):
+    """The admin key is a credential - config.logging.redact_admin_key()."""
+
+    def test_admin_key_segment_is_replaced(self):
+        redacted = redact_admin_key('/e1/admin/aB3xKq9zLmNp2Rt7Wc/')
+
+        self.assertNotIn('aB3xKq9zLmNp2Rt7Wc', redacted)
+
+    def test_known_admin_subroutes_are_preserved(self):
+        self.assertEqual(
+            redact_admin_key('/e1/admin/save-details/'),
+            '/e1/admin/save-details/',
+        )
+
+    def test_every_admin_subroute_in_the_url_config_survives_redaction(self):
+        # A sub-route missing from the allowlist would be redacted, making
+        # ordinary admin traffic unreadable in Sentry.
+        for name in ('edit-driver', 'remove-driver', 'add-driver',
+                     'create-stints', 'save-details', 'save-calc',
+                     'save-assignments', 'delete-event'):
+            with self.subTest(subroute=name):
+                path = '/e1/admin/' + name + '/'
+                self.assertEqual(redact_admin_key(path), path)
+
+    def test_absolute_urls_are_redacted(self):
+        redacted = redact_admin_key(
+            'https://wearechecking.gg/e1/admin/SECRETKEY123456/'
+        )
+
+        self.assertNotIn('SECRETKEY123456', redacted)
+
+    def test_text_without_an_admin_path_is_returned_unchanged(self):
+        self.assertEqual(redact_admin_key('/e1/signup/'), '/e1/signup/')
+
+    def test_url_pattern_placeholders_are_preserved(self):
+        # The route pattern names the key parameter, it does not contain a
+        # key -- redacting it would hide which route a log line came from.
+        route = '<uuid:event_id>/admin/<str:admin_key>/'
+
+        self.assertEqual(redact_admin_key(route), route)
+
+
+class ScrubEventTests(SimpleTestCase):
+    """Tests for config.logging.scrub_event() - the Sentry before_send hook."""
+
+    def test_admin_key_is_stripped_from_the_request_url(self):
+        event = scrub_event({'request': {'url': 'https://x/e1/admin/SECRETKEY123456/'}})
+
+        self.assertNotIn('SECRETKEY123456', event['request']['url'])
+
+    def test_admin_key_local_variable_is_redacted(self):
+        # Sentry captures stack-frame locals and admin_page() takes the key as
+        # an argument - the leak a URL-only scrubber would miss entirely.
+        event = scrub_event({
+            'exception': {'values': [{'stacktrace': {'frames': [
+                {'vars': {'admin_key': 'SECRETKEY123456'}},
+            ]}}]},
+        })
+        frame = event['exception']['values'][0]['stacktrace']['frames'][0]
+
+        self.assertEqual(frame['vars']['admin_key'], '[redacted]')
+
+    def test_admin_key_in_breadcrumb_data_is_redacted(self):
+        event = scrub_event({'breadcrumbs': {'values': [
+            {'data': {'url': '/e1/admin/SECRETKEY123456/'}},
+        ]}})
+        crumb = event['breadcrumbs']['values'][0]
+
+        self.assertNotIn('SECRETKEY123456', crumb['data']['url'])
+
+    def test_password_field_is_redacted(self):
+        event = scrub_event({'request': {'data': {'password': 'hunter2'}}})
+
+        self.assertEqual(event['request']['data']['password'], '[redacted]')
+
+    def test_cookie_header_is_dropped_entirely(self):
+        event = scrub_event({'request': {'headers': {'Cookie': 'sessionid=abc'}}})
+
+        self.assertNotIn('Cookie', event['request']['headers'])
+
+    def test_authorization_header_is_dropped_entirely(self):
+        event = scrub_event({'request': {'headers': {'Authorization': 'Bearer x'}}})
+
+        self.assertNotIn('Authorization', event['request']['headers'])
+
+    def test_sensitive_key_matching_ignores_case(self):
+        event = scrub_event({'extra': {'Admin_Key': 'SECRETKEY123456'}})
+
+        self.assertEqual(event['extra']['Admin_Key'], '[redacted]')
+
+    def test_harmless_fields_are_left_alone(self):
+        event = scrub_event({'request': {'url': 'https://x/e1/signup/'}})
+
+        self.assertEqual(event['request']['url'], 'https://x/e1/signup/')
+
+    def test_never_raises_on_a_malformed_event(self):
+        class Exploding:
+            def items(self):
+                raise RuntimeError('nope')
+
+        # Returning the event unscrubbed would be wrong, but dropping the
+        # error report entirely would be worse.
+        self.assertIsNotNone(scrub_event({'request': Exploding()}))
+
+
+class SentryConfigurationTests(SimpleTestCase):
+    """Sentry must be inert until a DSN is supplied."""
+
+    def test_dsn_setting_exists(self):
+        self.assertTrue(hasattr(django_conf, 'SENTRY_DSN'))
+
+    def test_sentry_sdk_is_pinned_in_requirements(self):
+        requirements = django_conf.BASE_DIR.joinpath(
+            'requirements.txt'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('sentry-sdk==', requirements)
+
+
+# ---------------------------------------------------------------------------
+# Observability: RequestLogMiddleware
+# ---------------------------------------------------------------------------
+
+class RequestLogMiddlewareTests(TestCase):
+    """Tests for config.middleware.RequestLogMiddleware."""
+
+    def test_response_carries_the_request_id_header(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertTrue(response['X-Request-ID'])
+
+    def test_each_request_gets_a_distinct_id(self):
+        first = self.client.get(reverse('home'))['X-Request-ID']
+        second = self.client.get(reverse('home'))['X-Request-ID']
+
+        self.assertNotEqual(first, second)
+
+    def test_successful_request_logs_at_info(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('home'))
+
+        self.assertEqual(captured.records[0].levelname, 'INFO')
+
+    def test_client_error_logs_at_warning(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get('/no-such-page/')
+
+        self.assertEqual(captured.records[0].levelname, 'WARNING')
+
+    def test_log_record_carries_the_status_code(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('home'))
+
+        self.assertEqual(captured.records[0].status, 200)
+
+    def test_log_record_carries_the_resolved_route_pattern(self):
+        event = save_event()
+
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('view_event', kwargs={'event_id': event.id}))
+
+        self.assertEqual(captured.records[0].route, '<uuid:event_id>/view/')
+
+    def test_route_pattern_is_logged_rather_than_the_uuid_path(self):
+        # Grouping by raw path yields one bucket per request, which answers
+        # nothing. The pattern is what makes the volume aggregatable.
+        event = save_event()
+
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('view_event', kwargs={'event_id': event.id}))
+
+        self.assertNotIn(str(event.id), captured.records[0].route)
+
+    def test_log_record_carries_the_url_name(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('home'))
+
+        self.assertEqual(captured.records[0].url_name, 'home')
+
+    def test_anonymous_user_is_recorded_as_anon(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('home'))
+
+        self.assertEqual(captured.records[0].user, 'anon')
+
+    def test_authenticated_user_is_recorded_by_discord_username(self):
+        user = User.objects.create(username='1', discord_id='1',
+                                   discord_username='racer')
+        self.client.force_login(user)
+
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('home'))
+
+        self.assertEqual(captured.records[0].user, 'racer')
+
+    def test_healthcheck_requests_are_not_logged(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get('/healthz/')
+            self.client.get(reverse('home'))
+
+        self.assertEqual(len(captured.records), 1)
+
+    def test_healthcheck_response_has_no_request_id_header(self):
+        response = self.client.get('/healthz/')
+
+        self.assertNotIn('X-Request-ID', response)
+
+    def test_healthcheck_returns_ok(self):
+        response = self.client.get('/healthz/')
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_context_var_is_reset_after_the_request(self):
+        # A leaked ID would mislabel every later log line on this worker.
+        self.client.get(reverse('home'))
+
+        self.assertEqual(request_id_var.get(''), '')
+
+
+class MiddlewareOrderingTests(SimpleTestCase):
+    """Placement is load-bearing, so assert it rather than trusting it."""
+
+    def test_request_logger_is_registered(self):
+        self.assertIn('config.middleware.RequestLogMiddleware',
+                      django_conf.MIDDLEWARE)
+
+    def test_activity_logger_is_registered(self):
+        self.assertIn('events.middleware.ActivityLogMiddleware',
+                      django_conf.MIDDLEWARE)
+
+    def test_request_logger_runs_outside_the_csrf_middleware(self):
+        # Middleware is an onion: placed after CSRF the logger would never see
+        # a CSRF rejection, which is exactly the failure worth logging.
+        order = list(django_conf.MIDDLEWARE)
+
+        self.assertLess(order.index('config.middleware.RequestLogMiddleware'),
+                        order.index('django.middleware.csrf.CsrfViewMiddleware'))
+
+    def test_activity_logger_runs_inside_the_request_logger(self):
+        # It reuses the request ID and start time the request logger sets.
+        order = list(django_conf.MIDDLEWARE)
+
+        self.assertLess(order.index('config.middleware.RequestLogMiddleware'),
+                        order.index('events.middleware.ActivityLogMiddleware'))
+
+    def test_canonical_host_middleware_still_runs_first_of_the_three(self):
+        order = list(django_conf.MIDDLEWARE)
+
+        self.assertLess(order.index('config.middleware.CanonicalHostMiddleware'),
+                        order.index('config.middleware.RequestLogMiddleware'))
+
+
+class LoggingSettingsTests(SimpleTestCase):
+    """The LOGGING dict is what gives every logger somewhere to write.
+
+    Asserted against config.settings rather than the active configuration:
+    test_settings deliberately swaps LOGGING for a null handler so the suite
+    stays readable, which would leave these assertions testing nothing.
+    """
+
+    @property
+    def logging(self):
+        return prod_settings.LOGGING
+
+    def test_logging_is_configured(self):
+        self.assertTrue(self.logging)
+
+    def test_root_logger_has_a_handler(self):
+        self.assertTrue(self.logging['root']['handlers'])
+
+    def test_django_request_logger_has_a_handler(self):
+        # Without this Django's own 4xx/5xx logs go nowhere at all.
+        self.assertTrue(self.logging['loggers']['django.request']['handlers'])
+
+    def test_disallowed_host_is_suppressed(self):
+        # Port scanners trip this constantly; left loud it buries real errors.
+        self.assertEqual(
+            self.logging['loggers']['django.security.DisallowedHost']['level'],
+            'CRITICAL',
+        )
+
+    def test_database_query_logging_stays_off(self):
+        self.assertEqual(
+            self.logging['loggers']['django.db.backends']['level'], 'WARNING'
+        )
+
+    def test_healthcheck_path_setting_matches_the_railway_config(self):
+        railway = django_conf.BASE_DIR.parent.joinpath(
+            'railway.toml'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn(django_conf.HEALTHCHECK_PATH, railway)
+
+
+class AdminKeyRedactionInRecordsTests(TestCase):
+    """The admin key is a credential and must not be stored by logging."""
+
+    def setUp(self):
+        self.event = save_event()
+        self.url = reverse('admin_page', kwargs={
+            'event_id': self.event.id, 'admin_key': self.event.admin_key})
+
+    def test_request_log_line_does_not_contain_the_key(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(self.url)
+
+        self.assertNotIn(self.event.admin_key, captured.records[0].path)
+
+    def test_request_log_line_still_shows_it_was_an_admin_request(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(self.url)
+
+        self.assertIn('/admin/', captured.records[0].path)
+
+    def test_activity_row_does_not_store_the_key(self):
+        self.client.get(self.url)
+
+        paths = ActivityLog.objects.values_list('path', flat=True)
+        self.assertNotIn(self.event.admin_key, ' '.join(paths))
+
+    def test_referer_header_is_redacted(self):
+        with self.assertLogs('config.middleware', level='INFO') as captured:
+            self.client.get(reverse('home'), HTTP_REFERER='http://x' + self.url)
+
+        self.assertNotIn(self.event.admin_key, captured.records[0].referer)
+
+
+class ClientIpTests(SimpleTestCase):
+    """Tests for config.middleware.client_ip()."""
+
+    def test_prefers_the_forwarded_header_behind_railways_proxy(self):
+        request = RequestFactory().get('/', HTTP_X_FORWARDED_FOR='1.2.3.4, 10.0.0.1')
+
+        self.assertEqual(client_ip(request), '1.2.3.4')
+
+    def test_falls_back_to_the_remote_address(self):
+        request = RequestFactory().get('/', REMOTE_ADDR='9.9.9.9')
+
+        self.assertEqual(client_ip(request), '9.9.9.9')
+
+
+class ErrorPageRequestIdTests(TestCase):
+    """The reference on an error page is what makes a bug report traceable."""
+
+    def test_not_found_page_shows_the_request_id(self):
+        response = self.client.get('/no-such-page/')
+
+        self.assertContains(response, 'Reference:', status_code=404)
+
+    def test_not_found_page_shows_the_id_from_the_response_header(self):
+        response = self.client.get('/no-such-page/')
+
+        self.assertContains(response, response['X-Request-ID'], status_code=404)
+
+    def test_permission_denied_page_shows_the_request_id(self):
+        event = save_event()
+        url = reverse('admin_save_details', kwargs={'event_id': event.id})
+
+        response = self.client.post(url)
+
+        self.assertContains(response, 'Reference:', status_code=403)
+
+
+# ---------------------------------------------------------------------------
+# Observability: action naming
+# ---------------------------------------------------------------------------
+
+class ActionNameTests(SimpleTestCase):
+    """Tests for events.activity.action_name()."""
+
+    def test_mapped_pair_returns_its_stable_label(self):
+        self.assertEqual(action_name('signup', 'POST'), 'signup.submit')
+
+    def test_same_url_under_a_different_method_is_a_different_action(self):
+        self.assertNotEqual(action_name('signup', 'GET'),
+                            action_name('signup', 'POST'))
+
+    def test_unmapped_pair_falls_back_to_url_name_and_method(self):
+        self.assertEqual(action_name('some_new_view', 'POST'),
+                         'some_new_view.post')
+
+    def test_missing_url_name_returns_empty(self):
+        self.assertEqual(action_name('', 'GET'), '')
+
+    def test_every_mapped_url_name_still_exists_in_the_url_config(self):
+        # A stale mapping is a label that can never be produced, which is how
+        # a dashboard quietly stops reporting a feature.
+        known = {p.name for p in events_urls.urlpatterns if p.name}
+        known.add('client_error_report')
+
+        for url_name, _method in ACTION_NAMES:
+            with self.subTest(url_name=url_name):
+                self.assertIn(url_name, known)
+
+
+class LogDetailTests(SimpleTestCase):
+    """Tests for events.activity.log_detail()."""
+
+    def test_fields_are_attached_to_the_request(self):
+        request = RequestFactory().get('/')
+
+        log_detail(request, slots=4)
+
+        self.assertEqual(request.activity_detail, {'slots': 4})
+
+    def test_repeated_calls_accumulate(self):
+        request = RequestFactory().get('/')
+
+        log_detail(request, slots=4)
+        log_detail(request, stints=2)
+
+        self.assertEqual(request.activity_detail, {'slots': 4, 'stints': 2})
+
+
+# ---------------------------------------------------------------------------
+# Observability: ActivityLogMiddleware
+# ---------------------------------------------------------------------------
+
+class ActivityLogMiddlewareTests(TestCase):
+    """Tests for events.middleware.ActivityLogMiddleware."""
+
+    def test_a_request_writes_one_row(self):
+        self.client.get(reverse('home'))
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_row_records_the_mapped_action(self):
+        self.client.get(reverse('home'))
+
+        self.assertEqual(ActivityLog.objects.get().action, 'page.home')
+
+    def test_row_records_the_status_code(self):
+        self.client.get(reverse('home'))
+
+        self.assertEqual(ActivityLog.objects.get().status_code, 200)
+
+    def test_row_records_the_request_method(self):
+        self.client.get(reverse('home'))
+
+        self.assertEqual(ActivityLog.objects.get().method, 'GET')
+
+    def test_row_shares_the_request_id_with_the_response_header(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertEqual(ActivityLog.objects.get().request_id,
+                         response['X-Request-ID'])
+
+    def test_row_records_the_event_id_from_the_url(self):
+        event = save_event()
+
+        self.client.get(reverse('view_event', kwargs={'event_id': event.id}))
+
+        self.assertEqual(ActivityLog.objects.get().event_id_ref, event.id)
+
+    def test_row_has_no_event_id_for_a_pathless_view(self):
+        self.client.get(reverse('home'))
+
+        self.assertIsNone(ActivityLog.objects.get().event_id_ref)
+
+    def test_row_links_an_authenticated_user(self):
+        user = User.objects.create(username='1', discord_id='1',
+                                   discord_username='racer')
+        self.client.force_login(user)
+
+        self.client.get(reverse('home'))
+
+        self.assertEqual(ActivityLog.objects.first().user, user)
+
+    def test_row_has_no_user_when_anonymous(self):
+        self.client.get(reverse('home'))
+
+        self.assertIsNone(ActivityLog.objects.get().user)
+
+    def test_unresolved_url_is_recorded_as_not_found(self):
+        self.client.get('/no-such-page/')
+
+        self.assertEqual(ActivityLog.objects.get().action, 'page.not_found')
+
+    def test_healthcheck_writes_no_row(self):
+        self.client.get('/healthz/')
+
+        self.assertEqual(ActivityLog.objects.count(), 0)
+
+    def test_search_writes_no_row(self):
+        # It fires per keystroke; logging it would make the table mostly noise.
+        self.client.get(reverse('event_search'), {'q': 'spa'},
+                        HTTP_HX_REQUEST='true')
+
+        self.assertEqual(ActivityLog.objects.count(), 0)
+
+    def test_detail_from_the_view_is_stored_on_the_row(self):
+        event = save_event()
+
+        self.client.post(reverse('signup', kwargs={'event_id': event.id}), {
+            'driver_name': 'Bee',
+            'timezone': 'UTC',
+            'slots': ['2026-06-01T12:00:00Z'],
+        })
+
+        self.assertIn('slots', ActivityLog.objects.first().detail)
+
+    def test_a_failed_write_does_not_break_the_response(self):
+        # Analytics is the least important thing this app does; it must never
+        # be the reason a page fails to render.
+        with patch.object(ActivityLog.objects, 'create',
+                          side_effect=RuntimeError('db gone')):
+            response = self.client.get(reverse('home'))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_a_failed_write_is_logged(self):
+        with patch.object(ActivityLog.objects, 'create',
+                          side_effect=RuntimeError('db gone')):
+            with self.assertLogs('events.middleware', level='WARNING') as captured:
+                self.client.get(reverse('home'))
+
+        self.assertIn('activity log write failed', captured.output[0])
+
+
+class VisitorCookieTests(TestCase):
+    """The anonymous visitor ID is what makes a signup funnel measurable."""
+
+    def test_first_response_sets_the_visitor_cookie(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertIn(VISITOR_COOKIE, response.cookies)
+
+    def test_visitor_cookie_is_http_only(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertTrue(response.cookies[VISITOR_COOKIE]['httponly'])
+
+    def test_visitor_cookie_is_same_site_lax(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertEqual(response.cookies[VISITOR_COOKIE]['samesite'], 'Lax')
+
+    def test_existing_cookie_is_not_reissued(self):
+        self.client.get(reverse('home'))
+
+        response = self.client.get(reverse('home'))
+
+        self.assertNotIn(VISITOR_COOKIE, response.cookies)
+
+    def test_two_requests_from_one_browser_share_a_visitor_id(self):
+        self.client.get(reverse('home'))
+        self.client.get(reverse('home'))
+
+        ids = set(ActivityLog.objects.values_list('visitor_id', flat=True))
+        self.assertEqual(len(ids), 1)
+
+    def test_a_forged_cookie_value_is_replaced(self):
+        self.client.cookies[VISITOR_COOKIE] = 'not-a-uuid-hex'
+
+        self.client.get(reverse('home'))
+
+        self.assertNotEqual(ActivityLog.objects.get().visitor_id,
+                            'not-a-uuid-hex')
+
+    def test_replacement_visitor_id_is_a_uuid_hex(self):
+        self.client.cookies[VISITOR_COOKIE] = 'not-a-uuid-hex'
+
+        self.client.get(reverse('home'))
+
+        self.assertEqual(len(ActivityLog.objects.get().visitor_id), 32)
+
+
+class ActivityLogDisabledTests(SimpleTestCase):
+    """ACTIVITY_LOG_ENABLED is a kill switch, so it has to actually switch."""
+
+    def test_middleware_opts_out_when_disabled(self):
+        with override_settings(ACTIVITY_LOG_ENABLED=False):
+            with self.assertRaises(MiddlewareNotUsed):
+                ActivityLogMiddleware(lambda r: HttpResponse('ok'))
+
+    def test_middleware_is_used_when_enabled(self):
+        with override_settings(ACTIVITY_LOG_ENABLED=True):
+            self.assertIsNotNone(ActivityLogMiddleware(lambda r: HttpResponse('ok')))
+
+
+class ActivityLogModelTests(TestCase):
+    """Tests for the ActivityLog model itself."""
+
+    def test_rows_written_in_the_same_tick_order_deterministically(self):
+        # Without the id tiebreak these come back in arbitrary order, and a
+        # trail read out of order is worse than no trail at all.
+        stamp = dt.datetime.now(timezone.utc)
+        rows = ActivityLog.objects.bulk_create([
+            ActivityLog(action='page.home', status_code=200) for _ in range(5)
+        ])
+        ActivityLog.objects.update(occurred_at=stamp)
+
+        ids = list(ActivityLog.objects.values_list('id', flat=True))
+
+        self.assertEqual(ids, sorted([r.id for r in rows], reverse=True))
+
+    def test_is_error_is_true_for_a_server_error(self):
+        row = ActivityLog(action='page.home', status_code=500)
+
+        self.assertTrue(row.is_error)
+
+    def test_is_error_is_false_for_a_success(self):
+        row = ActivityLog(action='page.home', status_code=200)
+
+        self.assertFalse(row.is_error)
+
+    def test_action_has_no_redundant_single_column_index(self):
+        # The composite index leads with action, so a second index on it
+        # alone is pure write cost on a table written once per request.
+        field = ActivityLog._meta.get_field('action')
+
+        self.assertFalse(field.db_index)
+
+    def test_visitor_id_has_no_redundant_single_column_index(self):
+        field = ActivityLog._meta.get_field('visitor_id')
+
+        self.assertFalse(field.db_index)
+
+    def test_composite_indexes_lead_with_the_filtered_column(self):
+        leads = {ix.fields[0] for ix in ActivityLog._meta.indexes}
+
+        self.assertEqual(leads, {'action', 'visitor_id'})
+
+    def test_rows_survive_deletion_of_the_event_they_describe(self):
+        # event_id_ref is a bare UUID, not an FK, precisely so that deleting
+        # an event does not erase the record of it having been deleted.
+        event = save_event()
+        ActivityLog.objects.create(action='admin.delete_event',
+                                   event_id_ref=event.id, status_code=302)
+
+        event.delete()
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_event_id_survives_deletion_of_the_event(self):
+        event = save_event()
+        # Captured up front: Django clears the PK on the in-memory
+        # instance once it has been deleted.
+        event_id = event.id
+        ActivityLog.objects.create(action='admin.delete_event',
+                                   event_id_ref=event_id, status_code=302)
+
+        event.delete()
+
+        self.assertEqual(ActivityLog.objects.get().event_id_ref, event_id)
+
+
+# ---------------------------------------------------------------------------
+# Observability: view instrumentation
+# ---------------------------------------------------------------------------
+
+class ViewInstrumentationTests(TestCase):
+    """Views record what the request line alone cannot show."""
+
+    def _row(self, action):
+        return ActivityLog.objects.filter(action=action).first()
+
+    def test_signup_records_the_slot_count(self):
+        event = save_event()
+
+        self.client.post(reverse('signup', kwargs={'event_id': event.id}), {
+            'driver_name': 'Bee',
+            'timezone': 'UTC',
+            'slots': ['2026-06-01T12:00:00Z', '2026-06-01T12:30:00Z'],
+        })
+
+        self.assertEqual(self._row('signup.submit').detail['slots'], 2)
+
+    def test_rejected_signup_records_which_field_failed(self):
+        # The clearest friction signal on the site: what turns people away
+        # from the one form they came here to fill in.
+        event = save_event()
+
+        self.client.post(reverse('signup', kwargs={'event_id': event.id}), {
+            'driver_name': '',
+            'timezone': 'UTC',
+        })
+
+        self.assertIn('driver_name',
+                      self._row('signup.submit').detail['invalid_fields'])
+
+    def test_event_creation_records_the_new_event_id(self):
+        self.client.post(reverse('event_create'), {
+            'name': 'Spa 6h',
+            'date': '2027-06-01',
+            'start_time_utc': '12:00',
+            'length_hours': 6,
+        })
+        event = Event.objects.first()
+
+        self.assertEqual(self._row('event.create').detail['created_event'],
+                         str(event.id))
+
+    def test_saving_assignments_records_the_stint_count(self):
+        event = save_event()
+        session = self.client.session
+        session['admin_' + str(event.id)] = True
+        session.save()
+
+        self.client.post(
+            reverse('admin_save_assignments', kwargs={'event_id': event.id})
+        )
+
+        self.assertIn('stints', self._row('admin.save_assignments').detail)
+
+    def test_deleting_an_event_records_its_name(self):
+        event = save_event(name='Le Mans 24')
+        session = self.client.session
+        session['admin_' + str(event.id)] = True
+        session.save()
+
+        self.client.post(
+            reverse('admin_delete_event', kwargs={'event_id': event.id}),
+            {'confirm_name': 'DELETE'},
+        )
+
+        self.assertEqual(self._row('admin.delete_event').detail['event_name'],
+                         'Le Mans 24')
+
+    def test_rejected_detail_save_records_the_invalid_fields(self):
+        event = save_event()
+        session = self.client.session
+        session['admin_' + str(event.id)] = True
+        session.save()
+
+        self.client.post(
+            reverse('admin_save_details', kwargs={'event_id': event.id}),
+            {'name': '', 'date': 'nonsense', 'start_time_utc': '12:00',
+             'length_hours': 6},
+        )
+
+        self.assertIn('name',
+                      self._row('admin.save_details').detail['invalid_fields'])
+
+
+class FeedbackRequestIdTests(TestCase):
+    """Feedback carries the ID of the request the reporter last saw."""
+
+    def test_request_id_header_is_stored_on_the_feedback(self):
+        self.client.post(reverse('feedback_submit'), {'text': 'It broke'},
+                         HTTP_X_LAST_REQUEST_ID='abc123def456')
+
+        self.assertEqual(Feedback.objects.get().request_id, 'abc123def456')
+
+    def test_missing_header_leaves_the_field_blank(self):
+        self.client.post(reverse('feedback_submit'), {'text': 'Nice work'})
+
+        self.assertEqual(Feedback.objects.get().request_id, '')
+
+    def test_oversized_header_is_truncated_to_the_column_width(self):
+        self.client.post(reverse('feedback_submit'), {'text': 'x'},
+                         HTTP_X_LAST_REQUEST_ID='y' * 200)
+
+        self.assertEqual(len(Feedback.objects.get().request_id), 32)
+
+    def test_base_template_sends_the_header_on_every_htmx_request(self):
+        base = _read_template('base.html')
+
+        self.assertIn('X-Last-Request-Id', base)
+
+    def test_base_template_refreshes_the_id_from_htmx_responses(self):
+        # Seeded from the page load, then replaced per response, so a report
+        # filed after a failed save points at the save and not the page view.
+        base = _read_template('base.html')
+
+        self.assertIn("getResponseHeader('X-Request-ID')", base)
+
+
+# ---------------------------------------------------------------------------
+# Observability: client-side error reporting
+# ---------------------------------------------------------------------------
+
+class ClientErrorReportTests(TestCase):
+    """Tests for views.client_error_report()."""
+
+    def setUp(self):
+        self.url = reverse('client_error_report')
+
+    def test_get_request_is_rejected(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_valid_report_returns_204(self):
+        response = self.client.post(self.url, {'message': 'x is not a function'})
+
+        self.assertEqual(response.status_code, 204)
+
+    def test_valid_report_writes_a_client_error_row(self):
+        self.client.post(self.url, {'message': 'x is not a function'})
+
+        self.assertEqual(
+            ActivityLog.objects.filter(action='client.error').count(), 1
+        )
+
+    def test_message_is_stored_in_the_row_detail(self):
+        self.client.post(self.url, {'message': 'x is not a function'})
+
+        row = ActivityLog.objects.get(action='client.error')
+        self.assertEqual(row.detail['message'], 'x is not a function')
+
+    def test_stack_is_truncated(self):
+        self.client.post(self.url, {'message': 'boom', 'stack': 'y' * 5000})
+
+        row = ActivityLog.objects.get(action='client.error')
+        self.assertEqual(len(row.detail['stack']), 2000)
+
+    def test_message_is_truncated(self):
+        self.client.post(self.url, {'message': 'z' * 5000})
+
+        row = ActivityLog.objects.get(action='client.error')
+        self.assertEqual(len(row.detail['message']), 300)
+
+    def test_empty_message_writes_no_row(self):
+        self.client.post(self.url, {'message': '   '})
+
+        self.assertEqual(
+            ActivityLog.objects.filter(action='client.error').count(), 0
+        )
+
+    def test_empty_message_still_returns_204(self):
+        # An error response to an error handler is how a reporting loop starts.
+        response = self.client.post(self.url, {'message': ''})
+
+        self.assertEqual(response.status_code, 204)
+
+    def test_report_is_logged(self):
+        with self.assertLogs('events.views', level='WARNING') as captured:
+            self.client.post(self.url, {'message': 'boom', 'kind': 'js'})
+
+        self.assertIn('client error', captured.output[0])
+
+    def test_reports_beyond_the_hourly_limit_are_dropped(self):
+        for _ in range(CLIENT_ERROR_HOURLY_LIMIT + 5):
+            self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(
+            ActivityLog.objects.filter(action='client.error').count(),
+            CLIENT_ERROR_HOURLY_LIMIT,
+        )
+
+    def test_global_limit_holds_when_the_visitor_cookie_is_discarded(self):
+        # The per-visitor cap is keyed on a cookie the client sets, so a
+        # caller that drops it looks like a new visitor every time. The
+        # global ceiling is what actually bounds a public write endpoint.
+        for _ in range(CLIENT_ERROR_GLOBAL_HOURLY_LIMIT + 3):
+            self.client.cookies.pop(VISITOR_COOKIE, None)
+            self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(
+            ActivityLog.objects.filter(action='client.error').count(),
+            CLIENT_ERROR_GLOBAL_HOURLY_LIMIT,
+        )
+
+    def test_report_over_the_global_limit_still_returns_204(self):
+        ActivityLog.objects.bulk_create([
+            ActivityLog(action='client.error', status_code=200,
+                        visitor_id='%032x' % n)
+            for n in range(CLIENT_ERROR_GLOBAL_HOURLY_LIMIT)
+        ])
+
+        response = self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(response.status_code, 204)
+
+    def test_dropped_report_still_returns_204(self):
+        for _ in range(CLIENT_ERROR_HOURLY_LIMIT):
+            self.client.post(self.url, {'message': 'boom'})
+
+        response = self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(response.status_code, 204)
+
+    def test_old_reports_do_not_count_towards_the_limit(self):
+        self.client.get(reverse('home'))
+        visitor = ActivityLog.objects.first().visitor_id
+        stale = ActivityLog.objects.create(action='client.error',
+                                           visitor_id=visitor, status_code=200)
+        ActivityLog.objects.filter(pk=stale.pk).update(
+            occurred_at=dt.datetime.now(timezone.utc) - dt.timedelta(hours=3)
+        )
+
+        self.client.post(self.url, {'message': 'boom'})
+
+        self.assertEqual(
+            ActivityLog.objects.filter(action='client.error').count(), 2
+        )
+
+
+class ClientErrorReporterMarkupTests(SimpleTestCase):
+    """The reporter itself lives in base.html and is only assertable there."""
+
+    def _markup(self):
+        return _read_template('base.html')
+
+    def test_htmx_response_errors_are_reported(self):
+        self.assertIn('htmx:responseError', self._markup())
+
+    def test_validation_responses_are_not_reported(self):
+        # 422 is this app's deliberate "here are your errors" response and is
+        # already swapped into the page; reporting it would bury real faults.
+        markup = self._markup()
+        handler = markup[markup.index("'htmx:responseError'"):]
+        handler = handler[:handler.index('htmx:sendError')]
+
+        self.assertIn('422', handler)
+
+    def test_uncaught_script_errors_are_reported(self):
+        self.assertIn("window.addEventListener('error'", self._markup())
+
+    def test_rejected_promises_are_reported(self):
+        self.assertIn('unhandledrejection', self._markup())
+
+    def test_network_failures_are_reported(self):
+        self.assertIn('htmx:sendError', self._markup())
+
+    def test_reports_are_capped_per_page_load(self):
+        # An error inside a render loop must not be able to flood the endpoint.
+        self.assertIn('MAX_PER_PAGE', self._markup())
+
+    def test_a_failed_htmx_action_now_tells_the_user(self):
+        # Before this, a 500 from an HTMX action produced complete silence.
+        markup = self._markup()
+        handler = markup[markup.index("'htmx:responseError'"):]
+        handler = handler[:handler.index('htmx:sendError')]
+
+        self.assertIn('toast(', handler)
+
+
+# ---------------------------------------------------------------------------
+# Observability: the activity dashboard
+# ---------------------------------------------------------------------------
+
+@override_settings(FEEDBACK_PASSWORD='letmein')
+class ActivityViewAuthTests(TestCase):
+    """Tests for views.activity_view() password gate."""
+
+    def setUp(self):
+        self.url = reverse('activity_view')
+
+    def test_unauthenticated_get_shows_the_password_prompt(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Enter password')
+
+    def test_unauthenticated_get_does_not_show_activity(self):
+        ActivityLog.objects.create(action='page.home', status_code=200)
+
+        response = self.client.get(self.url)
+
+        self.assertNotContains(response, 'page.home')
+
+    def test_wrong_password_is_rejected(self):
+        response = self.client.post(self.url, {'password': 'nope'})
+
+        self.assertContains(response, 'Incorrect password.')
+
+    def test_correct_password_grants_access(self):
+        response = self.client.post(self.url, {'password': 'letmein'})
+
+        self.assertContains(response, 'Requests')
+
+    def test_access_persists_for_the_session(self):
+        self.client.post(self.url, {'password': 'letmein'})
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Requests')
+
+    def test_logout_revokes_access(self):
+        self.client.post(self.url, {'password': 'letmein'})
+
+        self.client.get(self.url, {'logout': '1'})
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Enter password')
+
+    def test_blank_configured_password_denies_everyone(self):
+        with override_settings(FEEDBACK_PASSWORD=''):
+            response = self.client.post(self.url, {'password': ''})
+
+        self.assertContains(response, 'Incorrect password.')
+
+    def test_dashboard_traffic_is_not_itself_recorded(self):
+        # Reading the data must not change it.
+        self.client.post(self.url, {'password': 'letmein'})
+
+        self.assertEqual(ActivityLog.objects.count(), 0)
+
+
+@override_settings(FEEDBACK_PASSWORD='letmein')
+class ActivityViewContentTests(TestCase):
+    """Tests for views.activity_view() reporting."""
+
+    def setUp(self):
+        self.url = reverse('activity_view')
+        self.client.post(self.url, {'password': 'letmein'})
+
+    def _log(self, **kwargs):
+        defaults = dict(action='page.home', status_code=200, visitor_id='a' * 32)
+        defaults.update(kwargs)
+        return ActivityLog.objects.create(**defaults)
+
+    def test_action_counts_are_listed(self):
+        self._log()
+        self._log()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'page.home')
+
+    def test_repeated_actions_collapse_into_one_row(self):
+        # Meta.ordering plus values().annotate() is a Django footgun: the
+        # ordering field joins the GROUP BY, and occurred_at is unique per
+        # row, so losing the explicit order_by() would give one row per
+        # request instead of one per action.
+        self._log()
+        self._log()
+        self._log()
+
+        rows = self.client.get(self.url).context['actions']
+
+        self.assertEqual([r['action'] for r in rows].count('page.home'), 1)
+
+    def test_collapsed_row_carries_the_full_count(self):
+        self._log()
+        self._log()
+        self._log()
+
+        rows = self.client.get(self.url).context['actions']
+
+        self.assertEqual(rows[0]['total'], 3)
+
+    def test_error_rate_is_reported_per_action(self):
+        self._log()
+        self._log(status_code=500)
+
+        rows = self.client.get(self.url).context['actions']
+
+        self.assertEqual(rows[0]['error_rate'], 50.0)
+
+    def test_errors_are_counted(self):
+        self._log(status_code=500)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'Recent errors')
+
+    def test_client_errors_count_as_errors(self):
+        # They arrive as a successful POST, so a status-only filter would miss
+        # every JavaScript failure on the site.
+        self._log(action='client.error', status_code=200)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'client.error')
+
+    def test_rows_outside_the_window_are_excluded(self):
+        stale = self._log(action='page.stale_marker')
+        ActivityLog.objects.filter(pk=stale.pk).update(
+            occurred_at=dt.datetime.now(timezone.utc) - dt.timedelta(days=40)
+        )
+
+        response = self.client.get(self.url, {'days': 7})
+
+        self.assertNotContains(response, 'page.stale_marker')
+
+    def test_a_wider_window_includes_them(self):
+        stale = self._log(action='page.stale_marker')
+        ActivityLog.objects.filter(pk=stale.pk).update(
+            occurred_at=dt.datetime.now(timezone.utc) - dt.timedelta(days=40)
+        )
+
+        response = self.client.get(self.url, {'days': 90})
+
+        self.assertContains(response, 'page.stale_marker')
+
+    def test_an_unsupported_window_falls_back_to_the_default(self):
+        response = self.client.get(self.url, {'days': '9999'})
+
+        self.assertEqual(response.context['days'], ACTIVITY_DEFAULT_DAYS)
+
+    def test_a_non_numeric_window_falls_back_to_the_default(self):
+        response = self.client.get(self.url, {'days': 'lots'})
+
+        self.assertEqual(response.context['days'], ACTIVITY_DEFAULT_DAYS)
+
+    def _trail_actions(self, params):
+        # Read the trail itself rather than the page: every action name
+        # also appears in the actions table further down.
+        response = self.client.get(self.url, params)
+        return [row.action for row in response.context['trail']]
+
+    def test_trail_lists_that_visitors_actions(self):
+        self._log(action='page.signup_marker', visitor_id='b' * 32)
+
+        self.assertIn('page.signup_marker',
+                      self._trail_actions({'visitor': 'b' * 32}))
+
+    def test_trail_excludes_other_visitors(self):
+        self._log(action='page.other_marker', visitor_id='c' * 32)
+        self._log(action='page.mine_marker', visitor_id='b' * 32)
+
+        self.assertNotIn('page.other_marker',
+                         self._trail_actions({'visitor': 'b' * 32}))
+
+    def test_trail_can_be_found_by_request_id(self):
+        # A request ID is what a user quotes from an error page, so it has to
+        # be enough on its own to reconstruct what they were doing.
+        self._log(action='page.traced_marker', visitor_id='d' * 32,
+                  request_id='abc123')
+
+        self.assertIn('page.traced_marker',
+                      self._trail_actions({'request': 'abc123'}))
+
+    def test_trail_is_ordered_oldest_first(self):
+        self._log(action='page.first_marker', visitor_id='e' * 32)
+        self._log(action='page.second_marker', visitor_id='e' * 32)
+
+        actions = self._trail_actions({'visitor': 'e' * 32})
+
+        self.assertLess(actions.index('page.first_marker'),
+                        actions.index('page.second_marker'))
+
+    def test_unknown_request_id_reports_nothing_found(self):
+        response = self.client.get(self.url, {'request': 'nosuchid'})
+
+        self.assertContains(response, 'No activity found')
+
+
+# ---------------------------------------------------------------------------
+# Observability: retention
+# ---------------------------------------------------------------------------
+
+class PruneActivityCommandTests(TestCase):
+    """Tests for the prune_activity management command."""
+
+    def _log_aged(self, days):
+        row = ActivityLog.objects.create(action='page.home', status_code=200)
+        ActivityLog.objects.filter(pk=row.pk).update(
+            occurred_at=dt.datetime.now(timezone.utc) - dt.timedelta(days=days)
+        )
+        return row
+
+    def test_rows_past_the_horizon_are_deleted(self):
+        self._log_aged(200)
+
+        call_command('prune_activity', days=90, stdout=StringIO())
+
+        self.assertEqual(ActivityLog.objects.count(), 0)
+
+    def test_rows_inside_the_horizon_are_kept(self):
+        self._log_aged(10)
+
+        call_command('prune_activity', days=90, stdout=StringIO())
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_dry_run_deletes_nothing(self):
+        self._log_aged(200)
+
+        call_command('prune_activity', days=90, dry_run=True, stdout=StringIO())
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_dry_run_reports_the_count(self):
+        self._log_aged(200)
+        out = StringIO()
+
+        call_command('prune_activity', days=90, dry_run=True, stdout=out)
+
+        self.assertIn('Would delete 1 row', out.getvalue())
+
+    def test_a_zero_day_horizon_is_refused(self):
+        # It would silently delete the entire table.
+        self._log_aged(1)
+
+        call_command('prune_activity', days=0, stdout=StringIO())
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_default_horizon_comes_from_settings(self):
+        self._log_aged(200)
+
+        with override_settings(ACTIVITY_RETENTION_DAYS=365):
+            call_command('prune_activity', stdout=StringIO())
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
