@@ -1,6 +1,7 @@
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -56,6 +57,13 @@ MIDDLEWARE = [
     # Must run before session/auth so the session cookie is only ever read and
     # written on the canonical host.
     'config.middleware.CanonicalHostMiddleware',
+    # Deliberately high in the stack, not at the bottom. Middleware is an
+    # onion and the last entry wraps only the view, so a request rejected by
+    # CsrfViewMiddleware would never reach a bottom-placed logger — and CSRF
+    # rejections are exactly the failures worth seeing. Sitting here also
+    # makes the recorded duration the real end-to-end time.
+    'config.middleware.RequestLogMiddleware',
+    'events.middleware.ActivityLogMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -177,3 +185,112 @@ DISCORD_CLIENT_SECRET = os.environ.get('DISCORD_CLIENT_SECRET', '')
 SILENCED_SYSTEM_CHECKS = [
     'models.W036',
 ]
+
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+# Path served by config.urls for Railway's healthcheck. Both logging
+# middlewares skip it: Railway probes continuously, and without the skip the
+# activity table and the log stream would be mostly probe traffic.
+HEALTHCHECK_PATH = '/healthz/'
+
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+
+# JSON in production because Railway's log browser only searches text — keys
+# like status and route are only filterable if they are discrete fields.
+# Human-readable locally, where a terminal is doing the reading.
+# A typo here would otherwise raise inside dictConfig and take the whole
+# process down at boot -- a logging setting must not be able to stop the
+# site from starting.
+LOG_FORMAT = os.getenv('LOG_FORMAT', '').strip().lower()
+if LOG_FORMAT not in ('json', 'console'):
+    LOG_FORMAT = 'console' if DEBUG else 'json'
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'filters': {
+        'request_id': {'()': 'config.logging.RequestIdFilter'},
+    },
+    'formatters': {
+        'json': {'()': 'config.logging.JsonFormatter'},
+        'console': {
+            '()': 'config.logging.ConsoleFormatter',
+            'format': '%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] %(message)s',
+            'datefmt': '%H:%M:%S',
+        },
+    },
+    'handlers': {
+        'stdout': {
+            'class': 'logging.StreamHandler',
+            'stream': sys.stdout,
+            'formatter': LOG_FORMAT,
+            'filters': ['request_id'],
+        },
+    },
+    'root': {
+        'handlers': ['stdout'],
+        'level': LOG_LEVEL,
+    },
+    'loggers': {
+        # Django already logs 5xx at ERROR with exc_info and 4xx at WARNING.
+        # It has simply never had a handler to write to.
+        'django.request': {
+            'handlers': ['stdout'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # Port scanners probe with junk Host headers constantly. Left at
+        # ERROR this is the loudest logger on the site and would bury real
+        # failures — in the log stream and in Sentry alike.
+        'django.security.DisallowedHost': {
+            'handlers': ['stdout'],
+            'level': 'CRITICAL',
+            'propagate': False,
+        },
+        # Never enable in production: one line per query.
+        'django.db.backends': {
+            'handlers': ['stdout'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
+
+# Writes to the ActivityLog table. A kill switch rather than a feature flag —
+# if the table ever becomes a problem in production it can be turned off
+# without a deploy, and the structured log stream carries on regardless.
+ACTIVITY_LOG_ENABLED = os.getenv('ACTIVITY_LOG_ENABLED', 'True').lower() == 'true'
+
+ACTIVITY_RETENTION_DAYS = int(os.getenv('ACTIVITY_RETENTION_DAYS', '90'))
+
+# ---------------------------------------------------------------------------
+# Sentry
+# ---------------------------------------------------------------------------
+# Railway's log browser answers "what happened at 14:02"; it does not tell you
+# an error happened at all. Sentry supplies the grouping, the stack trace with
+# locals, and the alert. Leaving SENTRY_DSN unset makes all of this inert, so
+# local development and the test suite need no extra configuration.
+
+SENTRY_DSN = os.getenv('SENTRY_DSN', '').strip()
+
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+
+    from config.logging import scrub_event
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration()],
+        environment=os.getenv('SENTRY_ENVIRONMENT', 'production'),
+        release=os.getenv('RAILWAY_GIT_COMMIT_SHA', '')[:12] or None,
+        send_default_pii=False,
+        traces_sample_rate=float(os.getenv('SENTRY_TRACES_SAMPLE_RATE', '0')),
+        # Non-negotiable: strips event admin keys, which are credentials, out
+        # of URLs, breadcrumbs and captured stack-frame locals. See
+        # config.logging.scrub_event.
+        before_send=scrub_event,
+    )

@@ -17,6 +17,7 @@ django-htmx==1.27.0         # request.htmx, used throughout events/views.py
 gunicorn==25.3.0            # production WSGI server (railpack.json)
 whitenoise==6.12.0          # static file serving in production
 python-dotenv==1.2.2        # loads backend/.env in config/settings.py
+sentry-sdk==2.68.0          # error tracking, initialised in config/settings.py
 
 # --- Database drivers ---
 # config/__init__.py prefers MySQLdb (mysqlclient) and falls back to PyMySQL.

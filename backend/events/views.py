@@ -20,7 +20,8 @@ from .forms import EventCreateForm
 
 logger = logging.getLogger(__name__)
 
-from .models import Availability, Driver, Event, Feedback, StintAssignment
+from .activity import CLIENT_ERROR_ACTION, ERROR_FILTER, log_detail, skip_activity
+from .models import ActivityLog, Availability, Driver, Event, Feedback, StintAssignment
 from .utils import (
     build_stint_availability_matrix,
     collapse_slot_ranges,
@@ -234,16 +235,24 @@ def require_admin_session(request, event_id):
 
 def permission_denied_view(request, exception=None):
     return render(request, 'admin_error.html',
-                  {'error': 'You do not have permission to access this page.'},
+                  {'error': 'You do not have permission to access this page.',
+                   'request_id': getattr(request, 'request_id', '')},
                   status=403)
 
 
 def not_found_view(request, exception=None):
-    return render(request, '404.html', status=404)
+    return render(request, '404.html',
+                  {'request_id': getattr(request, 'request_id', '')},
+                  status=404)
 
 
 def server_error_view(request):
-    return render(request, '500.html', status=500)
+    # The ID is printed on the page so a user reporting "it broke" hands over
+    # the one string that finds the exact log line and Sentry issue. The
+    # feedback widget picks the same value up automatically.
+    return render(request, '500.html',
+                  {'request_id': getattr(request, 'request_id', '')},
+                  status=500)
 
 
 def _get_field_display_value(event, field_name):
@@ -559,6 +568,8 @@ def event_create(request):
             if request.user.is_authenticated:
                 event.created_by = request.user
             event.save()
+            log_detail(request, created_event=str(event.id),
+                       authenticated=request.user.is_authenticated)
             base = request.build_absolute_uri('/').rstrip('/')
             success_ctx = {
                 'success': True,
@@ -571,6 +582,7 @@ def event_create(request):
             if request.htmx:
                 return render(request, 'partials/event_create_success.html', success_ctx)
             return render(request, 'event_create.html', success_ctx)
+        log_detail(request, invalid_fields=sorted(form.errors))
         if request.htmx:
             return render(request, 'partials/event_create_form.html', {'form': form})
     else:
@@ -877,12 +889,18 @@ def signup(request, event_id):
                 driver.user = request.user
                 driver.save(update_fields=['user'])
             _save_availability(driver, cleaned['slots_raw'], event)
+            log_detail(request, slots=len(cleaned['slots_raw']),
+                       authenticated=request.user.is_authenticated)
             success_url = reverse('signup_success', kwargs={'event_id': event_id, 'driver_id': driver.id})
             if request.htmx:
                 response = HttpResponse()
                 response['HX-Redirect'] = success_url
                 return response
             return redirect('signup_success', event_id=event_id, driver_id=driver.id)
+
+        # The single most useful friction signal on the site: which field
+        # turns people away from the form they came here to fill in.
+        log_detail(request, invalid_fields=sorted(errors))
 
         ctx = get_signup_context(event)
         ctx.update({
@@ -925,6 +943,8 @@ def signup_edit(request, event_id, driver_id):
                 driver.availability.all().delete()
                 _save_availability(driver, cleaned['slots_raw'], event)
 
+            log_detail(request, slots=len(cleaned['slots_raw']), from_admin=from_admin)
+
             if from_admin:
                 redirect_url = reverse('admin_dashboard', kwargs={'event_id': event_id})
             else:
@@ -934,6 +954,8 @@ def signup_edit(request, event_id, driver_id):
                 response['HX-Redirect'] = redirect_url
                 return response
             return redirect(redirect_url)
+
+        log_detail(request, invalid_fields=sorted(errors))
 
         ctx = get_signup_context(event)
         ctx.update({
@@ -1418,6 +1440,7 @@ def admin_save_details(request, event_id):
         length_seconds = None
 
     if errors:
+        log_detail(request, invalid_fields=sorted(errors))
         return render(request, 'partials/form_errors.html', {'errors': errors}, status=422)
 
     event.name = name
@@ -1448,6 +1471,9 @@ def admin_save_details(request, event_id):
     # entirely. That is intended — they need to re-enter it — but it must not
     # happen silently.
     stale_drivers = _drivers_with_stale_availability(event) if schedule_moved else []
+
+    log_detail(request, schedule_moved=schedule_moved,
+               stranded_drivers=len(stale_drivers))
 
     if stale_drivers:
         response = render(
@@ -1531,11 +1557,13 @@ def admin_save_calc(request, event_id):
             errors['race_start_time_utc'] = 'Invalid race start time.'
 
     if errors:
+        log_detail(request, invalid_fields=sorted(errors))
         return render(request, 'partials/form_errors.html', {'errors': errors}, status=422)
 
     if race_start_submitted:
         event.race_start_time_utc = parsed_race_start
     event.save()
+    log_detail(request, stint_fields_complete=event.has_required_stint_fields)
     if event.has_required_stint_fields:
         response = HttpResponse(status=200)
         response['HX-Refresh'] = 'true'
@@ -1560,6 +1588,7 @@ def admin_delete_event(request, event_id):
 
     submitted_name = request.POST.get('confirm_name', '').strip()
     if submitted_name != 'DELETE':
+        log_detail(request, confirmed=False)
         messages.error(request, 'Confirmation did not match. Deletion cancelled.')
         return redirect('admin_dashboard', event_id=event_id)
 
@@ -1568,6 +1597,9 @@ def admin_delete_event(request, event_id):
         del request.session[session_key]
 
     event_name = event.name
+    # Recorded before the delete: event_id_ref is a bare UUID precisely so
+    # this row outlives the event it describes.
+    log_detail(request, confirmed=True, event_name=event_name)
     event.delete()
 
     messages.success(request, f'"{event_name}" has been permanently deleted.')
@@ -1624,6 +1656,12 @@ def admin_save_assignments(request, event_id):
         StintAssignment.objects.filter(event=event).delete()
         StintAssignment.objects.bulk_create(assignments_to_create)
 
+    log_detail(
+        request,
+        stints=len(assignments_to_create),
+        unassigned=sum(1 for a in assignments_to_create if a.driver_id is None),
+    )
+
     response = HttpResponse(status=200)
     response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Assignments saved.'}})
     return response
@@ -1645,6 +1683,9 @@ def feedback_submit(request):
     text = request.POST.get('text', '').strip()
     page_url = request.POST.get('page_url', '').strip()[:500]
     user_agent = request.POST.get('user_agent', '').strip()[:500]
+    # base.html sends the ID of the last request this browser saw answered,
+    # so a report filed right after a failure points at that failure.
+    last_request_id = request.META.get('HTTP_X_LAST_REQUEST_ID', '').strip()[:32]
 
     if not text:
         return HttpResponse(
@@ -1664,6 +1705,7 @@ def feedback_submit(request):
         text=text,
         page_url=page_url,
         user_agent=user_agent,
+        request_id=last_request_id,
     )
 
     response = HttpResponse('')
@@ -1711,3 +1753,185 @@ def feedback_view(request):
         'feedback_items': feedback_items,
         'total': len(feedback_items),
     })
+
+
+# ---------------------------------------------------------------------------
+# Activity dashboard
+# ---------------------------------------------------------------------------
+
+ACTIVITY_WINDOWS = (1, 7, 30, 90)
+ACTIVITY_DEFAULT_DAYS = 7
+ACTIVITY_TRAIL_LIMIT = 200
+ACTIVITY_ERROR_LIMIT = 50
+
+
+def _activity_window_days(request):
+    """Requested window in days, clamped to the offered set."""
+    try:
+        days = int(request.GET.get('days', ACTIVITY_DEFAULT_DAYS))
+    except (TypeError, ValueError):
+        return ACTIVITY_DEFAULT_DAYS
+    return days if days in ACTIVITY_WINDOWS else ACTIVITY_DEFAULT_DAYS
+
+
+def _activity_trail(request):
+    """
+    The visitor trail to display, if one was asked for.
+
+    Accepts either a visitor ID or a request ID — the latter because a request
+    ID is what a user quotes from an error page or a feedback report, and the
+    first thing worth seeing is everything else that visitor did around it.
+    """
+    visitor_id = request.GET.get('visitor', '').strip()[:32]
+    request_id = request.GET.get('request', '').strip()[:32]
+
+    if request_id and not visitor_id:
+        anchor = ActivityLog.objects.filter(request_id=request_id).first()
+        if anchor is None:
+            return '', request_id, []
+        visitor_id = anchor.visitor_id
+
+    if not visitor_id:
+        return '', request_id, []
+
+    recent = list(
+        ActivityLog.objects
+        .filter(visitor_id=visitor_id)
+        .select_related('user')[:ACTIVITY_TRAIL_LIMIT]
+    )
+    # Sliced newest-first so the limit keeps the most recent activity, then
+    # reversed: a trail only reads as a story in the order it happened.
+    return visitor_id, request_id, recent[::-1]
+
+
+def activity_view(request):
+    """
+    Password-protected usage dashboard.
+
+    Shares FEEDBACK_PASSWORD with the feedback viewer deliberately — same
+    operator, same trust level, and a second secret to rotate would be a
+    second secret to leak.
+    """
+    session_key = 'activity_authenticated'
+
+    if request.GET.get('logout'):
+        request.session.pop(session_key, None)
+        return redirect('activity_view')
+
+    if request.method == 'POST':
+        password = request.POST.get('password', '')
+        if (django_settings.FEEDBACK_PASSWORD
+                and hmac.compare_digest(password, django_settings.FEEDBACK_PASSWORD)):
+            request.session[session_key] = True
+        else:
+            time.sleep(1)
+            return render(request, 'activity_view.html', {
+                'authenticated': False,
+                'error': 'Incorrect password.',
+            })
+
+    if not request.session.get(session_key):
+        return render(request, 'activity_view.html', {'authenticated': False})
+
+    days = _activity_window_days(request)
+    since = datetime.now(dt_utc.utc) - timedelta(days=days)
+    window = ActivityLog.objects.filter(occurred_at__gte=since)
+
+    totals = window.aggregate(
+        requests=Count('id'),
+        visitors=Count('visitor_id', distinct=True),
+        users=Count('user', distinct=True),
+        errors=Count('id', filter=ERROR_FILTER),
+    )
+
+    actions = list(
+        window.values('action')
+        .annotate(total=Count('id'), errors=Count('id', filter=ERROR_FILTER))
+        .order_by('-total')
+    )
+    for row in actions:
+        row['error_rate'] = round(100 * row['errors'] / row['total'], 1) if row['total'] else 0.0
+
+    recent_errors = list(
+        window.filter(ERROR_FILTER)
+        .select_related('user')[:ACTIVITY_ERROR_LIMIT]
+    )
+
+    trail_visitor, trail_request, trail = _activity_trail(request)
+
+    return render(request, 'activity_view.html', {
+        'authenticated': True,
+        'days': days,
+        'windows': ACTIVITY_WINDOWS,
+        'totals': totals,
+        'actions': actions,
+        'recent_errors': recent_errors,
+        'trail': trail,
+        'trail_visitor': trail_visitor,
+        'trail_request': trail_request,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Client-side error reporting
+# ---------------------------------------------------------------------------
+
+CLIENT_ERROR_HOURLY_LIMIT = 20
+CLIENT_ERROR_FIELD_LIMITS = {
+    'message': 300,
+    'source': 300,
+    'stack': 2000,
+    'page_url': 300,
+    'kind': 30,
+}
+
+
+def client_error_report(request):
+    """
+    Records a failure the browser saw: an HTMX response error, a network
+    failure, an uncaught exception, or a rejected promise.
+
+    Server-side logging cannot see any of these. A JavaScript error breaks
+    the page for the user while every server-side signal reads 200 OK, which
+    is the widest blind spot the site has.
+
+    Always answers 204, including when it drops the report. A reporting
+    endpoint that returns an error to an error handler is how a page ends up
+    in a reporting loop.
+    """
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    visitor_id = getattr(request, 'visitor_id', '')
+    if visitor_id and _client_errors_this_hour(visitor_id) >= CLIENT_ERROR_HOURLY_LIMIT:
+        skip_activity(request)
+        return HttpResponse(status=204)
+
+    payload = {
+        key: request.POST.get(key, '').strip()[:limit]
+        for key, limit in CLIENT_ERROR_FIELD_LIMITS.items()
+    }
+    if not payload['message']:
+        skip_activity(request)
+        return HttpResponse(status=204)
+
+    try:
+        payload['status'] = int(request.POST.get('status', 0) or 0)
+    except (TypeError, ValueError):
+        payload['status'] = 0
+
+    log_detail(request, **payload)
+    logger.warning(
+        "client error (%s): %s", payload['kind'] or 'unknown', payload['message'],
+        extra={'client_error': payload, 'visitor_id': visitor_id},
+    )
+    return HttpResponse(status=204)
+
+
+def _client_errors_this_hour(visitor_id):
+    since = datetime.now(dt_utc.utc) - timedelta(hours=1)
+    return ActivityLog.objects.filter(
+        visitor_id=visitor_id,
+        action=CLIENT_ERROR_ACTION,
+        occurred_at__gte=since,
+    ).count()
