@@ -21,9 +21,13 @@ sentry-sdk==2.68.0          # error tracking, initialised in config/settings.py
 
 # --- Database drivers ---
 # config/__init__.py prefers MySQLdb (mysqlclient) and falls back to PyMySQL.
-# mysqlclient now ships wheels for both Linux and Windows, so the PyMySQL
-# fallback is unused in practice but kept as a safety net for environments
-# where the wheel is unavailable.
+#
+# mysqlclient publishes Windows wheels and an sdist — there is no manylinux
+# wheel — so it installs from a wheel on Windows and compiles from source
+# everywhere else. A Linux build therefore needs the MySQL client headers
+# present: Railpack supplies them on Railway, and .github/workflows/ci.yml
+# installs default-libmysqlclient-dev for the same reason. PyMySQL is the
+# fallback for environments where that build cannot run.
 mysqlclient==2.2.8
 PyMySQL==1.1.2
 

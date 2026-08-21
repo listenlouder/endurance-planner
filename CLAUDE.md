@@ -25,7 +25,7 @@ perpetually online, Discord-native.
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Language | Python 3.13 | |
+| Language | Python 3.13 | Pinned in `backend/.python-version` |
 | Framework | Django 6.0.x | `AUTH_USER_MODEL = 'events.User'` |
 | Database | MySQL (Railway) / MariaDB (local) | mysqlclient, PyMySQL fallback |
 | Interactivity | HTMX 2.x | Server-driven partial updates |
@@ -51,6 +51,14 @@ drift.
 
 ```
 endurance-planner/
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml              # Tests, migration check, CSS freshness
+│   │   └── claude-review.yml   # Automated PR review
+│   └── review-guidelines.md    # What the reviewer blocks on
+├── .claude/
+│   └── skills/                 # Tracked — the rest of .claude/ is gitignored
+│       └── pr-review-loop/     # Driving a PR through review to merge
 ├── backend/                    # Django project root
 │   ├── config/
 │   │   ├── settings.py         # All configuration
@@ -71,7 +79,7 @@ endurance-planner/
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (928 tests, 129 classes)
+│   │   ├── tests.py            # Full suite (972 tests, 131 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
@@ -120,6 +128,7 @@ endurance-planner/
 │   │       │                   #   all tokens and component classes
 │   │       └── output.css      # Compiled — committed to git
 │   ├── railpack.json           # Railpack build config
+│   ├── .python-version         # Python pin — read by Railpack and by CI
 │   ├── requirements.txt        # Exact-pinned
 │   ├── .env                    # Local only — never committed
 │   ├── .env.example
@@ -652,7 +661,12 @@ make css-watch
 ## Deployment (Railway)
 
 **Stack:** Railpack builder, MySQL add-on, automatic deploy
-on push to main branch.
+on push to `master`.
+
+Railpack picks the Python version from `backend/.python-version`. Without that
+file it falls back to its own default, which is a version this project does not
+choose and can change under it between builds. CI reads the same file, so the
+suite runs on the interpreter production uses.
 
 **Start command** (in `railpack.json` and Railway settings):
 ```
@@ -1025,7 +1039,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**928 tests across 129 classes** in `backend/events/tests.py`, run against
+**972 tests across 131 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell
@@ -1054,6 +1068,53 @@ python manage.py check --deploy   # Warns about HSTS / SSL redirect /
                                    # addressed
 python manage.py makemigrations --check --dry-run
 ```
+
+---
+
+## Continuous integration and PR review
+
+Two workflows run on every pull request into `master`, plus on pushes to
+`master` itself.
+
+**`.github/workflows/ci.yml`** — `check`, `makemigrations --check`, the test
+suite, and a Tailwind freshness job in parallel.
+
+The CSS job is the one worth explaining. It downloads the Tailwind CLI pinned to
+the version stamped in the first line of `output.css`, rebuilds, and fails if the
+committed file moved. Railway cannot run the Tailwind binary, so a template
+change without a rebuild ships a stylesheet that silently lacks the classes the
+markup now uses — the failure is invisible in every other check. The version is
+pinned because a different Tailwind reformats the whole file, and the job would
+then fail on churn rather than on staleness.
+
+`settings.py` reads `DJANGO_SECRET_KEY` with `os.environ[...]` and no default, so
+the test job sets a throwaway value. Without it the settings import fails before
+a single test runs.
+
+**`.github/workflows/claude-review.yml`** — an automated reviewer that reads the
+diff and posts one GitHub review with inline comments and an approve or
+request-changes verdict.
+
+It runs on a GitHub-hosted runner with no knowledge of the session that wrote the
+code, which is the point: a reviewer that shares the author's context inherits
+the author's blind spots. It reads `.github/review-guidelines.md` for what blocks
+a merge, and consults `gh pr checks` before deciding, so it will not approve over
+a failing build.
+
+The review is posted by `github-actions[bot]`, not by the author, because GitHub
+refuses to let anyone approve their own pull request. Approving specifically also
+requires **Settings → Actions → General → Allow GitHub Actions to create and
+approve pull requests**; with that off the workflow falls back to a comment
+review carrying the verdict in its body. Nothing is gated on the verdict today —
+`master` has no branch protection, so the review is advice, not a merge block.
+
+Drafts and fork pull requests are skipped. Forks because this repository is
+public and GitHub withholds secrets from fork-triggered runs, which would leave
+the job failing on a missing token rather than reviewing anything.
+
+`/pr-review-loop` in `.claude/skills/` is the other half: it waits for the review,
+reads both the verdict and the inline comments (separate API endpoints), and
+drives the fixes back through until the PR is green.
 
 ---
 

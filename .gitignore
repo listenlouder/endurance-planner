@@ -7,7 +7,16 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-.claude/
+# Local Claude Code state is machine-specific. Shared skills are the exception:
+# they describe this project's workflow and belong under review like any other
+# instruction file.
+#
+# Note the patterns below are anchored to the repo root — unlike the bare
+# `.claude/` they replaced, they do not match nested copies. Any nested one is
+# agent scratch state and is listed explicitly.
+.claude/*
+!.claude/skills/
+backend/.claude/
 
 # Tailwind CLI binaries
 bin/tailwindcss
