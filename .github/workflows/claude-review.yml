@@ -1,0 +1,121 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# One review at a time per PR. A new push cancels an in-flight review of the
+# commit it just replaced.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Skip drafts, and skip fork PRs: this repo is public, so GitHub withholds
+    # secrets from fork-triggered runs and the job would fail on a missing token.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so the reviewer can diff against the base branch.
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Reviews are posted as github-actions[bot] rather than as the Claude
+          # GitHub App, so no app install is needed and the identity is never
+          # the PR author.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the code reviewer for pull request #${{ github.event.pull_request.number }}
+            in ${{ github.repository }}, merging ${{ github.event.pull_request.head.ref }}
+            into ${{ github.event.pull_request.base.ref }}.
+
+            You are a separate agent from whoever wrote this code. Judge only what
+            is in front of you. Do not assume the author's intent was correct.
+
+            1. Read `.github/review-guidelines.md` and `CLAUDE.md` before anything else.
+            2. Get the diff with `gh pr diff ${{ github.event.pull_request.number }}`.
+               Read the surrounding files, not just the changed lines — most real
+               bugs are in the interaction between new code and existing code.
+            3. Check whether this PR has already been reviewed:
+               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews`.
+               If it has, focus on what changed since, and do not re-raise findings
+               the author already addressed.
+            4. Decide a verdict, then post exactly one review.
+
+            VERDICT
+
+            Check CI first with `gh pr checks ${{ github.event.pull_request.number }}`.
+            Never approve while a check is failing — name the failing job in the
+            body and treat it as blocking. If checks are still running, say so in
+            the body rather than waiting on them.
+
+            REQUEST_CHANGES if the diff contains at least one blocking issue: a
+            correctness bug, a security problem, a missing migration, data loss, or
+            a direct violation of a rule stated in CLAUDE.md.
+
+            APPROVE otherwise. Nits alone do not block. An approval with three
+            "consider this" notes is a useful review; a REQUEST_CHANGES over naming
+            is not.
+
+            POSTING
+
+            Write the payload to a file and submit it as a single review:
+
+            ```
+            cat > /tmp/review.json <<'JSON'
+            {
+              "event": "REQUEST_CHANGES",
+              "body": "<markdown summary>",
+              "comments": [
+                {"path": "backend/events/views.py", "line": 120, "side": "RIGHT",
+                 "body": "**Blocking** — <what breaks, and the input that breaks it>"}
+              ]
+            }
+            JSON
+            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --input /tmp/review.json
+            ```
+
+            Rules for the payload:
+            - `line` must be a line that appears in the diff on the given side, or
+              the API rejects the whole review with a 422.
+            - If it does 422, retry once with `"comments": []` and every finding
+              written into the body as `path:line — finding`. A review that lands
+              beats an inline comment that does not.
+            - If `"event": "APPROVE"` is rejected with "not permitted to approve",
+              retry with `"event": "COMMENT"` and open the body with
+              `**Verdict: approve**`. Say in the body that approval was blocked by
+              the repository's Actions setting.
+            - Prefix each inline comment with **Blocking** or **Nit** so the author
+              can tell at a glance what has to change.
+
+            BODY FORMAT
+
+            Open with a one-line tally, e.g. `2 blocking, 3 nits`, or
+            `No blocking issues.` Then a short paragraph on what the PR does and
+            whether it does it. Then the blocking findings as a list. Keep it to
+            what the author has to act on.
+
+            Post the review and stop. Do not push commits, do not merge, do not
+            edit files in the working tree.
+          claude_args: |
+            --model claude-opus-5
+            --max-turns 60
+            --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(cat:*)"

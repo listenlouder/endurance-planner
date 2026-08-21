@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Django tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # settings.py reads DJANGO_SECRET_KEY with os.environ[...] and has no
+      # default, so importing settings fails without it. This value is a
+      # throwaway for the test run — nothing signed with it leaves the runner.
+      DJANGO_SECRET_KEY: ci-only-not-a-real-secret-key-0000000000000000
+      DJANGO_DEBUG: "False"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          # Matches the version named in CLAUDE.md. Nothing in the repo pins the
+          # version Railway builds with, so this is a convention, not a guarantee.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # mysqlclient publishes Windows wheels and an sdist only — there is no
+      # manylinux wheel — so it compiles from source here and needs the MySQL
+      # client headers. Without these, pip fails on a missing mysql_config.
+      - name: Install MySQL client headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config default-libmysqlclient-dev
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Django checks
+        working-directory: backend
+        run: python manage.py check --settings=config.test_settings
+
+      - name: Migrations are up to date
+        working-directory: backend
+        run: python manage.py makemigrations --check --dry-run --settings=config.test_settings
+
+      - name: Test suite
+        working-directory: backend
+        run: python manage.py test --settings=config.test_settings
+
+  css:
+    name: Tailwind output is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # Pinned to the version that produced the committed output.css — its first
+      # line records it. A different version reformats the whole file and this
+      # job fails on noise instead of on a real staleness.
+      TAILWIND_VERSION: v4.2.2
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download Tailwind CLI
+        run: |
+          curl -fsSL -o /tmp/tailwindcss \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64"
+          chmod +x /tmp/tailwindcss
+
+      - name: Rebuild CSS
+        run: |
+          /tmp/tailwindcss \
+            -i backend/static/css/tailwind.css \
+            -o backend/static/css/output.css \
+            --minify
+
+      - name: Committed output.css matches the templates
+        run: |
+          if ! git diff --quiet -- backend/static/css/output.css; then
+            echo "::error file=backend/static/css/output.css::output.css is stale."
+            echo ""
+            echo "A template or tailwind.css changed without a CSS rebuild."
+            echo "Railway cannot run the Tailwind binary, so this ships invisible."
+            echo ""
+            echo "Fix locally, then commit the result:"
+            echo "  .\bin\tailwindcss.exe -i backend\static\css\tailwind.css -o backend\static\css\output.css --minify"
+            echo ""
+            echo "Diff:"
+            git --no-pager diff --stat -- backend/static/css/output.css
+            exit 1
+          fi
+          echo "output.css is current."
