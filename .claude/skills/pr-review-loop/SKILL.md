@@ -67,7 +67,7 @@ For every comment marked **Blocking**, do one of two things and never a third:
   the case:
 
 ```
-gh api repos/listenlouder/endurance-planner/pulls/comments/<comment-id>/replies -f body="..."
+gh api repos/listenlouder/endurance-planner/pulls/<n>/comments/<comment-id>/replies -f body="..."
 ```
 
 Do not silently ignore a finding. Do not fix a finding you think is wrong just to
@@ -87,7 +87,14 @@ user — that is a disagreement, not a defect.
 
 ## 6. Merge
 
-Merge only when `reviewDecision` is `APPROVED` and every check has passed.
+Merge only when the latest review carries an approve verdict and every check has
+passed.
+
+Read the verdict from the review body, not from `reviewDecision` alone. If
+*Allow GitHub Actions to create and approve pull requests* is off, the reviewer
+cannot submit an APPROVE event; it posts a comment review opening with
+`**Verdict: approve**` instead, and `reviewDecision` stays empty. A gate that
+insists on `APPROVED` stalls forever on a PR that was in fact approved.
 
 Confirm with the user before merging unless they have already said in this
 session to merge when it goes green. Merging to `master` deploys to Railway

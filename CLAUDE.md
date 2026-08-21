@@ -1073,8 +1073,8 @@ python manage.py makemigrations --check --dry-run
 
 ## Continuous integration and PR review
 
-Two workflows run on every pull request into `master`, plus on pushes to
-`master` itself.
+Two workflows run on every pull request, whatever its base branch — neither
+declares a `branches:` filter — plus on pushes to `master` itself.
 
 **`.github/workflows/ci.yml`** — `check`, `makemigrations --check`, the test
 suite, and a Tailwind freshness job in parallel.
@@ -1199,6 +1199,20 @@ are sent deliberately. Both scrubbers **fail closed**: they do not catch
 their own exceptions, because the SDK drops a payload whose hook raises, and
 losing one report costs far less than shipping a credential from a scrubber
 that half-finished.
+
+**Tracked skills are an input to the reviewer**
+`.claude/skills/` is version-controlled, and `claude-review.yml` checks out the
+pull request's own head before running. A branch can therefore change the
+instructions loaded into the agent that reviews that branch, and that agent holds
+`pull-requests: write`. Skill descriptions load into context unconditionally, so
+this is a live path rather than a theoretical one.
+
+It is bounded by who can reach it: fork pull requests are skipped entirely, so it
+takes push access to this repository. That is the same trust level as pushing to
+`master`, which is why the trade is worth making — instructions that steer a
+reviewer should be reviewable. Treat a diff touching `.claude/skills/` as
+security-relevant and read it yourself rather than relying on the automated
+review of it.
 
 **Visitor cookie**
 `wac_vid` is a random first-party identifier with no cross-site scope and no
