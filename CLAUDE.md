@@ -663,10 +663,23 @@ make css-watch
 **Stack:** Railpack builder, MySQL add-on, automatic deploy
 on push to `master`.
 
-Railpack picks the Python version from `backend/.python-version`. Without that
-file it falls back to its own default, which is a version this project does not
-choose and can change under it between builds. CI reads the same file, so the
-suite runs on the interpreter production uses.
+Railpack builds from `backend/`, not the repository root. A deploy log settles
+it: it reads `railpack.json`, copies a bare `requirements.txt`, and resolves the
+Django app as `config.wsgi` — none of which resolve from the root. Railway reads
+`railway.toml` from the repository root regardless, which is why the two config
+files sit at different levels and neither is misplaced.
+
+That build root is what makes `backend/.python-version` effective, since Railpack
+reads the file from there. Without it the log reads
+`python │ 3.13.15 │ railpack default (3.13)` — a version this project did not
+choose, from a default free to move to a new minor between builds. The pin names
+`3.13` rather than a patch release, so security fixes still arrive without a
+commit; CI reads the same file, so both stay on the same minor.
+
+The same log confirms why `mysqlclient` needs the MySQL client headers on Linux:
+Railpack installs `default-libmysqlclient-dev` and pip builds a
+`cp313-linux_x86_64` wheel from the sdist. CI installs that package for exactly
+the same reason.
 
 **Start command** (in `railpack.json` and Railway settings):
 ```
