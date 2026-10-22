@@ -34,8 +34,9 @@ from datetime import timezone
 from io import StringIO
 from unittest.mock import patch
 
+from django.contrib.sessions.models import Session
 from django.core.exceptions import MiddlewareNotUsed
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.http import HttpResponse
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
@@ -58,6 +59,7 @@ from .activity import ACTION_NAMES, action_name, log_detail
 from .forms import EventCreateForm
 from .middleware import VISITOR_COOKIE, ActivityLogMiddleware
 from .models import (
+    ADMIN_KEY_LENGTH,
     ActivityLog,
     Availability,
     Driver,
@@ -9779,3 +9781,145 @@ class PruneActivityCommandTests(TestCase):
             call_command('prune_activity', stdout=StringIO())
 
         self.assertEqual(ActivityLog.objects.count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Incident response: credential rotation
+# ---------------------------------------------------------------------------
+
+class RotateCredentialsCommandTests(TestCase):
+    """Tests for the rotate_credentials management command."""
+
+    def _admin_session(self, event_id):
+        """Give the test client a live admin session for the given event."""
+        session = self.client.session
+        session[f'admin_{event_id}'] = True
+        session.save()
+
+    def test_admin_keys_are_replaced(self):
+        event = save_event()
+        before = event.admin_key
+
+        call_command('rotate_credentials', stdout=StringIO())
+
+        event.refresh_from_db()
+        self.assertNotEqual(event.admin_key, before)
+
+    def test_every_event_gets_a_distinct_key(self):
+        # A single shared key would rotate the credential and keep the leak.
+        save_event()
+        save_event()
+        save_event()
+
+        call_command('rotate_credentials', stdout=StringIO())
+
+        keys = list(Event.objects.values_list('admin_key', flat=True))
+        self.assertEqual(len(set(keys)), 3)
+
+    def test_new_keys_fit_the_column(self):
+        event = save_event()
+
+        call_command('rotate_credentials', stdout=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(len(event.admin_key), ADMIN_KEY_LENGTH)
+
+    def test_sessions_are_deleted(self):
+        self._admin_session(save_event().id)
+
+        call_command('rotate_credentials', stdout=StringIO())
+
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_unexpired_sessions_are_deleted_too(self):
+        # clearsessions only removes already-expired rows, which after an
+        # exposure is every row except the ones that matter.
+        self._admin_session(save_event().id)
+        self.assertEqual(Session.objects.count(), 1)
+
+        call_command('rotate_credentials', stdout=StringIO())
+
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_an_admin_session_no_longer_grants_access(self):
+        event = save_event()
+        url = reverse('admin_dashboard', kwargs={'event_id': event.id})
+        self._admin_session(event.id)
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+        call_command('rotate_credentials', stdout=StringIO())
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/discord/login/', response['Location'])
+
+    def test_new_keys_are_not_written_to_stdout(self):
+        # The output stream is the one config.logging keeps admin keys out of.
+        save_event()
+        out = StringIO()
+
+        call_command('rotate_credentials', stdout=out)
+
+        key = Event.objects.get().admin_key
+        self.assertNotIn(key, out.getvalue())
+
+    def test_dry_run_leaves_admin_keys_alone(self):
+        event = save_event()
+        before = event.admin_key
+
+        call_command('rotate_credentials', dry_run=True, stdout=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+
+    def test_dry_run_leaves_sessions_alone(self):
+        self._admin_session(save_event().id)
+
+        call_command('rotate_credentials', dry_run=True, stdout=StringIO())
+
+        self.assertEqual(Session.objects.count(), 1)
+
+    def test_dry_run_reports_both_counts(self):
+        save_event()
+        self._admin_session(save_event().id)
+        out = StringIO()
+
+        call_command('rotate_credentials', dry_run=True, stdout=out)
+
+        output = out.getvalue()
+        self.assertIn('Would rotate the admin key of 2 event(s)', output)
+        self.assertIn('Would delete 1 session(s)', output)
+
+    def test_keys_only_leaves_sessions_alone(self):
+        event = save_event()
+        before = event.admin_key
+        self._admin_session(event.id)
+
+        call_command('rotate_credentials', keys_only=True, stdout=StringIO())
+
+        event.refresh_from_db()
+        self.assertNotEqual(event.admin_key, before)
+        self.assertEqual(Session.objects.count(), 1)
+
+    def test_sessions_only_leaves_admin_keys_alone(self):
+        event = save_event()
+        before = event.admin_key
+        self._admin_session(event.id)
+
+        call_command('rotate_credentials', sessions_only=True, stdout=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_the_two_scopes_cannot_be_combined(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                'rotate_credentials', '--keys-only', '--sessions-only',
+                stdout=StringIO(), stderr=StringIO(),
+            )
+
+    def test_an_empty_database_is_not_an_error(self):
+        call_command('rotate_credentials', stdout=StringIO())
+
+        self.assertEqual(Event.objects.count(), 0)

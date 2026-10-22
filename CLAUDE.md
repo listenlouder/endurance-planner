@@ -79,7 +79,7 @@ endurance-planner/
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (972 tests, 131 classes)
+│   │   ├── tests.py            # Full suite (986 tests, 132 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
@@ -88,7 +88,8 @@ endurance-planner/
 │   │   └── management/
 │   │       └── commands/
 │   │           ├── setup_discord_oauth.py
-│   │           └── prune_activity.py
+│   │           ├── prune_activity.py
+│   │           └── rotate_credentials.py
 │   ├── templates/
 │   │   ├── base.html           # Fixed header, footer, bg-grid, login modal,
 │   │   │                       #   toast, message banners, feedback widget,
@@ -1052,7 +1053,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**972 tests across 131 classes** in `backend/events/tests.py`, run against
+**986 tests across 132 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell
@@ -1236,3 +1237,32 @@ eventually.
 `/feedback/view/` is protected by a single shared password compared with
 `hmac.compare_digest()`, with a 1-second sleep on failure. There is no rate
 limiting or lockout.
+
+**Rotating the credentials the database itself holds**
+`Event.admin_key` and the `django_session` rows are credentials stored in
+plaintext in the database, so anything that reads the database holds them —
+a leaked `DB_PASSWORD` included. `rotate_credentials` replaces every admin key
+and deletes every session:
+
+```powershell
+python manage.py rotate_credentials --dry-run
+python manage.py rotate_credentials                   # both
+python manage.py rotate_credentials --sessions-only    # cheap half
+python manage.py rotate_credentials --keys-only
+```
+
+The two halves cost very different amounts, which is why they are separable.
+Deleting sessions just makes everyone sign in with Discord again. Rotating
+admin keys kills every shareable admin link that has ever been pasted into
+Discord, so it is worth doing only when the database is believed to have been
+read rather than merely exposed.
+
+New keys are deliberately never printed. They are credentials, and the
+command's stdout is the same stream `config.logging` works to keep admin keys
+out of. The rotation runs in one transaction so a failure part-way leaves a
+known state.
+
+`Event.save()` only fills `admin_key` when it is empty, so the command assigns
+the new value itself rather than clearing the field and saving. Both the field
+and the generator take their length from `events.models.ADMIN_KEY_LENGTH`, so
+a rotation cannot mint a key the column is too narrow to hold.
