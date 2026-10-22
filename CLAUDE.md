@@ -79,7 +79,7 @@ endurance-planner/
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (986 tests, 132 classes)
+│   │   ├── tests.py            # Full suite (1005 tests, 132 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
@@ -690,6 +690,11 @@ python manage.py collectstatic --noinput &&
 gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 60
 ```
 
+Only idempotent steps belong in that chain, because it runs on every deploy.
+`rotate_credentials` deliberately does not: it would rotate every event's admin
+key and sign every user out on each deploy. It is a fire-once-deliberately
+command, run by hand — see Security notes.
+
 **Deploy a change:**
 ```powershell
 # Rebuild CSS if templates changed
@@ -1053,7 +1058,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**986 tests across 132 classes** in `backend/events/tests.py`, run against
+**1005 tests across 132 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell
@@ -1246,21 +1251,37 @@ and deletes every session:
 
 ```powershell
 python manage.py rotate_credentials --dry-run
-python manage.py rotate_credentials                   # both
-python manage.py rotate_credentials --sessions-only    # cheap half
-python manage.py rotate_credentials --keys-only
+python manage.py rotate_credentials --yes --output keys.csv   # both
+python manage.py rotate_credentials --yes --sessions-only     # cheap half
+python manage.py rotate_credentials --yes --keys-only --output keys.csv
 ```
 
 The two halves cost very different amounts, which is why they are separable.
 Deleting sessions just makes everyone sign in with Discord again. Rotating
 admin keys kills every shareable admin link that has ever been pasted into
 Discord, so it is worth doing only when the database is believed to have been
-read rather than merely exposed.
+read rather than merely exposed. `--yes` is required for a real run; nothing
+here can be undone.
 
 New keys are deliberately never printed. They are credentials, and the
 command's stdout is the same stream `config.logging` works to keep admin keys
-out of. The rotation runs in one transaction so a failure part-way leaves a
-known state.
+out of.
+
+**`--output` is mandatory when rotating keys, and that is the load-bearing
+part.** No page in the app renders an admin key — it is surfaced exactly once,
+on the event-creation success page, and `_build_admin_context()` does not put
+it in the admin page's context. So for an event whose `created_by` is `NULL`,
+which is any event created by someone who was not signed in, the key *is* the
+only way in: there is no Discord owner bypass, and the same run deletes the
+session. Rotating without recording the new keys somewhere would leave those
+events permanently unadministrable, so the command refuses to.
+
+The manifest is a CSV of `event_id, event_name, admin_path, discord_owner`,
+opened `O_EXCL` with mode `0600` — an existing file is never overwritten,
+because it may hold the only copy of an earlier rotation. A blank
+`discord_owner` marks an event that depends entirely on that file. It is
+written *inside* the transaction, so a rotation whose keys cannot be recorded
+rolls back rather than stranding keys nobody holds.
 
 `Event.save()` only fills `admin_key` when it is empty, so the command assigns
 the new value itself rather than clearing the field and saving. Both the field
