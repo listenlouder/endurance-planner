@@ -4,6 +4,11 @@ from django.db import models
 from django.utils.crypto import get_random_string
 from django.contrib.auth.models import AbstractUser
 
+# Length of Event.admin_key. Shared by the field, the generator in save()
+# and the rotate_credentials command so a rotation cannot mint a key the
+# column is too narrow to hold.
+ADMIN_KEY_LENGTH = 20
+
 
 class User(AbstractUser):
     discord_id = models.CharField(
@@ -22,7 +27,7 @@ class User(AbstractUser):
 
 class Event(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_key = models.CharField(max_length=20, editable=False)
+    admin_key = models.CharField(max_length=ADMIN_KEY_LENGTH, editable=False)
     name = models.CharField(max_length=255)
     date = models.DateField()
     start_time_utc = models.TimeField()
@@ -51,7 +56,7 @@ class Event(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.admin_key:
-            self.admin_key = get_random_string(20)
+            self.admin_key = get_random_string(ADMIN_KEY_LENGTH)
         super().save(*args, **kwargs)
 
     def __str__(self):

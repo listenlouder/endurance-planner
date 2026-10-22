@@ -25,17 +25,22 @@ Test groups:
     FeedbackViewTests         - views.feedback_view() password-protected viewer
 """
 
+import csv
 import datetime as dt
 import json
 import logging
+import os
 import sys
+import tempfile
+import unittest
 import uuid
 from datetime import timezone
 from io import StringIO
 from unittest.mock import patch
 
+from django.contrib.sessions.models import Session
 from django.core.exceptions import MiddlewareNotUsed
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.http import HttpResponse
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
@@ -58,6 +63,7 @@ from .activity import ACTION_NAMES, action_name, log_detail
 from .forms import EventCreateForm
 from .middleware import VISITOR_COOKIE, ActivityLogMiddleware
 from .models import (
+    ADMIN_KEY_LENGTH,
     ActivityLog,
     Availability,
     Driver,
@@ -139,6 +145,19 @@ def save_event(**overrides):
 def utc(year, month, day, hour=0, minute=0, second=0):
     """Shorthand for a UTC-aware datetime."""
     return dt.datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+
+
+def utc_today():
+    """
+    Today's date *in UTC*.
+
+    The home view derives its date cutoffs from datetime.now(utc).date(),
+    so a test that builds a boundary date from the machine's local date is
+    off by one whenever the two disagree — any evening west of UTC, or any
+    morning east of it. The failure is a day-long window that CI, running in
+    UTC, never sees. Build boundary dates from this, not dt.date.today().
+    """
+    return dt.datetime.now(timezone.utc).date()
 
 
 # ---------------------------------------------------------------------------
@@ -1760,7 +1779,7 @@ class HomeViewRecruitingContextTests(TestCase):
 
     def test_past_recruiting_event_excluded(self):
         # An event dated yesterday, recruiting=True — must not appear
-        yesterday = dt.date.today() - dt.timedelta(days=1)
+        yesterday = utc_today() - dt.timedelta(days=1)
         save_event(
             name='Past Recruiting',
             date=yesterday,
@@ -5892,7 +5911,8 @@ class HomeViewDateCutoffTests(TestCase):
     def setUp(self):
         self.url = reverse('home')
         self.user = _make_auth_user()
-        self.today = dt.date.today()
+        # UTC, to match the view's cutoff basis — see utc_today().
+        self.today = utc_today()
 
     def _event_on_date(self, target_date, created_by=None, **overrides):
         """Save an event with the given date, defaulting to a 12:00 UTC start."""
@@ -9765,3 +9785,349 @@ class PruneActivityCommandTests(TestCase):
             call_command('prune_activity', stdout=StringIO())
 
         self.assertEqual(ActivityLog.objects.count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Incident response: credential rotation
+# ---------------------------------------------------------------------------
+
+class RotateCredentialsCommandTests(TestCase):
+    """Tests for the rotate_credentials management command."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.manifest = os.path.join(self.tmp.name, 'keys.csv')
+
+    def _admin_session(self, event_id):
+        """Give the test client a live admin session for the given event."""
+        session = self.client.session
+        session[f'admin_{event_id}'] = True
+        session.save()
+
+    def _rotate(self, **kwargs):
+        """Run a real rotation, supplying the guards the command requires."""
+        out = StringIO()
+        kwargs.setdefault('yes', True)
+        if not kwargs.get('sessions_only'):
+            kwargs.setdefault('output', self.manifest)
+        call_command('rotate_credentials', stdout=out, **kwargs)
+        return out.getvalue()
+
+    def _manifest_rows(self):
+        with open(self.manifest, newline='', encoding='utf-8') as handle:
+            return list(csv.reader(handle))
+
+    # ---- guards -------------------------------------------------------------
+
+    def test_a_real_run_requires_yes(self):
+        event = save_event()
+        before = event.admin_key
+
+        with self.assertRaises(CommandError):
+            call_command('rotate_credentials', output=self.manifest,
+                         stdout=StringIO(), stderr=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+
+    def test_rotating_keys_requires_an_output_path(self):
+        # The new keys are never printed, so without a file they would be lost
+        # and an event with no Discord owner would be unreachable.
+        event = save_event()
+        before = event.admin_key
+
+        with self.assertRaises(CommandError):
+            call_command('rotate_credentials', yes=True,
+                         stdout=StringIO(), stderr=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+
+    def test_sessions_only_does_not_require_an_output_path(self):
+        self._admin_session(save_event().id)
+
+        self._rotate(sessions_only=True)
+
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_output_without_a_key_rotation_is_refused(self):
+        with self.assertRaises(CommandError):
+            call_command('rotate_credentials', sessions_only=True, yes=True,
+                         output=self.manifest,
+                         stdout=StringIO(), stderr=StringIO())
+
+    def test_the_two_scopes_cannot_be_combined(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                'rotate_credentials', '--keys-only', '--sessions-only',
+                stdout=StringIO(), stderr=StringIO(),
+            )
+
+    # ---- admin keys ---------------------------------------------------------
+
+    def test_admin_keys_are_replaced(self):
+        event = save_event()
+        before = event.admin_key
+
+        self._rotate()
+
+        event.refresh_from_db()
+        self.assertNotEqual(event.admin_key, before)
+
+    def test_every_event_gets_a_distinct_key(self):
+        # A single shared key would rotate the credential and keep the leak.
+        save_event()
+        save_event()
+        save_event()
+
+        self._rotate()
+
+        keys = list(Event.objects.values_list('admin_key', flat=True))
+        self.assertEqual(len(set(keys)), 3)
+
+    def test_new_keys_fit_the_column(self):
+        event = save_event()
+
+        self._rotate()
+
+        event.refresh_from_db()
+        self.assertEqual(len(event.admin_key), ADMIN_KEY_LENGTH)
+
+    def test_the_reported_count_matches_the_events_rotated(self):
+        save_event()
+        save_event()
+
+        output = self._rotate()
+
+        self.assertIn('Rotated the admin key of 2 event(s)', output)
+
+    # ---- the manifest -------------------------------------------------------
+
+    def test_manifest_lists_every_event_with_its_new_key(self):
+        first = save_event(name='First')
+        second = save_event(name='Second')
+
+        self._rotate()
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        paths = {row[2] for row in self._manifest_rows()[1:]}
+        self.assertEqual(paths, {
+            f'/{first.id}/admin/{first.admin_key}/',
+            f'/{second.id}/admin/{second.admin_key}/',
+        })
+
+    def test_manifest_carries_a_header(self):
+        save_event()
+
+        self._rotate()
+
+        self.assertEqual(
+            self._manifest_rows()[0],
+            ['event_id', 'event_name', 'admin_path', 'discord_owner'],
+        )
+
+    def test_manifest_records_the_discord_owner(self):
+        owner = User.objects.create_user(
+            username='owner', password='x', discord_username='RacerOne'
+        )
+        save_event(created_by=owner)
+
+        self._rotate()
+
+        self.assertEqual(self._manifest_rows()[1][3], 'RacerOne')
+
+    def test_manifest_leaves_the_owner_blank_for_an_orphan_event(self):
+        # created_by is NULL for an event made by someone who was not signed
+        # in. Nothing in the app will ever show its key, so the manifest is
+        # the only way back in.
+        save_event(created_by=None)
+
+        self._rotate()
+
+        self.assertEqual(self._manifest_rows()[1][3], '')
+
+    def test_manifest_quotes_a_name_containing_a_comma(self):
+        save_event(name='Spa 24h, Round 3')
+
+        self._rotate()
+
+        self.assertEqual(self._manifest_rows()[1][1], 'Spa 24h, Round 3')
+
+    def test_manifest_is_not_overwritten(self):
+        # It may hold the only copy of an earlier rotation's keys.
+        save_event()
+        self._rotate()
+        first_rows = self._manifest_rows()
+
+        with self.assertRaises(CommandError):
+            call_command('rotate_credentials', yes=True, output=self.manifest,
+                         stdout=StringIO(), stderr=StringIO())
+
+        self.assertEqual(self._manifest_rows(), first_rows)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX file modes only')
+    def test_manifest_is_readable_only_by_its_owner(self):
+        save_event()
+
+        self._rotate()
+
+        self.assertEqual(os.stat(self.manifest).st_mode & 0o777, 0o600)
+
+    def test_an_unwritable_manifest_rolls_the_rotation_back(self):
+        # The file is written inside the transaction, so a rotation whose keys
+        # cannot be recorded must not land.
+        event = save_event()
+        before = event.admin_key
+        self._admin_session(event.id)
+        unwritable = os.path.join(self.tmp.name, 'no-such-dir', 'keys.csv')
+
+        with self.assertRaises(CommandError):
+            call_command('rotate_credentials', yes=True, output=unwritable,
+                         stdout=StringIO(), stderr=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+        self.assertEqual(Session.objects.count(), 1)
+
+    def test_new_keys_are_not_written_to_stdout(self):
+        # The output stream is the one config.logging keeps admin keys out of.
+        save_event()
+
+        output = self._rotate()
+
+        self.assertNotIn(Event.objects.get().admin_key, output)
+
+    def test_orphan_events_are_called_out(self):
+        save_event(created_by=None)
+
+        output = self._rotate()
+
+        self.assertIn('no Discord owner', output)
+
+    # ---- sessions -----------------------------------------------------------
+
+    def test_sessions_are_deleted(self):
+        self._admin_session(save_event().id)
+
+        self._rotate()
+
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_unexpired_sessions_are_deleted_too(self):
+        # clearsessions only removes already-expired rows, which after an
+        # exposure is every row except the ones that matter.
+        self._admin_session(save_event().id)
+        self.assertEqual(Session.objects.count(), 1)
+
+        self._rotate()
+
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_an_admin_session_no_longer_grants_access(self):
+        event = save_event()
+        url = reverse('admin_dashboard', kwargs={'event_id': event.id})
+        self._admin_session(event.id)
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+        self._rotate()
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/discord/login/', response['Location'])
+
+    def test_keys_only_leaves_sessions_alone(self):
+        event = save_event()
+        before = event.admin_key
+        self._admin_session(event.id)
+
+        self._rotate(keys_only=True)
+
+        event.refresh_from_db()
+        self.assertNotEqual(event.admin_key, before)
+        self.assertEqual(Session.objects.count(), 1)
+
+    def test_sessions_only_leaves_admin_keys_alone(self):
+        event = save_event()
+        before = event.admin_key
+        self._admin_session(event.id)
+
+        self._rotate(sessions_only=True)
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+        self.assertEqual(Session.objects.count(), 0)
+
+    # ---- dry run ------------------------------------------------------------
+
+    def test_dry_run_leaves_admin_keys_alone(self):
+        event = save_event()
+        before = event.admin_key
+
+        call_command('rotate_credentials', dry_run=True, stdout=StringIO())
+
+        event.refresh_from_db()
+        self.assertEqual(event.admin_key, before)
+
+    def test_dry_run_leaves_sessions_alone(self):
+        self._admin_session(save_event().id)
+
+        call_command('rotate_credentials', dry_run=True, stdout=StringIO())
+
+        self.assertEqual(Session.objects.count(), 1)
+
+    def test_dry_run_writes_no_manifest(self):
+        save_event()
+
+        call_command('rotate_credentials', dry_run=True, output=self.manifest,
+                     stdout=StringIO())
+
+        self.assertFalse(os.path.exists(self.manifest))
+
+    def test_dry_run_needs_neither_yes_nor_output(self):
+        save_event()
+        out = StringIO()
+
+        call_command('rotate_credentials', dry_run=True, stdout=out)
+
+        self.assertIn('Dry run', out.getvalue())
+
+    def test_dry_run_reports_both_counts(self):
+        save_event()
+        self._admin_session(save_event().id)
+        out = StringIO()
+
+        call_command('rotate_credentials', dry_run=True, stdout=out)
+
+        output = out.getvalue()
+        self.assertIn('Would rotate the admin key of 2 event(s)', output)
+        self.assertIn('Would delete 1 session(s)', output)
+
+    def test_dry_run_says_a_real_run_will_need_an_output_path(self):
+        save_event()
+        out = StringIO()
+
+        call_command('rotate_credentials', dry_run=True, stdout=out)
+
+        self.assertIn('--output', out.getvalue())
+
+    def test_dry_run_counts_events_with_no_discord_owner(self):
+        save_event(created_by=None)
+        out = StringIO()
+
+        call_command('rotate_credentials', dry_run=True, stdout=out)
+
+        self.assertIn('no Discord owner', out.getvalue())
+
+    # ---- edges --------------------------------------------------------------
+
+    def test_an_empty_database_is_not_an_error(self):
+        self._rotate()
+
+        self.assertEqual(Event.objects.count(), 0)
+
+    def test_an_empty_database_still_writes_a_header(self):
+        self._rotate()
+
+        self.assertEqual(len(self._manifest_rows()), 1)
