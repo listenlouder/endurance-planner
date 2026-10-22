@@ -141,6 +141,19 @@ def utc(year, month, day, hour=0, minute=0, second=0):
     return dt.datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
 
 
+def utc_today():
+    """
+    Today's date *in UTC*.
+
+    The home view derives its date cutoffs from datetime.now(utc).date(),
+    so a test that builds a boundary date from the machine's local date is
+    off by one whenever the two disagree — any evening west of UTC, or any
+    morning east of it. The failure is a day-long window that CI, running in
+    UTC, never sees. Build boundary dates from this, not dt.date.today().
+    """
+    return dt.datetime.now(timezone.utc).date()
+
+
 # ---------------------------------------------------------------------------
 # Priority 1: Stint Logic and Math
 # ---------------------------------------------------------------------------
@@ -1760,7 +1773,7 @@ class HomeViewRecruitingContextTests(TestCase):
 
     def test_past_recruiting_event_excluded(self):
         # An event dated yesterday, recruiting=True — must not appear
-        yesterday = dt.date.today() - dt.timedelta(days=1)
+        yesterday = utc_today() - dt.timedelta(days=1)
         save_event(
             name='Past Recruiting',
             date=yesterday,
@@ -5892,7 +5905,8 @@ class HomeViewDateCutoffTests(TestCase):
     def setUp(self):
         self.url = reverse('home')
         self.user = _make_auth_user()
-        self.today = dt.date.today()
+        # UTC, to match the view's cutoff basis — see utc_today().
+        self.today = utc_today()
 
     def _event_on_date(self, target_date, created_by=None, **overrides):
         """Save an event with the given date, defaulting to a 12:00 UTC start."""
