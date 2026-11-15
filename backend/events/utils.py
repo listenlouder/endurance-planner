@@ -31,7 +31,7 @@ def validate_stint_sanity(event):
             f"which exceeds fuel capacity ({event.fuel_capacity}L). "
             f"Reduce target laps or fuel per lap."
         )
-    # Check 2: Fuel per stint uses > 95% of tank
+    # Check 2: Fuel per stint uses > 98% of tank
     elif fuel_per_stint > event.fuel_capacity * 0.98:
         warnings.append(
             f"Fuel per stint ({fuel_per_stint:.2f}L) uses more than 98% "
@@ -79,21 +79,30 @@ def validate_stint_sanity(event):
     return warnings
 
 
-def stint_length_seconds(event):
+def _stint_seconds_for_laps(event, laps):
     """
-    Calculate the length of a single stint in seconds.
+    How long a stint of `laps` laps takes.
 
-    Formula: (avg_lap * target_laps) + (in_lap + out_lap - (avg_lap * 2))
+    Formula: (avg_lap * laps) + (in_lap + out_lap - (avg_lap * 2))
 
     The in_lap and out_lap replace the first and last racing laps of the stint,
     so we subtract two average laps and add the actual in/out lap times.
+    The one place this formula lives — full stints and the shorter final
+    stint both use it.
+    """
+    racing_time = event.avg_lap_seconds * laps
+    transition_delta = (event.in_lap_seconds + event.out_lap_seconds) - (event.avg_lap_seconds * 2)
+    return racing_time + transition_delta
+
+
+def stint_length_seconds(event):
+    """
+    Calculate the length of a single full stint in seconds.
 
     Requires event.has_required_stint_fields to be True.
     Returns float (seconds).
     """
-    racing_time = event.avg_lap_seconds * event.target_laps
-    transition_delta = (event.in_lap_seconds + event.out_lap_seconds) - (event.avg_lap_seconds * 2)
-    return racing_time + transition_delta
+    return _stint_seconds_for_laps(event, event.target_laps)
 
 
 def last_stint_length_seconds(event):
@@ -109,11 +118,9 @@ def last_stint_length_seconds(event):
     if not event.has_required_stint_fields:
         return None
 
+    # Both are always numbers once the stint fields are set.
     total = total_race_laps(event)
     ts = total_stints(event)
-
-    if total is None or ts is None:
-        return None
 
     remaining = max(0, total - ((ts - 1) * event.target_laps))
 
@@ -123,13 +130,7 @@ def last_stint_length_seconds(event):
     if remaining >= event.target_laps:
         return stint_length_seconds(event)
 
-    last_seconds = (
-        (remaining * event.avg_lap_seconds)
-        + event.in_lap_seconds
-        + event.out_lap_seconds
-        - (event.avg_lap_seconds * 2)
-    )
-    return max(last_seconds, 0)
+    return max(_stint_seconds_for_laps(event, remaining), 0)
 
 
 def format_stint_duration(seconds):

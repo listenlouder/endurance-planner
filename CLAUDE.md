@@ -78,8 +78,9 @@ endurance-planner/
 │   │   ├── middleware.py       # ActivityLogMiddleware
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
+│   │   ├── timezones.py        # CURATED_TIMEZONES, VALID_TIMEZONES
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (1007 tests, 133 classes)
+│   │   ├── tests.py            # Full suite (976 tests, 132 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
@@ -111,8 +112,8 @@ endurance-planner/
 │   │   │   ├── login.html
 │   │   │   └── authentication_error.html
 │   │   └── partials/           # HTMX swap targets and shared fragments
-│   │       ├── signup_form.html
-│   │       ├── signup_edit_form.html
+│   │       ├── signup_form.html          # signup AND edit (edit when `driver` set)
+│   │       ├── signup_form_scripts.html  # its page-level JS, one copy
 │   │       ├── driver_list.html
 │   │       ├── driver_name_display.html
 │   │       ├── driver_name_edit_form.html
@@ -416,7 +417,9 @@ Alpine handles:
 - Stint calculation live preview (`stintCalc()`)
 - Schedule-change availability warning (`scheduleWatch()`)
 - Live stint table and time editing on the view page (`stintTable()`)
-- Timezone picker in signup forms (`timezonePicker()`)
+- Signup / edit-availability form (`signupFormData()`, with the
+  `tzPickerData()` timezone picker) — one partial and one component serve
+  both pages
 - Login modal (`$dispatch('open-login')`)
 - Feedback widget
 - Copy-to-clipboard buttons
@@ -1058,7 +1061,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**1007 tests across 133 classes** in `backend/events/tests.py`, run against
+**976 tests across 132 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell

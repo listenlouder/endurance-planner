@@ -17,7 +17,6 @@ Test groups:
     ToUtcZFilterTests         - templatetags.tz_filters.to_utc_z
     EventCreateFormTests      - forms.EventCreateForm validation
     ValidateSignupPostTests   - views._validate_signup_post()
-    ValidateAndSaveFieldTests - views._validate_and_save_field()
     AdminDashboardTests       - views.admin_dashboard() session-gated access
     SetTimezoneTests          - views.set_timezone() POST-only timezone cookie
     AdminPageSessionTests     - views.admin_page() key login and session handling
@@ -94,7 +93,6 @@ from .views import (
     CLIENT_ERROR_FIELD_LIMITS,
     CLIENT_ERROR_GLOBAL_HOURLY_LIMIT,
     CLIENT_ERROR_HOURLY_LIMIT,
-    _validate_and_save_field,
     _validate_signup_post,
 )
 
@@ -773,212 +771,22 @@ class ValidateSignupPostTests(SimpleTestCase):
         self.assertIn('timezone', errors)
         self.assertIn('slots', errors)
 
-    def test_invalid_timezone_string_not_caught_here(self):
-        # _validate_signup_post does NOT validate that timezone is a real IANA zone;
-        # that check happens in the view after calling this function.
+    def test_timezone_outside_the_curated_list_is_error(self):
         cleaned, errors = _validate_signup_post(
             self._valid_post(timezone='Not/A/Real/Zone')
         )
-        self.assertEqual(errors, {})
+
+        self.assertEqual(errors, {'timezone': 'Invalid timezone selected. Please try again.'})
         self.assertEqual(cleaned['timezone'], 'Not/A/Real/Zone')
 
+    def test_uncurated_timezone_is_not_reported_alongside_other_errors(self):
+        # Only checked once the form is otherwise valid, so a real user's
+        # missing name is never crowded out by a tampered timezone.
+        _, errors = _validate_signup_post(
+            self._valid_post(driver_name='', timezone='Not/A/Real/Zone')
+        )
 
-# ---------------------------------------------------------------------------
-# Priority 3: views._validate_and_save_field()
-# ---------------------------------------------------------------------------
-
-class ValidateAndSaveFieldTests(TestCase):
-    """Tests for views._validate_and_save_field()."""
-
-    def setUp(self):
-        self.event = save_event()
-
-    def _call(self, field_name, value_str):
-        return _validate_and_save_field(self.event, field_name, value_str)
-
-    def _refresh(self):
-        self.event.refresh_from_db()
-
-    # --- Text fields ---
-
-    def test_text_field_valid_saves_and_returns_none(self):
-        error = self._call('name', 'New Event Name')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.name, 'New Event Name')
-
-    def test_text_field_strips_whitespace(self):
-        self._call('name', '  Padded Name  ')
-        self._refresh()
-        self.assertEqual(self.event.name, 'Padded Name')
-
-    def test_required_text_field_empty_returns_error(self):
-        error = self._call('name', '')
-        self.assertIsNotNone(error)
-        self.assertIn('required', error.lower())
-
-    def test_required_text_field_whitespace_only_returns_error(self):
-        error = self._call('name', '   ')
-        self.assertIsNotNone(error)
-
-    def test_optional_text_field_empty_saves_empty_string(self):
-        # 'car' is not required
-        error = self._call('car', '')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.car, '')
-
-    def test_textarea_field_saves(self):
-        error = self._call('setup', 'High downforce, soft tyres')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.setup, 'High downforce, soft tyres')
-
-    # --- Date field ---
-
-    def test_date_valid_iso_saves(self):
-        error = self._call('date', '2027-06-01')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.date, dt.date(2027, 6, 1))
-
-    def test_date_invalid_format_returns_error(self):
-        error = self._call('date', '01/06/2027')
-        self.assertIsNotNone(error)
-        self.assertIn('YYYY-MM-DD', error)
-
-    def test_date_empty_returns_error(self):
-        error = self._call('date', '')
-        self.assertIsNotNone(error)
-        self.assertIn('required', error.lower())
-
-    def test_date_nonsense_string_returns_error(self):
-        error = self._call('date', 'not-a-date')
-        self.assertIsNotNone(error)
-
-    # --- Time field ---
-
-    def test_time_valid_saves(self):
-        error = self._call('start_time_utc', '09:30')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.start_time_utc, dt.time(9, 30))
-
-    def test_time_invalid_format_returns_error(self):
-        error = self._call('start_time_utc', '9:30 AM')
-        self.assertIsNotNone(error)
-        self.assertIn('HH:MM', error)
-
-    def test_time_empty_returns_error(self):
-        error = self._call('start_time_utc', '')
-        self.assertIsNotNone(error)
-
-    def test_time_nonsense_returns_error(self):
-        error = self._call('start_time_utc', 'noon')
-        self.assertIsNotNone(error)
-
-    # --- Number fields ---
-
-    def test_number_valid_saves(self):
-        # avg_lap_seconds now uses mmss type; use fuel_capacity for plain number
-        error = self._call('fuel_capacity', '50.0')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertAlmostEqual(self.event.fuel_capacity, 50.0)
-
-    def test_length_hours_converts_to_seconds(self):
-        error = self._call('length_hours', '6')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.length_seconds, 21_600)
-
-    def test_length_hours_fractional_converts_correctly(self):
-        error = self._call('length_hours', '1.5')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.length_seconds, 5_400)
-
-    def test_target_laps_saved_as_int(self):
-        error = self._call('target_laps', '25.0')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertEqual(self.event.target_laps, 25)
-        self.assertIsInstance(self.event.target_laps, int)
-
-    def test_number_not_a_number_returns_error(self):
-        # Use a plain number field (fuel_capacity) not mmss
-        error = self._call('fuel_capacity', 'lots')
-        self.assertIsNotNone(error)
-        self.assertIn('valid number', error.lower())
-
-    def test_required_number_empty_returns_error(self):
-        # 'length_hours' is required
-        error = self._call('length_hours', '')
-        self.assertIsNotNone(error)
-        self.assertIn('required', error.lower())
-
-    def test_optional_number_empty_sets_none(self):
-        # 'fuel_capacity' is optional and a plain number field
-        error = self._call('fuel_capacity', '')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertIsNone(self.event.fuel_capacity)
-
-    def test_number_below_min_returns_error(self):
-        # 'fuel_per_lap' min=0.01
-        error = self._call('fuel_per_lap', '0.005')
-        self.assertIsNotNone(error)
-        self.assertIn('at least', error.lower())
-
-    def test_number_at_min_is_accepted(self):
-        error = self._call('fuel_per_lap', '0.01')
-        self.assertIsNone(error)
-
-    def test_number_above_max_returns_error(self):
-        # 'length_hours' max=168
-        error = self._call('length_hours', '200')
-        self.assertIsNotNone(error)
-        self.assertIn('at most', error.lower())
-
-    def test_number_at_max_is_accepted(self):
-        error = self._call('length_hours', '168')
-        self.assertIsNone(error)
-
-    def test_length_hours_below_min_returns_error(self):
-        error = self._call('length_hours', '0')
-        self.assertIsNotNone(error)
-
-    def test_fuel_per_lap_min_constraint(self):
-        # min=0.01
-        error = self._call('fuel_per_lap', '0.005')
-        self.assertIsNotNone(error)
-
-    def test_fuel_per_lap_at_min_accepted(self):
-        error = self._call('fuel_per_lap', '0.01')
-        self.assertIsNone(error)
-
-    def test_tire_change_fuel_min_zero_accepted(self):
-        # tire_change_fuel_min has min=0 → zero is valid
-        error = self._call('tire_change_fuel_min', '0')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertAlmostEqual(self.event.tire_change_fuel_min, 0.0)
-
-    def test_tire_change_fuel_min_negative_rejected(self):
-        error = self._call('tire_change_fuel_min', '-1')
-        self.assertIsNotNone(error)
-
-    def test_whitespace_only_value_treated_as_empty(self):
-        # Required field with whitespace-only input
-        error = self._call('length_hours', '   ')
-        self.assertIsNotNone(error)
-
-    def test_number_with_leading_trailing_spaces_accepted(self):
-        # value_str is stripped before parsing; use plain number field
-        error = self._call('fuel_capacity', '  100  ')
-        self.assertIsNone(error)
-        self._refresh()
-        self.assertAlmostEqual(self.event.fuel_capacity, 100.0)
+        self.assertEqual(set(errors), {'driver_name'})
 
 
 # ---------------------------------------------------------------------------

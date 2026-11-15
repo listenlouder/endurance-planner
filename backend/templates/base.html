@@ -334,40 +334,8 @@
 </footer>
 
 <!-- ============================================================
-     SCRIPTS
+     PAGE SCRIPTS
 ============================================================ -->
-<script>
-  function timezonePicker(initialTz) {
-    return {
-      selected: initialTz || 'UTC',
-      open: false,
-      groups: [],
-
-      init() {
-        this.groups = typeof timezoneList !== 'undefined' ? timezoneList : [];
-      },
-
-      get selectedLabel() {
-        for (const group of this.groups) {
-          const match = group.zones.find(z => z.value === this.selected);
-          if (match) return match.label;
-        }
-        return this.selected;
-      },
-
-      select(value) {
-        this.selected = value;
-        this.open = false;
-        this.$dispatch('timezone-selected', { value: value });
-      },
-
-      closeDropdown() {
-        this.open = false;
-      },
-    };
-  }
-</script>
-
 {% block extra_js %}{% endblock %}
 
 <!-- ============================================================
