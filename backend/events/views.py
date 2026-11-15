@@ -1369,7 +1369,7 @@ def _password_gate(request, session_key, template, url_name):
 def feedback_view(request):
     """Password-protected feedback viewer. See _password_gate for sign-in."""
     gate = _password_gate(request, 'feedback_authenticated', 'feedback_view.html', 'feedback_view')
-    if gate:
+    if gate is not None:
         return gate
 
     feedback_items = list(Feedback.objects.all()[:200])
@@ -1438,7 +1438,7 @@ def activity_view(request):
     second secret to leak.
     """
     gate = _password_gate(request, 'activity_authenticated', 'activity_view.html', 'activity_view')
-    if gate:
+    if gate is not None:
         return gate
 
     days = _activity_window_days(request)
