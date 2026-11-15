@@ -1,7 +1,15 @@
-{{ submitted_slot_timestamps|json_script:"submitted-slots-data" }}
+{% comment %}
+  The driver availability form, for both signing up and editing a signup.
+  Edit mode is whenever `driver` is in the context: the form posts back to
+  that driver's edit URL and the wording changes to match. Everything else —
+  validation, the timezone picker, the slot grid — is shared.
+  Page-level JS (timezoneList, slotTimestamps, detectedTz, signupFormData)
+  comes from partials/signup_form_scripts.html.
+{% endcomment %}
+{{ initial_slot_timestamps|json_script:"initial-slots-data" }}
 <script>
-  window.submittedSlots = JSON.parse(
-    document.getElementById('submitted-slots-data').textContent
+  window.initialSlots = JSON.parse(
+    document.getElementById('initial-slots-data').textContent
   );
   window.submittedTimezone = '{{ submitted_timezone|escapejs }}';
 
@@ -173,7 +181,7 @@
 <div id="signup-form-container">
 <div style="max-width: 680px;">
 <form method="post"
-      hx-post="{% url 'signup' event.id %}"
+      hx-post="{% if driver %}{% url 'signup_edit' event.id driver.id %}{% if from_admin %}?from=admin{% endif %}{% else %}{% url 'signup' event.id %}{% endif %}"
       hx-target="#signup-form-container"
       hx-swap="outerHTML"
       x-data="signupFormData()"
@@ -245,7 +253,7 @@
                           text-transform: uppercase;
                           color: var(--text-dim);
                           margin-bottom: 4px;">
-                Detected timezone
+                {% if driver %}Current timezone{% else %}Detected timezone{% endif %}
               </div>
               <div x-text="timezone"
                    style="font-family: 'DM Mono', monospace;
@@ -262,7 +270,7 @@
                           color: var(--text-dim);
                           letter-spacing: 0.04em;
                           margin-top: 2px;">
-                Is this correct?
+                {% if driver %}Is this still correct?{% else %}Is this correct?{% endif %}
               </div>
             </div>
 
@@ -333,7 +341,7 @@
       </div>
 
       <p class="avail-intro">
-        Select every slot you're available to drive.
+        {% if driver %}Update the slots{% else %}Select every slot{% endif %} you're available to drive.
         Slots shown in your local timezone. Tap a slot to toggle it.
       </p>
 
@@ -378,12 +386,12 @@
   </div>
 
   <!-- Submit -->
-  <div class="form-actions" style="padding-bottom: 40px;">
+  <div class="form-actions" style="padding-bottom: {% if driver %}24px{% else %}40px{% endif %};">
     <button type="submit"
             class="btn-primary"
             style="width: 100%; justify-content: center; padding: 14px 24px;"
             {% if not slots %}disabled{% endif %}>
-      Sign Up →
+      {% if driver %}Update Availability →{% else %}Sign Up →{% endif %}
     </button>
   </div>
 

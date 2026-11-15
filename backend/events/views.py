@@ -16,12 +16,10 @@ from django.shortcuts import get_object_or_404, render, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 
-from .forms import EventCreateForm
-
-logger = logging.getLogger(__name__)
-
 from .activity import CLIENT_ERROR_ACTION, ERROR_FILTER, log_detail, skip_activity
+from .forms import EventCreateForm
 from .models import ActivityLog, Availability, Driver, Event, Feedback, StintAssignment
+from .timezones import CURATED_TIMEZONES, VALID_TIMEZONES
 from .utils import (
     build_stint_availability_matrix,
     collapse_slot_ranges,
@@ -29,7 +27,6 @@ from .utils import (
     get_availability_slots,
     get_stint_windows,
     laps_remaining_after_stint,
-    seconds_to_mmss,
     slot_grid_anchor,
     stint_length_seconds,
     total_race_laps,
@@ -37,93 +34,10 @@ from .utils import (
     validate_stint_sanity,
 )
 
+logger = logging.getLogger(__name__)
+
 VALID_CONDITIONS = {c[0] for c in StintAssignment.CONDITION_CHOICES}
 
-CURATED_TIMEZONES = [
-    {
-        'region': 'UTC',
-        'zones': [('UTC', 'UTC')],
-    },
-    {
-        'region': 'United States & Canada',
-        'zones': [
-            ('Hawaii (HST)', 'Pacific/Honolulu'),
-            ('Alaska (AKST/AKDT)', 'America/Anchorage'),
-            ('Pacific (PST/PDT)', 'America/Los_Angeles'),
-            ('Mountain (MST/MDT)', 'America/Denver'),
-            ('Mountain - no DST (MST)', 'America/Phoenix'),
-            ('Central (CST/CDT)', 'America/Chicago'),
-            ('Eastern (EST/EDT)', 'America/New_York'),
-            ('Atlantic (AST/ADT)', 'America/Halifax'),
-            ('Newfoundland (NST/NDT)', 'America/St_Johns'),
-        ],
-    },
-    {
-        'region': 'Central & South America',
-        'zones': [
-            ('Mexico City', 'America/Mexico_City'),
-            ('Colombia & Peru', 'America/Bogota'),
-            ('Brazil - Brasilia', 'America/Sao_Paulo'),
-            ('Argentina', 'America/Argentina/Buenos_Aires'),
-            ('Chile', 'America/Santiago'),
-        ],
-    },
-    {
-        'region': 'Europe',
-        'zones': [
-            ('UK & Ireland (GMT/BST)', 'Europe/London'),
-            ('Portugal (WET/WEST)', 'Europe/Lisbon'),
-            ('Western Europe (CET/CEST)', 'Europe/Paris'),
-            ('Central Europe (CET/CEST)', 'Europe/Berlin'),
-            ('Eastern Europe (EET/EEST)', 'Europe/Helsinki'),
-            ('Greece & Romania (EET/EEST)', 'Europe/Athens'),
-            ('Turkey (TRT)', 'Europe/Istanbul'),
-            ('Russia - Moscow (MSK)', 'Europe/Moscow'),
-        ],
-    },
-    {
-        'region': 'Middle East & Africa',
-        'zones': [
-            ('South Africa (SAST)', 'Africa/Johannesburg'),
-            ('East Africa (EAT)', 'Africa/Nairobi'),
-            ('Egypt (EET)', 'Africa/Cairo'),
-            ('UAE & Oman (GST)', 'Asia/Dubai'),
-            ('Saudi Arabia (AST)', 'Asia/Riyadh'),
-            ('Israel (IST/IDT)', 'Asia/Jerusalem'),
-        ],
-    },
-    {
-        'region': 'Asia',
-        'zones': [
-            ('India (IST)', 'Asia/Kolkata'),
-            ('Pakistan (PKT)', 'Asia/Karachi'),
-            ('Bangladesh (BST)', 'Asia/Dhaka'),
-            ('Thailand & Vietnam (ICT)', 'Asia/Bangkok'),
-            ('China, HK & Taiwan (CST)', 'Asia/Shanghai'),
-            ('Singapore & Malaysia (SGT)', 'Asia/Singapore'),
-            ('South Korea (KST)', 'Asia/Seoul'),
-            ('Japan (JST)', 'Asia/Tokyo'),
-            ('Philippines (PST)', 'Asia/Manila'),
-        ],
-    },
-    {
-        'region': 'Australia & Pacific',
-        'zones': [
-            ('Australia - Perth (AWST)', 'Australia/Perth'),
-            ('Australia - Darwin (ACST)', 'Australia/Darwin'),
-            ('Australia - Adelaide (ACST/ACDT)', 'Australia/Adelaide'),
-            ('Australia - Brisbane (AEST)', 'Australia/Brisbane'),
-            ('Australia - Sydney (AEST/AEDT)', 'Australia/Sydney'),
-            ('New Zealand (NZST/NZDT)', 'Pacific/Auckland'),
-        ],
-    },
-]
-
-VALID_TIMEZONES = frozenset(
-    zone[1]
-    for group in CURATED_TIMEZONES
-    for zone in group['zones']
-)
 
 def _driver_has_conflict(driver, start_utc, driver_availability):
     """True if the driver has no availability slot covering start_utc's 30-min block."""
@@ -192,32 +106,8 @@ def normalize_iso(dt):
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Admin constants and helpers
+# Admin auth and error pages
 # ---------------------------------------------------------------------------
-
-EDITABLE_FIELDS = {
-    'name':               {'type': 'text',     'label': 'Event Name',                    'required': True},
-    'date':               {'type': 'date',     'label': 'Date',                          'required': True},
-    'start_time_utc':     {'type': 'time',     'label': 'Start Time (UTC)',               'required': True},
-    'length_hours':       {'type': 'number',   'label': 'Race Length (hours)',            'required': True,  'min': 0,    'max': 168},
-    'car':                {'type': 'text',     'label': 'Car',                           'required': False},
-    'track':              {'type': 'text',     'label': 'Track',                         'required': False},
-    'team_name':          {'type': 'text',     'label': 'Team Name',                     'required': False},
-    'setup':              {'type': 'textarea', 'label': 'Setup Notes',                   'required': False},
-    'recruiting':         {'type': 'checkbox', 'label': 'Recruiting Drivers',            'required': False},
-    'avg_lap_seconds':    {'type': 'mmss',     'label': 'Average Lap Time',              'required': False},
-    'in_lap_seconds':     {'type': 'mmss',     'label': 'In Lap Time',                   'required': False},
-    'out_lap_seconds':    {'type': 'mmss',     'label': 'Out Lap Time',                  'required': False},
-    'target_laps':        {'type': 'number',   'label': 'Target Laps per Stint',         'required': False, 'min': 1,    'max': 500},
-    'fuel_capacity':      {'type': 'number',   'label': 'Fuel Capacity (L)',             'required': False, 'min': 0.1},
-    'fuel_per_lap':       {'type': 'number',   'label': 'Fuel Use per Lap (L)',          'required': False, 'min': 0.01},
-    'tire_change_fuel_min': {'type': 'number', 'label': 'Min Fuel for Tyre Change (L)',  'required': False, 'min': 0},
-}
-
-_REQUIRED_FOR_STINTS = [
-    'avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds',
-    'target_laps', 'fuel_capacity', 'fuel_per_lap',
-]
 
 def _check_admin_key(event, admin_key):
     return hmac.compare_digest(str(admin_key), str(event.admin_key))
@@ -253,18 +143,6 @@ def server_error_view(request):
     return render(request, '500.html',
                   {'request_id': getattr(request, 'request_id', '')},
                   status=500)
-
-
-def _get_field_display_value(event, field_name):
-    """Return the display value for a field (handles conversions for special fields)."""
-    if field_name == 'length_hours':
-        return event.length_seconds / 3600
-    config = EDITABLE_FIELDS.get(field_name, {})
-    if config.get('type') == 'mmss':
-        value = getattr(event, field_name)
-        return seconds_to_mmss(value) if value is not None else ''
-    value = getattr(event, field_name)
-    return '' if value is None else value
 
 
 def _build_availability_matrix(drivers, slots):
@@ -327,135 +205,37 @@ def _uncovered_race_windows(event, slots, uncovered_slots, admin_tz):
     return windows, total_seconds
 
 
-def _make_field_ctx(event, field_name):
-    """Build the partial context dict for a single field."""
-    config = EDITABLE_FIELDS[field_name]
-    missing_required = [
-        EDITABLE_FIELDS[f]['label']
-        for f in _REQUIRED_FOR_STINTS
-        if getattr(event, f) is None
-    ]
-    ctx = {
-        'event': event,
-        'field_name': field_name,
-        'field_label': config['label'],
-        'field_type': config['type'],
-        'field_min': str(config['min']) if 'min' in config else '',
-        'field_max': str(config['max']) if 'max' in config else '',
-        'current_value': _get_field_display_value(event, field_name),
-        'required_fields': _REQUIRED_FOR_STINTS,
-        'missing_required_fields': missing_required,
-        'sanity_warnings': validate_stint_sanity(event),
-    }
-    if field_name == 'length_hours':
-        total_secs = event.length_seconds or 0
-        ctx['current_hours'] = total_secs // 3600
-        ctx['current_minutes'] = (total_secs % 3600) // 60
-    return ctx
-
-
-def _validate_and_save_field(event, field_name, value_str):
-    """Validate value_str for field_name, save to event. Returns error string or None."""
-    config = EDITABLE_FIELDS[field_name]
-    ftype = config['type']
-    required = config['required']
-    value = value_str.strip()
-
-    if ftype in ('text', 'textarea'):
-        if required and not value:
-            return f"{config['label']} is required."
-        setattr(event, field_name, value)
-        event.save(update_fields=[field_name])
-        return None
-
-    if ftype == 'date':
-        if not value:
-            return f"{config['label']} is required."
-        try:
-            event.date = date.fromisoformat(value)
-        except ValueError:
-            return "Invalid date. Use YYYY-MM-DD format."
-        event.save(update_fields=['date'])
-        return None
-
-    if ftype == 'time':
-        if not value:
-            return f"{config['label']} is required."
-        try:
-            event.start_time_utc = time_type.fromisoformat(value)
-        except ValueError:
-            return "Invalid time. Use HH:MM format."
-        event.save(update_fields=['start_time_utc'])
-        return None
-
-    if ftype == 'mmss':
-        if not value:
-            if required:
-                return f"{config['label']} is required."
-            setattr(event, field_name, None)
-            event.save(update_fields=[field_name])
-            return None
-        try:
-            parts = value.split(':')
-            if len(parts) != 2:
-                raise ValueError
-            mins = int(parts[0])
-            secs = int(parts[1])
-            if not (0 <= secs < 60) or mins < 0:
-                raise ValueError
-            total_secs = (mins * 60) + secs
-            if total_secs == 0:
-                return f"{config['label']} must be at least 1 second."
-        except (ValueError, IndexError):
-            return 'Please enter time in M:SS format (e.g. 1:45)'
-        setattr(event, field_name, float(total_secs))
-        event.save(update_fields=[field_name])
-        return None
-
-    if ftype == 'checkbox':
-        setattr(event, field_name, value == 'true')
-        event.save(update_fields=[field_name])
-        return None
-
-    if ftype == 'number':
-        if not value:
-            if required:
-                return f"{config['label']} is required."
-            setattr(event, field_name, None)
-            event.save(update_fields=[field_name])
-            return None
-
-        try:
-            num = float(value)
-        except ValueError:
-            return "Please enter a valid number."
-
-        min_val = config.get('min')
-        max_val = config.get('max')
-        if min_val is not None and num < min_val:
-            return f"Value must be at least {min_val}."
-        if max_val is not None and num > max_val:
-            return f"Value must be at most {max_val}."
-
-        if field_name == 'length_hours':
-            if num == 0:
-                return 'Race length must be greater than zero.'
-            event.length_seconds = round(num * 3600)
-            event.save(update_fields=['length_seconds'])
-        elif field_name == 'target_laps':
-            event.target_laps = int(num)
-            event.save(update_fields=['target_laps'])
-        else:
-            setattr(event, field_name, num)
-            event.save(update_fields=[field_name])
-        return None
-
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _hx_redirect(url):
+    """Tell HTMX to navigate the whole page to url."""
+    response = HttpResponse()
+    response['HX-Redirect'] = url
+    return response
+
+
+def _redirect(request, url):
+    """HX-Redirect for HTMX requests, a normal 302 for plain form posts."""
+    return _hx_redirect(url) if request.htmx else redirect(url)
+
+
+def _hx_refresh():
+    """Tell HTMX to reload the page."""
+    response = HttpResponse()
+    response['HX-Refresh'] = 'true'
+    return response
+
+
+def _with_toast(response, message, error=False):
+    """Fire the shared toast in base.html when this response lands."""
+    toast = {'message': message}
+    if error:
+        toast['error'] = True
+    response['HX-Trigger'] = json.dumps({'show-toast': toast})
+    return response
+
 
 def get_signup_context(event):
     """Returns shared context dict for signup and signup_edit views."""
@@ -478,7 +258,7 @@ def _save_availability(driver, slots_raw, event):
 
 
 def _validate_signup_post(post_data):
-    """Validate common signup POST fields. Returns (cleaned, errors)."""
+    """Validate the signup / edit-availability form. Returns (cleaned, errors)."""
     driver_name = post_data.get('driver_name', '').strip()
     timezone = post_data.get('timezone', '').strip()
     slots_raw = post_data.getlist('slots')
@@ -492,13 +272,37 @@ def _validate_signup_post(post_data):
         errors['timezone'] = 'Timezone is required.'
     if not slots_raw:
         errors['slots'] = 'Please select at least one availability slot.'
+    # Checked last, and only when the form is otherwise valid, so a tampered
+    # timezone does not crowd out the errors a real user needs to see.
+    if not errors and timezone not in VALID_TIMEZONES:
+        errors['timezone'] = 'Invalid timezone selected. Please try again.'
 
     return {'driver_name': driver_name, 'timezone': timezone, 'slots_raw': slots_raw}, errors
 
 
 # ---------------------------------------------------------------------------
-# Existing views
+# Public pages
 # ---------------------------------------------------------------------------
+
+UPCOMING_EVENTS_SHOWN = 8
+
+
+def _upcoming(events, now_utc):
+    """
+    The first UPCOMING_EVENTS_SHOWN events that have not started yet.
+
+    `events` must already be filtered to date >= today and ordered by start.
+    The date filter alone still lets through events earlier today, so the
+    start time is checked here.
+    """
+    upcoming = []
+    for event in events:
+        if datetime.combine(event.date, event.start_time_utc, tzinfo=dt_utc.utc) > now_utc:
+            upcoming.append(event)
+            if len(upcoming) == UPCOMING_EVENTS_SHOWN:
+                break
+    return upcoming
+
 
 def home(request):
     now_utc = datetime.now(tz=dt_utc.utc)
@@ -510,19 +314,7 @@ def home(request):
         driver_count=Count('drivers'),
     ).order_by('date', 'start_time_utc')[:50]
 
-    upcoming = []
-    for event in recruiting_qs:
-        event_start = datetime.combine(
-            event.date,
-            event.start_time_utc,
-            tzinfo=dt_utc.utc,
-        )
-        if event_start > now_utc:
-            upcoming.append(event)
-        if len(upcoming) == 8:
-            break
-
-    context = {'recruiting_events': upcoming}
+    context = {'recruiting_events': _upcoming(recruiting_qs, now_utc)}
 
     if request.user.is_authenticated:
         driver_entries = Driver.objects.filter(
@@ -613,96 +405,94 @@ def event_search(request):
         date__gte=now_utc.date()
     ).order_by('date', 'start_time_utc')
 
-    upcoming = []
-    for event in results:
-        event_start = datetime.combine(
-            event.date,
-            event.start_time_utc,
-            tzinfo=dt_utc.utc,
-        )
-        if event_start > now_utc:
-            upcoming.append(event)
-        if len(upcoming) == 8:
-            break
-
     return render(request,
         'partials/search_results.html',
-        {'results': upcoming, 'query': query})
+        {'results': _upcoming(results, now_utc), 'query': query})
+
+
+def _stint_assignments(event):
+    """{stint_number: StintAssignment} for an event, with drivers loaded."""
+    return {
+        sa.stint_number: sa
+        for sa in StintAssignment.objects.filter(event=event).select_related('driver')
+    }
+
+
+def _availability_by_driver(drivers):
+    """{driver_id: set of slot datetimes}. Drivers must have availability prefetched."""
+    return {d.id: {a.slot_utc for a in d.availability.all()} for d in drivers}
+
+
+def _stint_rows(event, assignments, driver_availability=None):
+    """
+    One dict per stint: the timing from get_stint_windows(), plus who drives
+    it, the track condition, and whether a manually moved start now falls
+    outside that driver's availability.
+
+    This is the single place the view page, the live stint-edit endpoints and
+    the admin page get stint rows from, so the conflict rule cannot drift
+    between them.
+
+    driver_availability is optional. When omitted it is loaded only if some
+    stint has been moved, because only a moved stint can conflict.
+    """
+    if driver_availability is None:
+        driver_availability = {}
+        if any(sa.actual_start_utc for sa in assignments.values()):
+            driver_availability = _availability_by_driver(
+                Driver.objects.filter(event=event).prefetch_related('availability')
+            )
+
+    rows = []
+    for window in get_stint_windows(event, assignment_overrides=assignments):
+        assignment = assignments.get(window['stint_number'])
+        driver = assignment.driver if assignment else None
+        rows.append({
+            **window,
+            'driver': driver,
+            'condition': assignment.condition if assignment else 'dry',
+            'duration_display': format_stint_duration(window['duration_seconds']),
+            'has_conflict': (
+                driver and window['is_overridden']
+                and _driver_has_conflict(driver, window['start_utc'], driver_availability)
+            ),
+        })
+    return rows
+
+
+def _stint_row_json(event, row):
+    """The shape the view page's Alpine stint table consumes."""
+    return {
+        'stint_number':     row['stint_number'],
+        'start_utc':        normalize_iso(row['start_utc']),
+        'end_utc':          normalize_iso(row['end_utc']),
+        'driver_name':      row['driver'].name if row['driver'] else None,
+        'duration_display': row['duration_display'],
+        'is_last_stint':    row['is_last'],
+        'laps_remaining':   (
+            None if row['is_last']
+            else laps_remaining_after_stint(event, row['stint_number'])
+        ),
+        'condition':        row['condition'],
+        'is_overridden':    row['is_overridden'],
+        'has_conflict':     row['has_conflict'],
+    }
+
+
+def _length_display(length_seconds):
+    """6h, 6h 30m."""
+    hours = length_seconds // 3600
+    minutes = (length_seconds % 3600) // 60
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
 
 
 def view_event(request, event_id):
     """Public view-only page. No authentication required."""
     event = get_object_or_404(Event, id=event_id)
+    stints_ready = event.has_required_stint_fields
 
-    assignment_objs = {
-        sa.stint_number: sa
-        for sa in StintAssignment.objects.filter(event=event).select_related('driver')
-    }
-
-    if event.has_required_stint_fields:
-        stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs)
-    else:
-        stint_windows = []
-
-    # Only load driver availability when there are overrides (conflict detection)
-    driver_availability = {}
-    if any(sa.actual_start_utc for sa in assignment_objs.values()):
-        for d in Driver.objects.filter(event=event).prefetch_related('availability'):
-            driver_availability[d.id] = {a.slot_utc for a in d.availability.all()}
-
-    stint_rows = []
-    for sw in stint_windows:
-        n = sw['stint_number']
-        sa = assignment_objs.get(n)
-        driver = sa.driver if sa else None
-
-        has_conflict = (
-            driver and sw.get('is_overridden') and
-            _driver_has_conflict(driver, sw['start_utc'], driver_availability)
-        )
-
-        stint_rows.append({
-            'stint_number':     n,
-            'start_utc':        sw['start_utc'],
-            'end_utc':          sw['end_utc'],
-            'driver':           driver,
-            'duration_display': format_stint_duration(sw['duration_seconds']),
-            'is_last':          sw['is_last'],
-            'is_overridden':    sw.get('is_overridden', False),
-            'has_conflict':     has_conflict,
-            'condition':        sa.condition if sa else 'dry',
-        })
-
-    total_stints_count = total_stints(event) if event.has_required_stint_fields else 0
-    event_total_race_laps = total_race_laps(event)
-
-    stint_rows_json = _safe_json([
-        {
-            'stint_number':     row['stint_number'],
-            'start_utc':        normalize_iso(row['start_utc']),
-            'end_utc':          normalize_iso(row['end_utc']),
-            'driver_name':      row['driver'].name if row['driver'] else None,
-            'duration_display': row['duration_display'],
-            'is_last_stint':    row['is_last'],
-            'laps_remaining':   (
-                None
-                if row['is_last']
-                else laps_remaining_after_stint(event, row['stint_number'])
-            ),
-            'condition':        row['condition'],
-            'is_overridden':    row['is_overridden'],
-            'has_conflict':     row['has_conflict'],
-        }
-        for row in stint_rows
-    ])
-
-    lh = round(event.length_seconds / 3600, 1)
-    lh_display = f"{int(lh)} hours" if event.length_seconds % 3600 == 0 else f"{lh} hours"
-
-    total_seconds = event.length_seconds
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    length_display = f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    assignments = _stint_assignments(event)
+    stint_rows = _stint_rows(event, assignments)
 
     user_driver = None
     if request.user.is_authenticated:
@@ -711,51 +501,40 @@ def view_event(request, event_id):
         except Driver.DoesNotExist:
             pass
 
-    has_unassigned = StintAssignment.objects.filter(event=event, driver=None).exists()
-
-    # Stint duration display
-    if event.has_required_stint_fields:
+    stint_duration_display = None
+    target_lap_time = None
+    if stints_ready:
         stint_duration_display = format_stint_duration(stint_length_seconds(event))
         if event.avg_lap_seconds:
             avg = int(round(event.avg_lap_seconds))
             target_lap_time = f"{avg // 60}:{avg % 60:02d}"
-        else:
-            target_lap_time = None
-    else:
-        stint_duration_display = None
-        target_lap_time = None
 
-    # Driver stint counts for summary pills
-    driver_counts = Counter()
-    for row in stint_rows:
-        if row['driver']:
-            driver_counts[row['driver'].name] += 1
-    driver_counts = dict(driver_counts)
+    # Stints per driver, for the summary pills.
+    driver_counts = dict(Counter(
+        row['driver'].name for row in stint_rows if row['driver']
+    ))
 
-    max_laps_on_fuel = (
-        int(event.fuel_capacity / event.fuel_per_lap)
-        if event.has_required_stint_fields and event.fuel_capacity and event.fuel_per_lap
-        else None
-    )
+    max_laps_on_fuel = None
+    if stints_ready and event.fuel_capacity and event.fuel_per_lap:
+        max_laps_on_fuel = int(event.fuel_capacity / event.fuel_per_lap)
 
     return render(request, 'view.html', {
         'event': event,
         'stint_rows': stint_rows,
-        'stint_rows_json': stint_rows_json,
-        'has_stints': bool(assignment_objs),
-        'stints_ready': event.has_required_stint_fields,
+        'stint_rows_json': _safe_json([_stint_row_json(event, row) for row in stint_rows]),
+        'has_stints': bool(assignments),
+        'stints_ready': stints_ready,
         'can_edit_stints': request.user.is_authenticated,
-        'length_hours_display': lh_display,
-        'length_display': length_display,
-        'has_unassigned': has_unassigned,
+        'length_display': _length_display(event.length_seconds),
+        'has_unassigned': StintAssignment.objects.filter(event=event, driver=None).exists(),
         'user_driver': user_driver,
         'show_signup_link': request.GET.get('from') == 'recruiting',
         'stint_duration_display': stint_duration_display,
         'target_lap_time': target_lap_time,
-        'total_stints_display': total_stints_count if event.has_required_stint_fields else None,
+        'total_stints_display': total_stints(event) if stints_ready else None,
         'max_laps_on_fuel': max_laps_on_fuel,
         'driver_counts': driver_counts,
-        'total_race_laps': event_total_race_laps,
+        'total_race_laps': total_race_laps(event),
         'has_separate_race_start': bool(event.race_start_time_utc),
         'effective_start_datetime_utc': event.effective_start_datetime_utc,
     })
@@ -765,51 +544,10 @@ def view_event(request, event_id):
 # Live stint time editing
 # ---------------------------------------------------------------------------
 
-def _build_stint_rows_response(request, event):
-    """
-    Recomputes stint windows with current overrides and returns updated
-    stint_rows JSON. Used by set_stint_start and reset_stint_start.
-    """
-    assignment_objs = {
-        sa.stint_number: sa
-        for sa in StintAssignment.objects.filter(event=event).select_related('driver')
-    }
-
-    driver_availability = {}
-    if any(sa.actual_start_utc for sa in assignment_objs.values()):
-        for d in Driver.objects.filter(event=event).prefetch_related('availability'):
-            driver_availability[d.id] = {a.slot_utc for a in d.availability.all()}
-
-    stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs)
-
-    rows = []
-    for sw in stint_windows:
-        n = sw['stint_number']
-        sa = assignment_objs.get(n)
-        driver = sa.driver if sa else None
-
-        has_conflict = (
-            driver and sw.get('is_overridden') and
-            _driver_has_conflict(driver, sw['start_utc'], driver_availability)
-        )
-
-        rows.append({
-            'stint_number':     n,
-            'start_utc':        normalize_iso(sw['start_utc']),
-            'end_utc':          normalize_iso(sw['end_utc']),
-            'driver_name':      driver.name if driver else None,
-            'duration_display': format_stint_duration(sw['duration_seconds']),
-            'laps_remaining':   (
-                None if sw['is_last']
-                else laps_remaining_after_stint(event, n)
-            ),
-            'is_last_stint':    sw['is_last'],
-            'is_overridden':    sw['is_overridden'],
-            'has_conflict':     has_conflict,
-            'condition':        sa.condition if sa else 'dry',
-        })
-
-    return JsonResponse({'stint_rows': rows})
+def _stint_rows_response(event):
+    """Recomputed stint rows after a start-time override changed."""
+    rows = _stint_rows(event, _stint_assignments(event))
+    return JsonResponse({'stint_rows': [_stint_row_json(event, row) for row in rows]})
 
 
 def set_stint_start(request, event_id, stint_number):
@@ -842,7 +580,7 @@ def set_stint_start(request, event_id, stint_number):
     assignment.actual_start_utc = parsed_dt
     assignment.save(update_fields=['actual_start_utc'])
 
-    return _build_stint_rows_response(request, event)
+    return _stint_rows_response(event)
 
 
 def reset_stint_start(request, event_id, stint_number):
@@ -861,63 +599,58 @@ def reset_stint_start(request, event_id, stint_number):
     except StintAssignment.DoesNotExist:
         pass
 
-    return _build_stint_rows_response(request, event)
+    return _stint_rows_response(event)
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: signup views
+# Signup
 # ---------------------------------------------------------------------------
+
+def _render_signup(request, page_template, ctx):
+    """The whole page, or just the form partial when HTMX swaps it in place."""
+    if request.htmx:
+        return render(request, 'partials/signup_form.html', ctx)
+    return render(request, page_template, ctx)
+
 
 def signup(request, event_id):
     """GET: render signup form. POST: validate and save driver + availability."""
     event = get_object_or_404(Event, id=event_id)
-    prefill_name = request.user.discord_username or request.user.username if request.user.is_authenticated else ''
+    prefill_name = ''
+    if request.user.is_authenticated:
+        prefill_name = request.user.discord_username or request.user.username
+    ctx = {**get_signup_context(event), 'event': event, 'prefill_name': prefill_name}
 
-    if request.method == 'POST':
-        cleaned, errors = _validate_signup_post(request.POST)
+    if request.method != 'POST':
+        return render(request, 'signup.html', {**ctx, 'initial_slot_timestamps': []})
 
-        if not errors and cleaned['timezone'] not in VALID_TIMEZONES:
-            errors['timezone'] = 'Invalid timezone selected. Please try again.'
-
-        if not errors:
-            driver = Driver.objects.create(
-                event=event,
-                name=cleaned['driver_name'],
-                timezone=cleaned['timezone'],
-            )
-            if request.user.is_authenticated:
-                driver.user = request.user
-                driver.save(update_fields=['user'])
-            _save_availability(driver, cleaned['slots_raw'], event)
-            log_detail(request, slots=len(cleaned['slots_raw']),
-                       authenticated=request.user.is_authenticated)
-            success_url = reverse('signup_success', kwargs={'event_id': event_id, 'driver_id': driver.id})
-            if request.htmx:
-                response = HttpResponse()
-                response['HX-Redirect'] = success_url
-                return response
-            return redirect('signup_success', event_id=event_id, driver_id=driver.id)
-
+    cleaned, errors = _validate_signup_post(request.POST)
+    if errors:
         # The single most useful friction signal on the site: which field
         # turns people away from the form they came here to fill in.
         log_detail(request, invalid_fields=sorted(errors))
-
-        ctx = get_signup_context(event)
-        ctx.update({
-            'event': event,
+        return _render_signup(request, 'signup.html', {
+            **ctx,
             'errors': errors,
             'submitted_name': cleaned['driver_name'],
-            'submitted_slot_timestamps': cleaned['slots_raw'],
+            'initial_slot_timestamps': cleaned['slots_raw'],
             'submitted_timezone': cleaned['timezone'],
-            'prefill_name': prefill_name,
         })
-        if request.htmx:
-            return render(request, 'partials/signup_form.html', ctx)
-        return render(request, 'signup.html', ctx)
 
-    ctx = get_signup_context(event)
-    ctx.update({'event': event, 'submitted_slot_timestamps': [], 'prefill_name': prefill_name})
-    return render(request, 'signup.html', ctx)
+    driver = Driver.objects.create(
+        event=event,
+        name=cleaned['driver_name'],
+        timezone=cleaned['timezone'],
+    )
+    if request.user.is_authenticated:
+        driver.user = request.user
+        driver.save(update_fields=['user'])
+    _save_availability(driver, cleaned['slots_raw'], event)
+    log_detail(request, slots=len(cleaned['slots_raw']),
+               authenticated=request.user.is_authenticated)
+    return _redirect(request, reverse(
+        'signup_success', kwargs={'event_id': event_id, 'driver_id': driver.id}
+    ))
 
 
 def signup_edit(request, event_id, driver_id):
@@ -925,60 +658,44 @@ def signup_edit(request, event_id, driver_id):
     event = get_object_or_404(Event, id=event_id)
     driver = get_object_or_404(Driver.objects.prefetch_related('availability'), id=driver_id, event=event)
     from_admin = request.GET.get('from') == 'admin'
-
-    def _existing_timestamps():
-        return [normalize_iso(a.slot_utc) for a in driver.availability.all()]
-
-    if request.method == 'POST':
-        cleaned, errors = _validate_signup_post(request.POST)
-
-        if not errors and cleaned['timezone'] not in VALID_TIMEZONES:
-            errors['timezone'] = 'Invalid timezone selected. Please try again.'
-
-        if not errors:
-            with transaction.atomic():
-                driver.name = cleaned['driver_name']
-                driver.timezone = cleaned['timezone']
-                driver.save()
-                driver.availability.all().delete()
-                _save_availability(driver, cleaned['slots_raw'], event)
-
-            log_detail(request, slots=len(cleaned['slots_raw']), from_admin=from_admin)
-
-            if from_admin:
-                redirect_url = reverse('admin_dashboard', kwargs={'event_id': event_id})
-            else:
-                redirect_url = reverse('signup_success', kwargs={'event_id': event_id, 'driver_id': driver_id})
-            if request.htmx:
-                response = HttpResponse()
-                response['HX-Redirect'] = redirect_url
-                return response
-            return redirect(redirect_url)
-
-        log_detail(request, invalid_fields=sorted(errors))
-
-        ctx = get_signup_context(event)
-        ctx.update({
-            'event': event,
-            'driver': driver,
-            'errors': errors,
-            'submitted_name': cleaned['driver_name'],
-            'existing_slot_timestamps': cleaned['slots_raw'],
-            'submitted_timezone': cleaned['timezone'],
-            'from_admin': from_admin,
-        })
-        if request.htmx:
-            return render(request, 'partials/signup_edit_form.html', ctx)
-        return render(request, 'signup_edit.html', ctx)
-
-    ctx = get_signup_context(event)
-    ctx.update({
+    ctx = {
+        **get_signup_context(event),
         'event': event,
         'driver': driver,
-        'existing_slot_timestamps': _existing_timestamps(),
+        'prefill_name': driver.name,
         'from_admin': from_admin,
-    })
-    return render(request, 'signup_edit.html', ctx)
+    }
+
+    if request.method != 'POST':
+        return render(request, 'signup_edit.html', {
+            **ctx,
+            'initial_slot_timestamps': [normalize_iso(a.slot_utc) for a in driver.availability.all()],
+        })
+
+    cleaned, errors = _validate_signup_post(request.POST)
+    if errors:
+        log_detail(request, invalid_fields=sorted(errors))
+        return _render_signup(request, 'signup_edit.html', {
+            **ctx,
+            'errors': errors,
+            'submitted_name': cleaned['driver_name'],
+            'initial_slot_timestamps': cleaned['slots_raw'],
+            'submitted_timezone': cleaned['timezone'],
+        })
+
+    with transaction.atomic():
+        driver.name = cleaned['driver_name']
+        driver.timezone = cleaned['timezone']
+        driver.save()
+        driver.availability.all().delete()
+        _save_availability(driver, cleaned['slots_raw'], event)
+    log_detail(request, slots=len(cleaned['slots_raw']), from_admin=from_admin)
+
+    if from_admin:
+        return _redirect(request, reverse('admin_dashboard', kwargs={'event_id': event_id}))
+    return _redirect(request, reverse(
+        'signup_success', kwargs={'event_id': event_id, 'driver_id': driver_id}
+    ))
 
 
 def signup_success(request, event_id, driver_id):
@@ -995,41 +712,30 @@ def signup_success(request, event_id, driver_id):
 
 
 def driver_delete(request, event_id, driver_id):
-    if request.method == 'DELETE':
-        event = get_object_or_404(Event, id=event_id)
-        driver = get_object_or_404(
-            Driver, id=driver_id, event=event
-        )
+    """DELETE. Allowed for the driver (via Discord) or an event admin."""
+    if request.method != 'DELETE':
+        return HttpResponseNotAllowed(['DELETE'])
 
-        is_owner = (
-            request.user.is_authenticated
-            and driver.user == request.user
-        )
-        is_admin = request.session.get(
-            f'admin_{event_id}'
-        )
+    event = get_object_or_404(Event, id=event_id)
+    driver = get_object_or_404(Driver, id=driver_id, event=event)
 
-        if not is_owner and not is_admin:
-            raise PermissionDenied
+    is_owner = request.user.is_authenticated and driver.user == request.user
+    is_admin = request.session.get(f'admin_{event_id}')
+    if not is_owner and not is_admin:
+        raise PermissionDenied
 
-        driver.delete()
-        response = HttpResponse()
-        response['HX-Redirect'] = '/'
-        return response
-    response = HttpResponse(status=405)
-    response['Allow'] = 'DELETE'
-    return response
+    driver.delete()
+    return _hx_redirect('/')
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Admin views
+# Admin
 # ---------------------------------------------------------------------------
 
 def set_timezone(request):
+    """POST. Stores the admin's display timezone; refreshes the page if it changed."""
     if request.method != 'POST':
-        response = HttpResponse(status=405)
-        response['Allow'] = 'POST'
-        return response
+        return HttpResponseNotAllowed(['POST'])
     tz = request.POST.get('timezone', 'UTC')
     if tz not in VALID_TIMEZONES:
         tz = 'UTC'
@@ -1042,137 +748,65 @@ def set_timezone(request):
     return response
 
 
-def _build_admin_context(request, event):
-    """Build the context dict for the admin page. Caller must have already verified auth."""
-    drivers = (
+def _admin_timezone(request):
+    """The admin's chosen display timezone, from the set-timezone cookie."""
+    admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
+    return admin_tz if admin_tz in VALID_TIMEZONES else 'UTC'
+
+
+def _admin_drivers(event):
+    """Drivers as the admin driver list shows them, availability prefetched."""
+    return (
         Driver.objects.filter(event=event)
         .prefetch_related('availability')
         .annotate(stint_count=Count('stint_assignments'))
         .order_by('signed_up_at')
     )
+
+
+def _build_admin_context(request, event):
+    """Build the context dict for the admin page. Caller must have already verified auth."""
+    drivers = _admin_drivers(event)
     slots = get_availability_slots(event)
     availability_matrix, uncovered_slots = _build_availability_matrix(drivers, slots)
-    admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
-    if admin_tz not in VALID_TIMEZONES:
-        admin_tz = 'UTC'
-
+    admin_tz = _admin_timezone(request)
     uncovered_windows, uncovered_seconds = _uncovered_race_windows(
         event, slots, uncovered_slots, admin_tz
     )
+    stints_ready = event.has_required_stint_fields
 
-    field_groups = [
-        {
-            'title': 'Basic Info',
-            'fields': [
-                (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
-                 str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
-                for name in ['name', 'date', 'start_time_utc', 'length_hours']
-            ],
-        },
-        {
-            'title': 'Race Details',
-            'fields': [
-                (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
-                 str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
-                for name in ['car', 'track', 'team_name', 'setup', 'recruiting']
-            ],
-        },
-        {
-            'title': 'Timing & Fuel',
-            'fields': [
-                (name, EDITABLE_FIELDS[name], _get_field_display_value(event, name),
-                 str(EDITABLE_FIELDS[name].get('min', '')), str(EDITABLE_FIELDS[name].get('max', '')))
-                for name in [
-                    'avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds',
-                    'target_laps', 'fuel_capacity', 'fuel_per_lap', 'tire_change_fuel_min',
-                ]
-            ],
-        },
-    ]
+    # Everything stint-related is empty until the stint calc fields are filled
+    # in — including has_assignments, even if assignment rows exist.
+    assignments = _stint_assignments(event) if stints_ready else {}
+    stint_rows = _stint_rows(event, assignments, _availability_by_driver(drivers))
+    zone = ZoneInfo(admin_tz)
+    for row in stint_rows:
+        row['start_local'] = row['start_utc'].astimezone(zone).strftime('%H:%M')
 
-    missing_required_fields = [
-        EDITABLE_FIELDS[f]['label']
-        for f in _REQUIRED_FOR_STINTS
-        if getattr(event, f) is None
-    ]
-
-    # Drives the pre-save warning when the admin edits date or start time.
-    # `drivers` is already prefetched, so this costs no extra query.
-    drivers_with_availability_count = sum(
-        1 for d in drivers if d.availability.all()
-    )
-
-    slot_timestamps_json = _safe_json([normalize_iso(s) for s in slots])
-
-    total_seconds = event.length_seconds or 0
-
-    base = request.build_absolute_uri('/').rstrip('/')
-    signup_url = f"{base}/{event.id}/signup/"
-
-    # Stint assignment context for Section 4
-    has_required_stint_fields = event.has_required_stint_fields
-    stint_windows = []
-    existing_assignments = {}
-    conditions = {}
     stint_availability_matrix = {}
     availability_json = {}
-    stint_duration_map = {}
-    stint_meta = {}
-    all_sa = []
-
-    if has_required_stint_fields:
-        all_sa = list(StintAssignment.objects.filter(event=event).select_related('driver'))
-        assignment_objs_for_windows = {sa.stint_number: sa for sa in all_sa}
-        stint_windows = get_stint_windows(event, assignment_overrides=assignment_objs_for_windows)
-        admin_tz_zone = ZoneInfo(admin_tz)
-        for sw in stint_windows:
-            sw['start_local'] = sw['start_utc'].astimezone(admin_tz_zone).strftime('%H:%M')
-        existing_assignments = {
-            sa.stint_number: str(sa.driver_id)
-            for sa in all_sa
-            if sa.driver_id
-        }
-        conditions = {sa.stint_number: sa.condition for sa in all_sa}
+    if stints_ready:
         stint_availability_matrix = build_stint_availability_matrix(
-            drivers, stint_windows, slot_grid_anchor(event)
+            drivers, stint_rows, slot_grid_anchor(event)
         )
         availability_json = {
             str(driver.id): [normalize_iso(a.slot_utc) for a in driver.availability.all()]
             for driver in drivers
         }
 
-        for sw in stint_windows:
-            stint_duration_map[sw['stint_number']] = format_stint_duration(sw['duration_seconds'])
-
-        driver_avail_sets = {
-            d.id: {a.slot_utc for a in d.availability.all()}
-            for d in drivers
-        }
-        for sw in stint_windows:
-            n = sw['stint_number']
-            sa = assignment_objs_for_windows.get(n)
-            driver = sa.driver if sa else None
-            has_conflict = (
-                driver and sw.get('is_overridden') and
-                _driver_has_conflict(driver, sw['start_utc'], driver_avail_sets)
-            )
-            stint_meta[n] = {
-                'is_overridden': sw.get('is_overridden', False),
-                'has_conflict': has_conflict,
-            }
-
-    _total_stints_count = total_stints(event) if has_required_stint_fields else 0
+    conditions = {n: sa.condition for n, sa in assignments.items()}
+    total_seconds = event.length_seconds or 0
+    base = request.build_absolute_uri('/').rstrip('/')
 
     return {
         'event': event,
         'admin_tz': admin_tz,
         'drivers': drivers,
-        'field_groups': field_groups,
-        'required_fields': _REQUIRED_FOR_STINTS,
-        'missing_required_fields': missing_required_fields,
         'availability_matrix': availability_matrix,
         'sanity_warnings': validate_stint_sanity(event),
-        'drivers_with_availability_count': drivers_with_availability_count,
+        # Drives the pre-save warning when the admin edits date or start time.
+        # `drivers` is already prefetched, so this costs no extra query.
+        'drivers_with_availability_count': sum(1 for d in drivers if d.availability.all()),
         # The client-side conflict and dimming helpers snap stint times onto the
         # availability grid themselves, so they must start from the same floored
         # origin the server uses — not event.start_datetime_utc.
@@ -1181,35 +815,42 @@ def _build_admin_context(request, event):
         'uncovered_race_windows_extra': max(0, len(uncovered_windows) - MAX_UNCOVERED_WINDOWS_SHOWN),
         'uncovered_race_seconds': uncovered_seconds,
         'timezone_list_json': _TIMEZONE_LIST_JSON,
-        'slot_timestamps_json': slot_timestamps_json,
+        'slot_timestamps_json': _safe_json([normalize_iso(s) for s in slots]),
         'slots': slots,
-        'signup_url': signup_url,
+        'signup_url': f"{base}/{event.id}/signup/",
         'length_hours_display': total_seconds // 3600,
         'length_minutes_display': (total_seconds % 3600) // 60,
-        'has_required_stint_fields': has_required_stint_fields,
-        'stint_windows': stint_windows,
+        'has_required_stint_fields': stints_ready,
+        'stint_windows': stint_rows,
         'stint_availability': stint_availability_matrix,
-        'stint_duration_map': stint_duration_map,
+        'stint_duration_map': {row['stint_number']: row['duration_display'] for row in stint_rows},
         'stint_windows_json': _safe_json([{
-            'stint_number': sw['stint_number'],
-            'start_utc': normalize_iso(sw['start_utc']),
-            'end_utc': normalize_iso(sw['end_utc']),
-            'is_last_stint': sw['is_last'],
-            'is_overridden': sw.get('is_overridden', False),
+            'stint_number': row['stint_number'],
+            'start_utc': normalize_iso(row['start_utc']),
+            'end_utc': normalize_iso(row['end_utc']),
+            'is_last_stint': row['is_last'],
+            'is_overridden': row['is_overridden'],
             'laps_remaining': (
                 None
-                if sw['is_last']
-                else laps_remaining_after_stint(event, sw['stint_number'])
+                if row['is_last']
+                else laps_remaining_after_stint(event, row['stint_number'])
             ),
-        } for sw in stint_windows]),
+        } for row in stint_rows]),
         'conditions': conditions,
-        'existing_assignments_json': _safe_json({str(k): str(v) for k, v in existing_assignments.items()}),
-        'existing_conditions_json': _safe_json({str(k): v for k, v in conditions.items()}),
+        'existing_assignments_json': _safe_json({
+            str(n): str(sa.driver_id) for n, sa in assignments.items() if sa.driver_id
+        }),
+        'existing_conditions_json': _safe_json({str(n): c for n, c in conditions.items()}),
         'drivers_json': _safe_json([{'id': str(d.id), 'name': d.name, 'timezone': d.timezone or 'UTC'} for d in drivers]),
         'availability_json': _safe_json(availability_json),
-        'stint_meta': stint_meta,
-        'has_assignments': bool(all_sa),
-        'total_stints_count': _total_stints_count,
+        'stint_meta': {
+            row['stint_number']: {
+                'is_overridden': row['is_overridden'],
+                'has_conflict': row['has_conflict'],
+            }
+            for row in stint_rows
+        },
+        'has_assignments': bool(assignments),
         'stint_availability_json': _safe_json({
             str(driver_id): {str(stint_num): status for stint_num, status in stints.items()}
             for driver_id, stints in stint_availability_matrix.items()
@@ -1321,14 +962,13 @@ def admin_edit_driver_name(request, event_id, driver_id):
 
 
 def admin_remove_driver(request, event_id, driver_id):
+    """DELETE. Removes the row in place, or reloads if the stint table depends on it."""
     if request.method != 'DELETE':
-        return HttpResponse(status=405)
+        return HttpResponseNotAllowed(['DELETE'])
     event = require_admin_session(request, event_id)
     Driver.objects.filter(id=driver_id, event=event).delete()
     if event.has_required_stint_fields:
-        response = HttpResponse(status=200)
-        response['HX-Refresh'] = 'true'
-        return response
+        return _hx_refresh()
     response = HttpResponse()
     response['HX-Reswap'] = 'delete'
     return response
@@ -1337,7 +977,7 @@ def admin_remove_driver(request, event_id, driver_id):
 def admin_add_driver(request, event_id):
     """POST only. Creates a driver with name, timezone, and optional availability."""
     if request.method != 'POST':
-        return HttpResponse(status=405)
+        return HttpResponseNotAllowed(['POST'])
     event = require_admin_session(request, event_id)
 
     driver_name = request.POST.get('driver_name', '').strip()
@@ -1360,43 +1000,29 @@ def admin_add_driver(request, event_id):
         response['HX-Reswap'] = 'innerHTML'
         return response
 
-    admin_tz = request.COOKIES.get('admin_timezone', 'UTC')
-    if admin_tz not in VALID_TIMEZONES:
-        admin_tz = 'UTC'
-
     driver = Driver.objects.create(event=event, name=driver_name, timezone=timezone)
     if slots_raw:
         _save_availability(driver, slots_raw, event)
 
     if event.has_required_stint_fields:
-        response = HttpResponse(status=200)
-        response['HX-Refresh'] = 'true'
-        return response
+        return _hx_refresh()
 
-    # Driver list update (stints not yet configured — no full page refresh)
-    drivers_qs = (
-        Driver.objects.filter(event=event)
-        .prefetch_related('availability')
-        .annotate(stint_count=Count('stint_assignments'))
-        .order_by('signed_up_at')
-    )
+    # Stints not configured yet, so only the driver list needs redrawing.
+    drivers = _admin_drivers(event)
     slots = get_availability_slots(event)
-    availability_matrix, _ = _build_availability_matrix(drivers_qs, slots)
-
+    availability_matrix, _ = _build_availability_matrix(drivers, slots)
     driver_list_html = render_to_string(
         'partials/driver_list.html',
         {
-            'drivers': drivers_qs,
+            'drivers': drivers,
             'event': event,
-            'admin_tz': admin_tz,
+            'admin_tz': _admin_timezone(request),
             'availability_matrix': availability_matrix,
             'slots': slots,
         },
         request=request,
     )
-    response = HttpResponse(driver_list_html)
-    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Driver added.'}})
-    return response
+    return _with_toast(HttpResponse(driver_list_html), 'Driver added.')
 
 
 def admin_save_details(request, event_id):
@@ -1481,15 +1107,13 @@ def admin_save_details(request, event_id):
             'partials/availability_warning.html',
             {'stale_drivers': stale_drivers, 'event': event},
         )
-        response['HX-Trigger'] = json.dumps({'show-toast': {
-            'message': f'Saved — {len(stale_drivers)} driver(s) lost availability slots.',
-            'error': True,
-        }})
-        return response
+        return _with_toast(
+            response,
+            f'Saved — {len(stale_drivers)} driver(s) lost availability slots.',
+            error=True,
+        )
 
-    response = HttpResponse(status=200)
-    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Event details saved.'}})
-    return response
+    return _with_toast(HttpResponse(), 'Event details saved.')
 
 
 def admin_save_calc(request, event_id):
@@ -1500,11 +1124,15 @@ def admin_save_calc(request, event_id):
 
     errors = {}
 
-    LAP_FIELDS = ['avg_lap_seconds', 'in_lap_seconds', 'out_lap_seconds']
-    POST_NAMES = {
+    # model field -> form field name
+    lap_fields = {
         'avg_lap_seconds': 'avg_lap',
         'in_lap_seconds': 'in_lap',
         'out_lap_seconds': 'out_lap',
+    }
+    numeric_fields = {
+        'fuel_capacity': 'fuel_capacity',
+        'fuel_per_lap': 'fuel_burn',
     }
 
     def parse_mmss(val):
@@ -1516,18 +1144,14 @@ def admin_save_calc(request, event_id):
             raise ValueError
         return (m * 60) + s
 
-    for field in LAP_FIELDS:
-        raw = request.POST.get(POST_NAMES[field], '').strip()
+    for model_field, post_name in lap_fields.items():
+        raw = request.POST.get(post_name, '').strip()
         if raw:
             try:
-                setattr(event, field, parse_mmss(raw))
+                setattr(event, model_field, parse_mmss(raw))
             except (ValueError, IndexError):
-                errors[field] = 'Use MM:SS format (e.g. 2:18)'
+                errors[model_field] = 'Use MM:SS format (e.g. 2:18)'
 
-    numeric_fields = {
-        'fuel_capacity': 'fuel_capacity',
-        'fuel_per_lap': 'fuel_burn',
-    }
     for model_field, post_name in numeric_fields.items():
         raw = request.POST.get(post_name, '').strip()
         if raw:
@@ -1565,17 +1189,14 @@ def admin_save_calc(request, event_id):
     event.save()
     log_detail(request, stint_fields_complete=event.has_required_stint_fields)
     if event.has_required_stint_fields:
-        response = HttpResponse(status=200)
-        response['HX-Refresh'] = 'true'
-        return response
-    response = HttpResponse(status=200)
-    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Stint calc saved.'}})
-    return response
+        # The whole stint table appears once the calc is complete.
+        return _hx_refresh()
+    return _with_toast(HttpResponse(), 'Stint calc saved.')
 
 
 def create_stints_redirect(request, event_id):
-    """Stub — stint assignment is now on the admin dashboard."""
-    event = require_admin_session(request, event_id)
+    """Legacy URL: stint assignment now lives on the admin dashboard."""
+    require_admin_session(request, event_id)
     return redirect('admin_dashboard', event_id=event_id)
 
 
@@ -1662,9 +1283,7 @@ def admin_save_assignments(request, event_id):
         unassigned=sum(1 for a in assignments_to_create if a.driver_id is None),
     )
 
-    response = HttpResponse(status=200)
-    response['HX-Trigger'] = json.dumps({'show-toast': {'message': 'Assignments saved.'}})
-    return response
+    return _with_toast(HttpResponse(), 'Assignments saved.')
 
 
 # ---------------------------------------------------------------------------
@@ -1716,19 +1335,19 @@ def feedback_submit(request):
     return response
 
 
-def feedback_view(request):
+def _password_gate(request, session_key, template, url_name):
     """
-    Password-protected feedback viewer.
-    GET: show password prompt if not authenticated.
-    POST: validate password, show feedback list on success.
-    Session persists authentication for the browser session.
-    """
-    session_key = 'feedback_authenticated'
+    The sign-in shared by the two operator consoles, /feedback/view/ and
+    /activity/view/. Both use FEEDBACK_PASSWORD; each keeps its own session
+    flag so signing in to one does not sign in to the other.
 
-    # Handle logout
+    Returns the response to send while the visitor is not signed in — the
+    password prompt, a failed attempt, or the redirect after logging out —
+    and None once they are.
+    """
     if request.GET.get('logout'):
         request.session.pop(session_key, None)
-        return redirect('feedback_view')
+        return redirect(url_name)
 
     if request.method == 'POST':
         password = request.POST.get('password', '')
@@ -1737,15 +1356,21 @@ def feedback_view(request):
             request.session[session_key] = True
         else:
             time.sleep(1)
-            return render(request, 'feedback_view.html', {
+            return render(request, template, {
                 'authenticated': False,
-                'error': 'Incorrect password.'
+                'error': 'Incorrect password.',
             })
 
     if not request.session.get(session_key):
-        return render(request, 'feedback_view.html', {
-            'authenticated': False,
-        })
+        return render(request, template, {'authenticated': False})
+    return None
+
+
+def feedback_view(request):
+    """Password-protected feedback viewer. See _password_gate for sign-in."""
+    gate = _password_gate(request, 'feedback_authenticated', 'feedback_view.html', 'feedback_view')
+    if gate:
+        return gate
 
     feedback_items = list(Feedback.objects.all()[:200])
     return render(request, 'feedback_view.html', {
@@ -1812,26 +1437,9 @@ def activity_view(request):
     operator, same trust level, and a second secret to rotate would be a
     second secret to leak.
     """
-    session_key = 'activity_authenticated'
-
-    if request.GET.get('logout'):
-        request.session.pop(session_key, None)
-        return redirect('activity_view')
-
-    if request.method == 'POST':
-        password = request.POST.get('password', '')
-        if (django_settings.FEEDBACK_PASSWORD
-                and hmac.compare_digest(password, django_settings.FEEDBACK_PASSWORD)):
-            request.session[session_key] = True
-        else:
-            time.sleep(1)
-            return render(request, 'activity_view.html', {
-                'authenticated': False,
-                'error': 'Incorrect password.',
-            })
-
-    if not request.session.get(session_key):
-        return render(request, 'activity_view.html', {'authenticated': False})
+    gate = _password_gate(request, 'activity_authenticated', 'activity_view.html', 'activity_view')
+    if gate:
+        return gate
 
     days = _activity_window_days(request)
     since = datetime.now(dt_utc.utc) - timedelta(days=days)
