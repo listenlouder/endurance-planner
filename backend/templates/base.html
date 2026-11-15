@@ -491,14 +491,18 @@
      @feedback-success.window="submitted = true"
      x-cloak>
 
-  <!-- Trigger button — fixed bottom right -->
+  <!-- Trigger button — fixed bottom right.
+       Centering lives in classes, not the inline style: x-show reveals an
+       element by removing the inline display property, so an inline
+       display:flex is wiped on first render and the icon falls off-centre.
+       The same applies to the overlay below. -->
   <button @click="open = true; submitted = false; text = ''"
           x-show="!open"
+          class="flex items-center justify-center"
           style="position: fixed; bottom: 24px; right: 24px; z-index: 40;
                  width: 44px; height: 44px;
                  background: var(--primary); color: #fff;
                  border: none; border-radius: 0; cursor: pointer;
-                 display: flex; align-items: center; justify-content: center;
                  transition: opacity 0.15s;"
           onmouseenter="this.style.opacity='0.85'"
           onmouseleave="this.style.opacity='1'"
@@ -522,8 +526,8 @@
        x-transition:leave-start="opacity-100"
        x-transition:leave-end="opacity-0"
        @click.self="open = false; submitted = false; text = ''"
+       class="flex items-center justify-center"
        style="position: fixed; inset: 0; z-index: 50;
-              display: flex; align-items: center; justify-content: center;
               padding: 24px; background: rgba(0,0,0,0.5);">
 
     <!-- Modal panel -->
