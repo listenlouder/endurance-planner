@@ -79,7 +79,7 @@ endurance-planner/
 │   │   ├── forms.py            # EventCreateForm
 │   │   ├── utils.py            # Stint and availability-grid calculations
 │   │   ├── adapters.py         # Discord OAuth adapter
-│   │   ├── tests.py            # Full suite (1005 tests, 132 classes)
+│   │   ├── tests.py            # Full suite (1007 tests, 133 classes)
 │   │   ├── context_processors.py  # discord_user + login_next
 │   │   ├── templatetags/
 │   │   │   └── tz_filters.py   # to_utc_z, dict_get,
@@ -1058,7 +1058,7 @@ support — a trap for anyone who found them. Use `get_stint_windows()`.
 
 ## Testing
 
-**1005 tests across 132 classes** in `backend/events/tests.py`, run against
+**1007 tests across 133 classes** in `backend/events/tests.py`, run against
 SQLite in-memory via `config/test_settings.py`.
 
 ```powershell

@@ -30,6 +30,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -10131,3 +10132,51 @@ class RotateCredentialsCommandTests(TestCase):
         self._rotate()
 
         self.assertEqual(len(self._manifest_rows()), 1)
+
+
+class XShowInlineDisplayTests(SimpleTestCase):
+    """
+    Alpine's x-show reveals an element by *removing* its inline display
+    property, so an element that sets display:flex inline loses it the first
+    time x-show runs and falls back to block. That is how the feedback button's
+    icon drifted off-centre and its modal opened in the top-left corner: both
+    centred themselves with an inline display:flex.
+
+    Layout display belongs in a class, which x-show leaves alone. An inline
+    display:none is fine — clearing it is exactly what x-show is meant to do.
+    """
+
+    _X_SHOW_TAG = re.compile(r'<[a-zA-Z][^>]*?\bx-show=[^>]*>', re.S)
+    _INLINE_DISPLAY = re.compile(r'(?:^|[;\s])display\s*:\s*([a-z-]+)')
+
+    def _offending_tags(self):
+        templates = django_conf.BASE_DIR / 'templates'
+        for path in sorted(templates.rglob('*.html')):
+            source = path.read_text(encoding='utf-8')
+            for match in self._X_SHOW_TAG.finditer(source):
+                style = re.search(r'\bstyle="([^"]*)"', match.group(0), re.S)
+                if not style:
+                    continue
+                display = self._INLINE_DISPLAY.search(style.group(1))
+                if display and display.group(1) != 'none':
+                    line = source.count('\n', 0, match.start()) + 1
+                    yield f'{path.relative_to(templates)}:{line} display:{display.group(1)}'
+
+    def test_no_x_show_element_sets_its_display_inline(self):
+        offenders = list(self._offending_tags())
+
+        self.assertEqual(offenders, [])
+
+    def test_feedback_button_and_overlay_centre_with_classes(self):
+        markup = _read_template('base.html')
+
+        trigger = re.search(r'<button[^>]*title="Send feedback"[^>]*>', markup, re.S).group(0)
+        # The login modal also opens on x-show="open"; the feedback overlay is
+        # the one whose dismiss handler also resets the form.
+        overlay = re.search(
+            r'<div x-show="open"[^>]*@click\.self="open = false; submitted[^>]*>',
+            markup, re.S,
+        ).group(0)
+
+        for tag in (trigger, overlay):
+            self.assertIn('class="flex items-center justify-center"', tag)
